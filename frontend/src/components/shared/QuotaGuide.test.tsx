@@ -23,9 +23,15 @@ describe("QuotaGuide", () => {
         const summary = screen.getByText(translate(locale, "quotaGuide.title"));
         expect(screen.getByText(translate(locale, "quotaGuide.chain"))).not.toBeVisible();
         await userEvent.click(summary);
-        for (const key of ["chain", scope, "shared", "singleTeam", "business", "rates"]) {
+        for (const key of ["chain", scope, "shared", "rateMeaning", "rateSharing", "rateAccounting"]) {
           expect(screen.getByText(translate(locale, "quotaGuide." + key))).toBeVisible();
         }
+        const more = screen.getByText(translate(locale, "quotaGuide.moreHeading"));
+        expect(screen.getByText(translate(locale, "quotaGuide.singleTeam"))).not.toBeVisible();
+        await userEvent.click(more);
+        expect(screen.getByText(translate(locale, "quotaGuide.singleTeam"))).toBeVisible();
+        expect(screen.getByText(translate(locale, "quotaGuide.business"))).toBeVisible();
+        await userEvent.click(more);
         await userEvent.click(summary);
         expect(screen.getByText(translate(locale, "quotaGuide.chain"))).not.toBeVisible();
       });
