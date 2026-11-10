@@ -1,6 +1,7 @@
 package regression
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/sunqirui1987/xhub/internal/gateway"
 	"github.com/sunqirui1987/xhub/internal/iam"
+	"github.com/sunqirui1987/xhub/internal/live"
 )
 
 // TestSyncClientWriteFailure 验证同步标准及透传对话的客户端写入错误或短写按失败零费用记录。
@@ -405,5 +407,41 @@ func TestSyncClientWriteNetworkErrorPrivacy(t *testing.T) {
 	detail := fmt.Sprint(log["metadata"], log["error"])
 	if strings.Contains(detail, "10.20.30.40") || strings.Contains(detail, "198.51.100.123") || !strings.Contains(detail, "client_write_error") {
 		t.Fatalf("写失败诊断泄露地址或分类缺失: %s", detail)
+	}
+}
+
+// TestSyncMissingDeliveryDoesNotBlockBilling 验证缺失交付标记的冲突快照不阻塞后续真实请求的账单。
+// 使用隔离 PostgreSQL、Redis、网关及本地上游，保留故障快照并验证正常请求准确结算；夹具自动清理全部资源。
+func TestSyncMissingDeliveryDoesNotBlockBilling(t *testing.T) {
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
+	isolatedSpendRedis(t)
+	const model = "sync-missing-delivery"
+	h := newHarness(t, chatDeployment(model))
+	admin := h.adminSession()
+	owner := h.openScope(t, admin, model)
+	before := h.moneyOf(t, owner)
+	missing := iam.UsageRecord{RequestID: "missing-delivery-fixture", UserID: owner.userID, OwnerType: iam.OwnerPersonal, TS: time.Now().UTC(), Model: model, CallType: "chat", Status: "success", HTTPStatus: 200, Cost: 0.25}
+	payload, err := json.Marshal(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := live.SpendLog{RequestID: missing.RequestID, UserID: missing.UserID, Spend: missing.Cost, SpendValid: true, Start: missing.TS.Format(time.RFC3339Nano), DeliverySnapshot: string(payload)}
+	if err := h.gw.Live.EnqueueConfirmedDelivery(row); err != nil {
+		t.Fatal(err)
+	}
+	response := h.ok(http.MethodPost, "/v1/chat/completions", owner.key, chatRequest(model, "Verify billing after a conflicting snapshot."))
+	for range 5 {
+		h.gw.FlushSpend()
+	}
+	event, err := h.db.GetUsageEvent(t.Context(), iam.UsageQuery{}, response.header("x-litellm-call-id"))
+	if err != nil || event.Status != "success" || event.Cost <= 0 {
+		t.Fatalf("正常请求账单被冲突快照阻塞: event=%+v err=%v", event, err)
+	}
+	if after := h.moneyOf(t, owner); !after.grewBy(before, event.Cost) {
+		t.Fatalf("正常请求结算错误: before=%+v after=%+v cost=%v", before, after, event.Cost)
+	}
+	rows, _ := h.gw.Live.PeekLogs(10)
+	if len(rows) != 1 || rows[0].RequestID != missing.RequestID {
+		t.Fatalf("冲突证据应保留: %+v", rows)
 	}
 }

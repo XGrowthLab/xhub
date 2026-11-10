@@ -28,9 +28,12 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 	ctx := r.Context()
 	var err error
 	switch body.Action {
-	case "start":
+	case "start", "start-missing":
 		record := iam.UsageRecord{RequestID: body.ID, TS: time.Now().UTC(), Model: "fixture-original", OwnerType: iam.OwnerPersonal, CallType: "chat", Status: "success", HTTPStatus: 200}
-		if err = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(time.Hour)); err == nil {
+		if body.Action == "start" {
+			err = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(time.Hour))
+		}
+		if err == nil {
 			record.Model = "fixture-conflict"
 			var raw []byte
 			raw, err = json.Marshal(record)
@@ -40,6 +43,15 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 		}
 	case "flush":
 		s.FlushSpend()
+	case "resolve-missing":
+		record := iam.UsageRecord{RequestID: body.ID, TS: time.Now().UTC(), Model: "fixture-conflict", OwnerType: iam.OwnerPersonal, CallType: "chat", Status: "success", HTTPStatus: 200}
+		err = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(time.Hour))
+		if err == nil {
+			for range 4 {
+				s.FlushSpend()
+			}
+			_, err = s.IAM.GetUsageEvent(ctx, iam.UsageQuery{}, body.ID)
+		}
 	case "resolve":
 		_, err = s.IAM.Engine.Context(ctx).Exec(`UPDATE usage_delivery_pending SET payload=jsonb_set(payload, '{Model}', to_jsonb('fixture-conflict'::text)) WHERE request_id=?`, body.ID)
 		if err == nil {
@@ -78,6 +90,8 @@ func TestBrowserQueueConflictControl(t *testing.T) {
 		{`{"action":"start","id":"e2e-queue-conflict-unit"}`, 200},
 		{`{"action":"flush","id":"e2e-queue-conflict-unit"}`, 200},
 		{`{"action":"resolve","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"start-missing","id":"e2e-queue-conflict-missing"}`, 200},
+		{`{"action":"resolve-missing","id":"e2e-queue-conflict-missing"}`, 200},
 	} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/usage/queue-conflict", strings.NewReader(tc.body))

@@ -173,6 +173,31 @@ func TestFlushConfirmedDelivery(t *testing.T) {
 	if n, err := db.Engine.Table("usage_delivery_pending").Where("request_id = ?", conflictMarker.RequestID).Count(); err != nil || n != 1 {
 		t.Fatalf("冲突原始标记必须保留: n=%d err=%v", n, err)
 	}
+	// 已确认快照找不到标记或账本时属于确定性冲突，必须保留证据并允许其他请求结算。
+	missing := rec
+	missing.RequestID = "runtime-missing-delivery"
+	missingRaw, err := json.Marshal(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingRow := live.SpendLog{RequestID: missing.RequestID, UserID: user.ID, Spend: missing.Cost, SpendValid: true, Start: missing.TS.Format(time.RFC3339Nano), DeliverySnapshot: string(missingRaw)}
+	if err := redis.EnqueueConfirmedDelivery(missingRow); err != nil {
+		t.Fatal(err)
+	}
+	afterMissing := validRow
+	afterMissing.RequestID = "runtime-after-missing"
+	if err := redis.EnqueueSpend(afterMissing); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		Flush(&deliveryRuntime{db: db, redis: redis})
+	}
+	if _, err := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, afterMissing.RequestID); err != nil {
+		t.Fatalf("缺失标记的确定性冲突不能阻塞后续账单: %v", err)
+	}
+	if rows, _ := redis.PeekLogs(10); len(rows) != 2 {
+		t.Fatalf("冲突快照应保留以供排查: rows=%+v", rows)
+	}
 	bad := rec
 	bad.RequestID = "runtime-corrupt"
 	if err := db.PrepareDelivery(t.Context(), bad, time.Now().Add(time.Minute)); err != nil {

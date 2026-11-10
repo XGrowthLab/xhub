@@ -150,7 +150,8 @@ func (db *DB) SettleConfirmedDelivery(ctx context.Context, record UsageRecord) e
 			return err
 		}
 		if !pending && !committed && !record.DeliverySpoolOnly {
-			return fmt.Errorf("delivery marker and ledger are missing")
+			// 标记和账本均缺失是不可自行恢复的确定性冲突，保留快照并允许队列轮转。
+			return fmt.Errorf("%w: delivery marker and ledger are missing", ErrConflict)
 		}
 	}
 	if err := db.RecordUsageExact(ctx, []UsageRecord{record}); err != nil {
