@@ -48,7 +48,7 @@ test('API client reliability gate runs all flows independently and preserves fai
       assert.deepEqual(readFileSync(join(directory, 'arguments'), 'utf8').trim().split('\n'), [
         'scenarios/legacy/error-logs/sc-020.test.ts',
         'scenarios/regression/personal-log-capture-',
-        'proxy-body-limit.test.ts', 'client-docs-url-', 'client-cancellation-', 'stream-terminal-sc-',
+        'proxy-body-limit.test.ts', 'client-docs-url-', 'client-cancellation-', 'stream-terminal-sc-', 'upstream-stream-errors-',
         'billing-pending-recovery', 'usage-spool-', 'key-lifecycle-', 'agent-history-', 'model-view-', 'hard-budget-', 'budget-reconciliation-', 'messages-signed-history-', 'claude-client-compat-', 'user-bulk-budget-',
         'scenarios/enterprise/saml-', 'scenarios/enterprise/sso-valid.test.ts', 'scenarios/directory/sso-config.test.ts',
       ]);
