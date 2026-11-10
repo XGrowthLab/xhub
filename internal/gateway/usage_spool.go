@@ -114,7 +114,23 @@ func (s *Server) FlushLocalUsage(ctx context.Context) error {
 				return fmt.Errorf("invalid delivery charge")
 			}
 			if record.DeliveryUnconfirmed {
-				// 仅新进程能重放在途标记；保留零费用及结果未知，不重现未确认正文。
+				// 原实例可能已将最终结果保存到 PG 或 Redis；未知磁盘标记不能覆盖任何已确认来源。
+				resolved, err := s.IAM.DeliveryResultRecorded(ctx, record)
+				if err != nil || resolved {
+					return err
+				}
+				if s.Live != nil {
+					allowed, err := s.Live.ReserveDeliveryRecovery(ctx, []string{record.RequestID})
+					if err != nil {
+						return err
+					}
+					if !allowed[record.RequestID] {
+						return fmt.Errorf("delivery result awaits confirmed Redis settlement")
+					}
+				} else if record.DeliveryRedisGuard {
+					return fmt.Errorf("delivery recovery requires its original Redis store")
+				}
+				// 仅新进程能重放在途标记；所有确认来源均已排除后，按既定规则恢复零费用未知结果。
 				record.DeliveryUnconfirmed = false
 			}
 			return s.IAM.SettleConfirmedDelivery(ctx, record)

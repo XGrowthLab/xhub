@@ -47,6 +47,7 @@ confirmation. A complete PG outage without Redis can therefore recover after a
 restart. Recovery settles usage; it never repeats the upstream call. Existing PG
 `usage_pending` and Redis queues still drain. When the disk does not retain a
 confirmed synchronous result, it may be queued in Redis with its hot charge until settlement.
+Restart recovery of unknown disk markers also checks final PG snapshots and Redis confirmations. Confirmed charges are preserved; missing or unavailable Redis retains the marker for recovery instead of recording zero.
 
 Synchronous Chat, Responses and Messages calls write a body-free
 `usage_delivery_pending` marker before contacting the provider. Actual charges

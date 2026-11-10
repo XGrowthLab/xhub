@@ -449,3 +449,51 @@ func TestDeliveryRecoveryGuard(t *testing.T) {
 		t.Fatal("守卫未隔离确认记录和未知结果")
 	}
 }
+
+// TestDeliveryResultRecorded 验证未知磁盘标记只接受同归属的持久终态，不会因 Redis 已被另一实例清空而永久阻塞。
+// 前置隔离 PG，覆盖未记录、待结算、已入账、归属冲突、非法标记与坏快照；测试库自动清理所有记录。
+func TestDeliveryResultRecorded(t *testing.T) {
+	db := testDB(t)
+	final := usageRecord("recorded-disk-result", "", 0.25)
+	marker, err := UnconfirmedDelivery(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.DeliveryUnconfirmed = true
+	if got, err := db.DeliveryResultRecorded(t.Context(), marker); err != nil || got {
+		t.Fatalf("空账本误报已确认: %t %v", got, err)
+	}
+	if err := db.PrepareDelivery(t.Context(), final, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ConfirmDelivery(t.Context(), final); err != nil {
+		t.Fatal(err)
+	}
+	for _, settled := range []bool{false, true} {
+		if settled {
+			if err := db.FlushPendingUsageRequest(t.Context(), final.RequestID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := db.DeliveryResultRecorded(t.Context(), marker); err != nil || !got {
+			t.Fatalf("持久最终快照未识别: settled=%t got=%t err=%v", settled, got, err)
+		}
+		other := marker
+		other.Model = "other-model"
+		if got, err := db.DeliveryResultRecorded(t.Context(), other); !errors.Is(err, ErrConflict) || got {
+			t.Fatalf("其他归属不可清理本机标记: %t %v", got, err)
+		}
+	}
+	for _, bad := range []UsageRecord{{}, final} {
+		if got, err := db.DeliveryResultRecorded(t.Context(), bad); err == nil || got {
+			t.Fatalf("非法未知标记应拒绝: %t %v", got, err)
+		}
+	}
+	marker.RequestID = "corrupt-disk-result"
+	if _, err := db.Engine.Exec(`INSERT INTO usage_pending(request_id,payload) VALUES (?, '{"RequestID":12}')`, marker.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.DeliveryResultRecorded(t.Context(), marker); err == nil || got {
+		t.Fatalf("损坏快照不得认为已确认: %t %v", got, err)
+	}
+}

@@ -333,6 +333,7 @@ func (s *Server) recordSpend(w http.ResponseWriter, p *auth.Principal, callID, a
 	if pending := deliveryBuffer(w); pending != nil && (pending.preparedID == callID || !note.Streamed && status >= 200 && status < 300) {
 		// 执行器即将释放请求级事实，先冻结费用与日志快照；未确认写出时仅登记零费用恢复记录。
 		record := usageFromSpend(row, spend, ex.messages, row.Response, ex.proxy, start, end)
+		record.DeliveryRedisGuard = s.Live != nil
 		if s.usageSpoolEnabled {
 			record.DeliveryPending, record.DeliverySpoolOnly = true, true
 		}
@@ -343,9 +344,7 @@ func (s *Server) recordSpend(w http.ResponseWriter, p *auth.Principal, callID, a
 			} else {
 				// 缓存命中等路径未经过预算准备，也必须标记 Redis 恢复归属；
 				// 后续实例缺失 Redis 时不能把尚在队列里的已确认响应判成失败。
-				marker := record
-				marker.DeliveryRedisGuard = s.Live != nil && !s.usageSpoolEnabled
-				pending.deliveryErr = s.IAM.PrepareDelivery(ctx, marker, time.Now().Add(24*time.Hour))
+				pending.deliveryErr = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(24*time.Hour))
 			}
 			cancel()
 			if pending.deliveryErr == nil && s.usageSpoolEnabled {

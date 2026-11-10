@@ -256,3 +256,57 @@ func TestConfirmedPendingClearsUnknownDiskMarker(t *testing.T) {
 		t.Fatalf("已确认账单重试后费用错误: %+v %v", event, err)
 	}
 }
+
+// TestUnknownDiskRecoveryRequiresConfirmationSource 验证重启后的磁盘未知标记必须等待原 Redis，PG 已确认时可直接清理。
+// 使用私有 PG 和临时卷；分别模拟 Redis 缺失、不可用及已入账，不调用外部服务，测试退出关闭磁盘并删 schema。
+func TestUnknownDiskRecoveryRequiresConfirmationSource(t *testing.T) {
+	for _, state := range []string{"missing", "unavailable", "database-confirmed"} {
+		t.Run(state, func(t *testing.T) {
+			t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
+			db := testIdentityStore(t)
+			s := &Server{IAM: db}
+			s.initializeUsageSpool()
+			t.Cleanup(func() { _ = s.CloseUsageSpool() })
+			final := iam.UsageRecord{RequestID: "guarded-disk", TS: time.Now().UTC(), Model: "test", CallType: "chat", Status: "success", HTTPStatus: 200, Cost: 0.25, DeliveryPending: true, DeliverySpoolOnly: true, DeliveryRedisGuard: true}
+			if err := db.PrepareDelivery(t.Context(), final, time.Now().Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			marker, err := iam.UnconfirmedDelivery(final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker.DeliveryUnconfirmed = true
+			if err := s.usageSpool.BeginDelivery(marker); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.CloseUsageSpool(); err != nil {
+				t.Fatal(err)
+			}
+			s.initializeUsageSpool()
+			if state == "unavailable" {
+				s.Live = &live.Client{}
+			}
+			if state == "database-confirmed" {
+				if err := db.SettleConfirmedDelivery(t.Context(), final); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = s.FlushLocalUsage(t.Context())
+			st, statusErr := s.usageSpool.Status()
+			if statusErr != nil {
+				t.Fatal(statusErr)
+			}
+			if state == "database-confirmed" {
+				event, readErr := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, final.RequestID)
+				if err != nil || st.Pending != 0 || readErr != nil || event.Cost != 0.25 {
+					t.Fatalf("已入账费用应保持且旧标记应清理: status=%+v event=%+v errors=%v/%v", st, event, err, readErr)
+				}
+			} else {
+				n, countErr := db.Engine.Table("usage_events").Count()
+				if err == nil || st.Pending != 1 || countErr != nil || n != 0 {
+					t.Fatalf("缺少确认来源不能恢复零费用: status=%+v n=%d errors=%v/%v", st, n, err, countErr)
+				}
+			}
+		})
+	}
+}

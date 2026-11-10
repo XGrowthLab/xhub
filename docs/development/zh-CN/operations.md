@@ -37,6 +37,7 @@ Compose 为每个网关挂载 `xhub-usage-spool:/var/lib/xhub/usage-spool`，并
 `fsync`、原子改名和目录 `fsync`，然后同步提交 PostgreSQL。只有数据库确认成功
 才删除文件。PG 完全断连、无 Redis 时，重启仍可恢复；恢复只结算账单，不重试上游。
 原有 `usage_pending` 和 Redis 队列继续恢复；磁盘未保存终态时，已确认的同步响应可能转入 Redis，并保留相应热费用直到结算。
+重启恢复磁盘未知标记时，也会先核对 PG 最终快照和 Redis 确认来源；已确认账单保留原费用，Redis 缺失或不可用时保留标记等待恢复，不能降级记零。
 
 同步 Chat、Responses 和 Messages 请求在调用上游前会写入不含正文的 `usage_delivery_pending` 标记；
 完整写出并刷新后才确认实际账单。写入失败或进程退出后结果无法确认时，按失败、零费用记录。

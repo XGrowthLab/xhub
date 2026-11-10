@@ -13,6 +13,42 @@ import (
 // ErrDeliveryMarkerGone 表示待确认标记已被转换或恢复，调用方必须核实已有账单，不得凭此创建新账单。
 var ErrDeliveryMarkerGone = errors.New("delivery marker no longer exists")
 
+// DeliveryResultRecorded 检查未知磁盘标记是否已有同归属的持久最终快照，供重启恢复决定是否仅清理旧标记。
+// ctx 控制只读查询，marker 必须是零费用未知标记；返回已记录状态或错误，不修改原账单、费用和正文。
+// 先读待结算再读账本，覆盖另一实例刚完成结算的情况；请求 ID 相同但归属不同必须保留证据并报冲突。
+func (db *DB) DeliveryResultRecorded(ctx context.Context, marker UsageRecord) (bool, error) {
+	if err := validatePendingUsage(marker); err != nil {
+		return false, err
+	}
+	if !marker.DeliveryUnconfirmed || marker.Cost != 0 || marker.Status != "error" {
+		return false, fmt.Errorf("invalid unknown delivery marker")
+	}
+	rows, err := db.Engine.Context(ctx).QueryString(`SELECT payload::text AS payload FROM usage_pending WHERE request_id = ?`, marker.RequestID)
+	if err != nil {
+		return false, err
+	}
+	var final UsageRecord
+	if len(rows) > 0 {
+		if err := json.Unmarshal([]byte(rows[0]["payload"]), &final); err != nil {
+			return false, err
+		}
+		if err := validatePendingUsage(final); err != nil {
+			return false, err
+		}
+	} else {
+		var event UsageEvent
+		found, err := db.Engine.Context(ctx).Where("request_id = ?", marker.RequestID).Get(&event)
+		if err != nil || !found {
+			return false, err
+		}
+		final = UsageRecord{RequestID: event.RequestID, KeyID: event.KeyID, UserID: event.UserID, TeamID: event.TeamID, OrganizationID: event.OrganizationID, ProjectID: event.ProjectID, OwnerType: event.OwnerType, Model: event.Model, CallType: event.CallType}
+	}
+	if final.RequestID != marker.RequestID || final.KeyID != marker.KeyID || final.UserID != marker.UserID || final.TeamID != marker.TeamID || final.OrganizationID != marker.OrganizationID || final.ProjectID != marker.ProjectID || ownerType(final) != ownerType(marker) || final.Model != marker.Model || (marker.CallType != "" && final.CallType != marker.CallType) {
+		return false, fmt.Errorf("%w: recorded delivery owner differs", ErrConflict)
+	}
+	return true, nil
+}
+
 // DiscardRecordedDelivery 仅在相同请求已有持久账单或待结算快照时删除未确认标记。
 // ctx 控制数据库操作，id 为调用 ID；返回错误供调用方记录，不能清理由内存推断的未记录结果。
 func (db *DB) DiscardRecordedDelivery(ctx context.Context, id string) error {

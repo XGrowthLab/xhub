@@ -303,6 +303,7 @@ func TestSyncUnknownRecoveryWaitsForCorruptQueue(t *testing.T) {
 // TestSyncDeliveryConfirmedSpoolRecovery 验证响应已经写出而账单队列暂不可写时，磁盘快照重启后只结算一次。
 // 使用隔离数据库、真实 HTTP 网关及本机上游；临时故障约束与独立磁盘目录由测试清理。
 func TestSyncDeliveryConfirmedSpoolRecovery(t *testing.T) {
+	t.Run("redis_confirmation_survives_disk_restart", testSyncRedisConfirmationWinsOverDiskRestart)
 	t.Run("confirmed_pending_clears_disk", testSyncPendingConfirmationClearsDisk)
 	dir := filepath.Join(t.TempDir(), "spool")
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
@@ -589,4 +590,60 @@ func testSyncPendingConfirmationClearsDisk(t *testing.T) {
 	if after := h.moneyOf(t, owner); !after.grewBy(before, expectedCost()) {
 		t.Fatalf("各层消费应且仅应增加一次: before=%+v after=%+v", before, after)
 	}
+}
+
+// testSyncRedisConfirmationWinsOverDiskRestart 验证磁盘终态超限且 PG 确认失败后，Redis 成功快照不会被重启后的磁盘未知标记覆盖。
+// 使用真实 HTTP、私有 PG/Redis 和持久临时卷；显式重启网关，核对日志及各层费用只记一次，夹具回收服务和数据。
+func testSyncRedisConfirmationWinsOverDiskRestart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
+	t.Setenv("XHUB_USAGE_SPOOL_RECORD_BYTES", "2048")
+	isolatedSpendRedis(t)
+	h := newHarness(t, chatDeployment("sync-redis-disk"))
+	t.Cleanup(func() { _ = h.gw.CloseUsageSpool() })
+	admin := h.adminSession()
+	owner := h.openScope(t, admin, "sync-redis-disk")
+	before := h.moneyOf(t, owner)
+	h.onUpstream("sync-redis-disk", func() {
+		if _, err := h.db.Engine.Exec(`ALTER TABLE usage_pending ADD CONSTRAINT reject_disk_confirm CHECK (false)`); err != nil {
+			t.Error(err)
+		}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"sync-redis-disk","messages":[{"role":"user","content":"Verify confirmed Redis fallback after restart."}]}`))
+	req.Header.Set("Authorization", "Bearer "+owner.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xhub-Label", strings.Repeat("x", 2048))
+	w := httptest.NewRecorder()
+	h.gw.Handler().ServeHTTP(w, req)
+	id := w.Header().Get("x-litellm-call-id")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "regression-ok") {
+		t.Fatalf("HTTP 应成功: %d %s", w.Code, w.Body.String())
+	}
+	if rows, _ := h.gw.Live.PeekLogs(10); len(rows) != 1 || rows[0].RequestID != id {
+		t.Fatalf("确认快照未进入 Redis: %+v", rows)
+	}
+	if _, err := h.db.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT reject_disk_confirm`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gw.CloseUsageSpool(); err != nil {
+		t.Fatal(err)
+	}
+	fresh := gateway.New(h.gw.Cfg, h.store, h.db)
+	t.Cleanup(func() {
+		_ = fresh.CloseUsageSpool()
+		if fresh.Live != nil {
+			_ = fresh.Live.Close()
+		}
+	})
+	for range 3 {
+		fresh.FlushSpend()
+	}
+	log := h.ok(http.MethodGet, "/spend/logs/ui/"+id, admin, nil).json()
+	if log["status"] != "success" || !nearlyEqual(log["spend"].(float64), expectedCost()) {
+		t.Fatalf("重启把 Redis 已确认账单误记为零: %+v", log)
+	}
+	if after := h.moneyOf(t, owner); !after.grewBy(before, expectedCost()) {
+		t.Fatalf("恢复费用不正确: before=%+v after=%+v", before, after)
+	}
+	assertUsageQueuesEmpty(t, h, dir)
 }

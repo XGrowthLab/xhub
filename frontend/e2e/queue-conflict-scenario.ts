@@ -59,10 +59,11 @@ export function registerQueueConflictScenario(locale: "en" | "zh-CN") {
   });
 }
 
-// 验证真实同步响应已交付但数据库确认失败时，先执行过期恢复仍保留确认费用；中英文日志均能查看。
+// 验证真实同步响应已交付但数据库确认失败时，过期恢复及磁盘故障后重启仍保留确认费用；中英文日志均能查看。
 // 前置独占 Redis/私有 PG/本地供应商；finally 解除故障并删除密钥及模型，账单随私有 schema 回收。
 export function registerConfirmedRecoveryScenario(locale: "en" | "zh-CN") {
-  test("confirmed response keeps its charge during recovery " + locale, async ({ page }) => {
+  for (const disk of [false, true])
+  test("confirmed response keeps its charge during recovery " + locale + (disk ? " disk restart" : " database"), async ({ page }) => {
     if (process.env.E2E_REDIS !== "1") throw new Error("E2E_REDIS=1 is required");
     const control = JSON.parse(readFileSync(join(process.env.E2E_RUN_DIR!, "enterprise-fixture.json"), "utf8")).control;
     await loginAdmin(page);
@@ -82,9 +83,9 @@ export function registerConfirmedRecoveryScenario(locale: "en" | "zh-CN") {
       const generated = await page.request.post(GATEWAY + "/key/generate", { headers, data: { key_alias: name } });
       expect(generated.status(), await generated.text()).toBe(200);
       const key = await generated.json(); keyID = key.token_id;
-      const block = await page.request.post(control + "/usage/queue-conflict", { data: { action: "block-confirmation", id } });
+      const block = await page.request.post(control + "/usage/queue-conflict", { data: { action: "block-confirmation", id, disk } });
       expect(block.status(), await block.text()).toBe(200);
-      const response = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: { Authorization: "Bearer " + key.key }, data: {
+      const response = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: { Authorization: "Bearer " + key.key, ...(disk ? { "X-Xhub-Label": "x".repeat(2048) } : {}) }, data: {
         model: name, stream: false, messages: [{ role: "user", content: "Verify confirmed billing recovery." }],
       } });
       expect(response.status(), await response.text()).toBe(200);
@@ -96,7 +97,7 @@ export function registerConfirmedRecoveryScenario(locale: "en" | "zh-CN") {
         expect(status.status(), await status.text()).toBe(200);
         return (await status.json()).queued;
       }).toBe(true);
-      const recover = await page.request.post(control + "/usage/queue-conflict", { data: { action: "recover-confirmation", id, requestID } });
+      const recover = await page.request.post(control + "/usage/queue-conflict", { data: { action: "recover-confirmation", id, requestID, disk } });
       expect(recover.status(), await recover.text()).toBe(200);
       const detailResponse = await page.request.get(GATEWAY + "/spend/logs/ui/" + requestID, { headers });
       expect(detailResponse.status(), await detailResponse.text()).toBe(200);
@@ -108,7 +109,7 @@ export function registerConfirmedRecoveryScenario(locale: "en" | "zh-CN") {
       await expect(dialog.getByText(name, { exact: true }).first()).toBeVisible();
       await expect(dialog.getByText(translate(locale, "Cost"), { exact: true }).first()).toBeVisible();
     } finally {
-      const unblock = await page.request.post(control + "/usage/queue-conflict", { data: { action: "unblock-confirmation", id } });
+      const unblock = await page.request.post(control + "/usage/queue-conflict", { data: { action: "unblock-confirmation", id, disk } });
       expect(unblock.status(), await unblock.text()).toBe(200);
       if (keyID) expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [keyID] } })).status()).toBe(200);
       if (modelID) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: modelID } })).status()).toBe(200);

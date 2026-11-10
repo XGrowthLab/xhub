@@ -103,9 +103,9 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		}
 		if s.usageSpoolEnabled {
 			record.DeliveryPending, record.DeliverySpoolOnly, record.DeliveryUnconfirmed = true, true, true
-		} else if s.Live != nil {
-			record.DeliveryRedisGuard = true
 		}
+		// 磁盘终态保存也可能失败并回退 Redis，重启后仍必须核对该确认来源。
+		record.DeliveryRedisGuard = s.Live != nil
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err := s.IAM.PrepareDelivery(ctx, record, time.Now().Add(24*time.Hour))
 		cancel()

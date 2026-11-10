@@ -3,8 +3,11 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +17,16 @@ import (
 )
 
 // browserQueueConflictControl 为私有浏览器夹具创建或修复一条确定性冲突账单。
-// w/r 为控制端请求，s 为连接独占 Redis 和私有 schema 的网关；返回是否命中控制路径。
+// w/r 为控制端请求，s 为连接独占 Redis 和私有 schema 的网关，dir 为私有运行目录；返回是否命中控制路径。
 // 仅测试二进制调用；恢复通过正常结算完成，不能连接共享 Redis 或删除真实账单。
-func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Server) bool {
+func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Server, dir string) bool {
 	if r.URL.Path != "/usage/queue-conflict" {
 		return false
 	}
-	var body struct{ Action, ID, RequestID string }
+	var body struct {
+		Action, ID, RequestID string
+		Disk                  bool
+	}
 	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasPrefix(body.ID, "e2e-queue-conflict-") || s.Live == nil {
 		http.Error(w, "private redis fixture and valid test id required", http.StatusBadRequest)
 		return true
@@ -39,10 +45,33 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 		_ = json.NewEncoder(w).Encode(map[string]bool{"queued": queued})
 		return true
 	case "block-confirmation":
+		if body.Disk {
+			s.usageSpool, err = usagespool.Open(usagespool.Config{Dir: filepath.Join(dir, "queue-confirmation-spool"), MaxRecordBytes: 2048})
+			if err != nil {
+				break
+			}
+			s.usageSpoolEnabled = true
+		}
 		// 仅隔离夹具使用：让真实 HTTP 响应写出后转入 Redis，浏览器核对恢复前后的日志。
 		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending ADD CONSTRAINT e2e_reject_confirmation CHECK (false)`)
 	case "unblock-confirmation":
 		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT IF EXISTS e2e_reject_confirmation`)
+		if body.Disk && s.usageSpool != nil && err == nil {
+			s.FlushSpend()
+			status, statusErr := s.usageSpool.Status()
+			if statusErr != nil {
+				err = statusErr
+			} else if status.Pending != 0 {
+				err = fmt.Errorf("unsettled disk confirmation evidence remains")
+			}
+			if err == nil {
+				err = s.CloseUsageSpool()
+			}
+			if err == nil {
+				s.usageSpool, s.usageSpoolEnabled = nil, false
+				err = os.RemoveAll(filepath.Join(dir, "queue-confirmation-spool"))
+			}
+		}
 	case "recover-confirmation":
 		if body.RequestID == "" {
 			err = fmt.Errorf("request id required")
@@ -57,6 +86,13 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 			n, err = s.IAM.RecoverExpiredDeliveriesGuarded(ctx, time.Now(), 500, s.Live.ReserveDeliveryRecovery)
 			if err == nil && n != 0 {
 				err = fmt.Errorf("confirmed HTTP response incorrectly recovered as unknown: %d", n)
+			}
+		}
+		if err == nil && body.Disk {
+			// 真实关闭再打开相同持久卷，模拟原实例退出后磁盘标记恢复；不伪造账单。
+			err = s.CloseUsageSpool()
+			if err == nil {
+				s.usageSpool, err = usagespool.Open(usagespool.Config{Dir: filepath.Join(dir, "queue-confirmation-spool"), MaxRecordBytes: 2048})
 			}
 		}
 		if err == nil {
@@ -137,7 +173,7 @@ func TestBrowserQueueConflictControl(t *testing.T) {
 	} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/usage/queue-conflict", strings.NewReader(tc.body))
-		if !browserQueueConflictControl(w, r, s) || w.Code != tc.want {
+		if !browserQueueConflictControl(w, r, s, t.TempDir()) || w.Code != tc.want {
 			t.Fatalf("隔离控制响应不符: body=%s status=%d want=%d", tc.body, w.Code, tc.want)
 		}
 	}
