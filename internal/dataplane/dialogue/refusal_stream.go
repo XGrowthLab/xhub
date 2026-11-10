@@ -28,6 +28,11 @@ func (s *dialogueStream) finishRefusal() error {
 			return err
 		}
 	}
+	if s.checkedCommit != nil {
+		if err := s.checkedCommit(result); err != nil {
+			return err
+		}
+	}
 	raw, err := llmdialogue.EncodeDialogueResult(result, s.protocol, s.model)
 	if err != nil {
 		return err
