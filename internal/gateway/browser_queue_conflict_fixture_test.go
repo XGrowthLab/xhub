@@ -1,0 +1,183 @@
+package gateway
+
+import (
+	"encoding/json"
+	"fmt"
+	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sunqirui1987/xhub/internal/iam"
+	"github.com/sunqirui1987/xhub/internal/live"
+)
+
+// browserQueueConflictControl 为私有浏览器夹具创建或修复一条确定性冲突账单。
+// w/r 为控制端请求，s 为连接独占 Redis 和私有 schema 的网关，dir 为私有运行目录；返回是否命中控制路径。
+// 仅测试二进制调用；恢复通过正常结算完成，不能连接共享 Redis 或删除真实账单。
+func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Server, dir string) bool {
+	if r.URL.Path != "/usage/queue-conflict" {
+		return false
+	}
+	var body struct {
+		Action, ID, RequestID string
+		Disk                  bool
+	}
+	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasPrefix(body.ID, "e2e-queue-conflict-") || s.Live == nil {
+		http.Error(w, "private redis fixture and valid test id required", http.StatusBadRequest)
+		return true
+	}
+	ctx := r.Context()
+	var err error
+	switch body.Action {
+	case "confirmation-status":
+		rows, _ := s.Live.PeekLogs(500)
+		queued := false
+		for _, row := range rows {
+			if row.RequestID == body.RequestID && row.DeliverySnapshot != "" && row.Spend > 0 {
+				queued = true
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"queued": queued})
+		return true
+	case "block-confirmation":
+		if body.Disk {
+			s.usageSpool, err = usagespool.Open(usagespool.Config{Dir: filepath.Join(dir, "queue-confirmation-spool"), MaxRecordBytes: 2048})
+			if err != nil {
+				break
+			}
+			s.usageSpoolEnabled = true
+		}
+		// 仅隔离夹具使用：让真实 HTTP 响应写出后转入 Redis，浏览器核对恢复前后的日志。
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending ADD CONSTRAINT e2e_reject_confirmation CHECK (false)`)
+	case "unblock-confirmation":
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT IF EXISTS e2e_reject_confirmation`)
+		if body.Disk && s.usageSpool != nil && err == nil {
+			s.FlushSpend()
+			status, statusErr := s.usageSpool.Status()
+			if statusErr != nil {
+				err = statusErr
+			} else if status.Pending != 0 {
+				err = fmt.Errorf("unsettled disk confirmation evidence remains")
+			}
+			if err == nil {
+				err = s.CloseUsageSpool()
+			}
+			if err == nil {
+				s.usageSpool, s.usageSpoolEnabled = nil, false
+				err = os.RemoveAll(filepath.Join(dir, "queue-confirmation-spool"))
+			}
+		}
+	case "recover-confirmation":
+		if body.RequestID == "" {
+			err = fmt.Errorf("request id required")
+			break
+		}
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT IF EXISTS e2e_reject_confirmation`)
+		if err == nil {
+			_, err = s.IAM.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at=now()-interval '1 second' WHERE request_id=?`, body.RequestID)
+		}
+		if err == nil {
+			var n int
+			n, err = s.IAM.RecoverExpiredDeliveriesGuarded(ctx, time.Now(), 500, s.Live.ReserveDeliveryRecovery)
+			if err == nil && n != 0 {
+				err = fmt.Errorf("confirmed HTTP response incorrectly recovered as unknown: %d", n)
+			}
+		}
+		if err == nil && body.Disk {
+			// 真实关闭再打开相同持久卷，模拟原实例退出后磁盘标记恢复；不伪造账单。
+			err = s.CloseUsageSpool()
+			if err == nil {
+				s.usageSpool, err = usagespool.Open(usagespool.Config{Dir: filepath.Join(dir, "queue-confirmation-spool"), MaxRecordBytes: 2048})
+			}
+		}
+		if err == nil {
+			s.FlushSpend()
+			var event *iam.UsageEvent
+			event, err = s.IAM.GetUsageEvent(ctx, iam.UsageQuery{}, body.RequestID)
+			if err == nil && (event.Status != "success" || event.Cost <= 0) {
+				err = fmt.Errorf("confirmed HTTP response lost its charge")
+			}
+		}
+	case "start", "start-missing":
+		record := iam.UsageRecord{RequestID: body.ID, TS: time.Now().UTC(), Model: "fixture-original", OwnerType: iam.OwnerPersonal, CallType: "chat", Status: "success", HTTPStatus: 200}
+		if body.Action == "start" {
+			err = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(time.Hour))
+		}
+		if err == nil {
+			record.Model = "fixture-conflict"
+			var raw []byte
+			raw, err = json.Marshal(record)
+			if err == nil {
+				err = s.Live.EnqueueConfirmedDelivery(live.SpendLog{RequestID: body.ID, SpendValid: true, Start: record.TS.Format(time.RFC3339Nano), DeliverySnapshot: string(raw)})
+			}
+		}
+	case "flush":
+		s.FlushSpend()
+	case "resolve-missing":
+		record := iam.UsageRecord{RequestID: body.ID, TS: time.Now().UTC(), Model: "fixture-conflict", OwnerType: iam.OwnerPersonal, CallType: "chat", Status: "success", HTTPStatus: 200}
+		err = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(time.Hour))
+		if err == nil {
+			for range 4 {
+				s.FlushSpend()
+			}
+			_, err = s.IAM.GetUsageEvent(ctx, iam.UsageQuery{}, body.ID)
+		}
+	case "resolve":
+		_, err = s.IAM.Engine.Context(ctx).Exec(`UPDATE usage_delivery_pending SET payload=jsonb_set(payload, '{Model}', to_jsonb('fixture-conflict'::text)) WHERE request_id=?`, body.ID)
+		if err == nil {
+			for range 4 {
+				s.FlushSpend()
+			}
+			_, err = s.IAM.GetUsageEvent(ctx, iam.UsageQuery{}, body.ID)
+		}
+	default:
+		err = fmt.Errorf("unknown action")
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return true
+	}
+	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	return true
+}
+
+// TestBrowserQueueConflictControl 验证私有夹具拒绝非法输入，并能创建和正常核对冲突记录。
+// 使用独立 PostgreSQL 与临时 Redis；校验错误输入、保持冲突、恢复结算及清理，全部资源由测试回收。
+func TestBrowserQueueConflictControl(t *testing.T) {
+	_, _, db := testGatewayStores(t)
+	client, err := live.Open(browserPrivateRedis(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	s := &Server{IAM: db, Live: client}
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"action":"start","id":"outside-fixture"}`, 400},
+		{`{"action":"unknown","id":"e2e-queue-conflict-unit"}`, 500},
+		{`{"action":"block-confirmation","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"unblock-confirmation","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"recover-confirmation","id":"e2e-queue-conflict-unit"}`, 500},
+		{`{"action":"start","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"flush","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"resolve","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"start-missing","id":"e2e-queue-conflict-missing"}`, 200},
+		{`{"action":"resolve-missing","id":"e2e-queue-conflict-missing"}`, 200},
+	} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/usage/queue-conflict", strings.NewReader(tc.body))
+		if !browserQueueConflictControl(w, r, s, t.TempDir()) || w.Code != tc.want {
+			t.Fatalf("隔离控制响应不符: body=%s status=%d want=%d", tc.body, w.Code, tc.want)
+		}
+	}
+	if rows, _ := client.PeekLogs(1); len(rows) != 0 {
+		t.Fatalf("恢复后不应残留测试账单: rows=%+v", rows)
+	}
+}
