@@ -341,7 +341,11 @@ func (s *Server) recordSpend(w http.ResponseWriter, p *auth.Principal, callID, a
 			if s.IAM == nil {
 				pending.deliveryErr = fmt.Errorf("delivery storage unavailable")
 			} else {
-				pending.deliveryErr = s.IAM.PrepareDelivery(ctx, record, time.Now().Add(24*time.Hour))
+				// 缓存命中等路径未经过预算准备，也必须标记 Redis 恢复归属；
+				// 后续实例缺失 Redis 时不能把尚在队列里的已确认响应判成失败。
+				marker := record
+				marker.DeliveryRedisGuard = s.Live != nil && !s.usageSpoolEnabled
+				pending.deliveryErr = s.IAM.PrepareDelivery(ctx, marker, time.Now().Add(24*time.Hour))
 			}
 			cancel()
 			if pending.deliveryErr == nil && s.usageSpoolEnabled {

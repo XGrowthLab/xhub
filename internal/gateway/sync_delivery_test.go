@@ -12,8 +12,46 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sunqirui1987/xhub/internal/config"
 	"github.com/sunqirui1987/xhub/internal/iam"
+	"github.com/sunqirui1987/xhub/internal/live"
 )
+
+// TestRecordCachedDeliveryKeepsRecoveryOwner 验证绕过预算准备的缓存命中仍冻结恢复归属。
+// 前置隔离 PG；有 Redis 时缺失守卫不能恢复，无 Redis 时允许未知结果恢复；存储失败不交付，schema 自动清理。
+func TestRecordCachedDeliveryKeepsRecoveryOwner(t *testing.T) {
+	for _, withRedis := range []bool{false, true} {
+		t.Run(fmt.Sprintf("redis=%t", withRedis), func(t *testing.T) {
+			db := testIdentityStore(t)
+			s := &Server{Cfg: &config.Config{}, IAM: db}
+			if withRedis {
+				// 本例仅验证归属标记，不调用 Redis；缓存与匿名记录不查询热费用。
+				s.Live = &live.Client{}
+			}
+			w := &holdWriter{ResponseWriter: httptest.NewRecorder(), guardDelivery: true}
+			s.recordSpend(w, nil, "cached-delivery", "cached-model", "chat", nil, time.Now(), true, 200, "")
+			if w.deliveryErr != nil || w.delivery == nil {
+				t.Fatalf("缓存成功记录未准备: record=%+v err=%v", w.delivery, w.deliveryErr)
+			}
+			if _, err := db.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at = now() - interval '1 second'`); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if withRedis {
+				want = 0
+			}
+			if n, err := db.RecoverExpiredDeliveries(t.Context(), time.Now(), 10); err != nil || n != want {
+				t.Fatalf("缓存记录恢复归属错误: redis=%t n=%d want=%d err=%v", withRedis, n, want, err)
+			}
+		})
+	}
+	s := &Server{Cfg: &config.Config{}}
+	w := &holdWriter{ResponseWriter: httptest.NewRecorder(), guardDelivery: true}
+	s.recordSpend(w, nil, "unavailable", "cached-model", "chat", nil, time.Now(), true, 200, "")
+	if w.deliveryErr == nil || w.delivery != nil {
+		t.Fatal("缓存记录存储不可用时不能假装已准备交付")
+	}
+}
 
 // TestSyncDialogueRoute 验证同步对话入口的保护范围及非对话/错误方法的边界。
 // 不调用外部服务；该函数不改请求状态，也不需要清理数据。

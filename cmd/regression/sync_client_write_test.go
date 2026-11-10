@@ -209,44 +209,62 @@ func (w *disconnectOnSuccessfulWrite) Write(p []byte) (int, error) {
 // TestSyncSuccessWithoutSpoolDatabaseDisconnect 验证没有磁盘队列但配置 Redis 时，已确认响应在断库后仍可恢复正确费用。
 // 使用隔离数据库、独立 Redis 及本机上游，关闭连接模拟故障，新实例恢复并清理测试数据。
 func TestSyncSuccessWithoutSpoolDatabaseDisconnect(t *testing.T) {
-	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
-	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
-	isolatedSpendRedis(t)
-	h := newHarness(t, chatDeployment("sync-success-disconnect"))
-	admin := h.adminSession()
-	owner := h.openScope(t, admin, "sync-success-disconnect")
-	before := h.moneyOf(t, owner)
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"sync-success-disconnect","messages":[{"role":"user","content":"Verify confirmed delivery recovery."}]}`))
-	req.Header.Set("Authorization", "Bearer "+owner.key)
-	req.Header.Set("Content-Type", "application/json")
-	w := &disconnectOnSuccessfulWrite{ResponseRecorder: httptest.NewRecorder(), closeDB: func() { _ = h.db.Engine.Close() }}
-	h.gw.Handler().ServeHTTP(w, req)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "regression-ok") {
-		t.Fatal("测试需要客户端收到完整成功响应")
-	}
-	db, err := iam.Open(t.Context(), h.gw.Cfg.GeneralSettings.DatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	h.db.Engine = db.Engine
-	// 即使恢复时标记已到期，也必须优先处理 Redis 中已确认的成功终态。
-	if _, err := db.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at = now() - interval '1 second'`); err != nil {
-		t.Fatal(err)
-	}
-	// 模拟旧实现已观察到空队列、随后确认入队的时序：先运行到期恢复，也不能抢写零费用。
-	if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), time.Now(), 500, h.gw.Live.ReserveDeliveryRecovery); err != nil || n != 0 {
-		t.Fatalf("Redis 中已确认的真实 HTTP 响应被未知恢复抢先结算: n=%d err=%v", n, err)
-	}
-	for range 2 {
-		h.gw.FlushSpend()
-	}
-	log := h.ok(http.MethodGet, "/spend/logs/ui/"+w.Header().Get("x-litellm-call-id"), admin, nil).json()
-	if log["status"] != "success" || !nearlyEqual(log["spend"].(float64), expectedCost()) {
-		t.Fatalf("HTTP 日志必须显示已确认费用: %+v", log)
-	}
-	if after := h.moneyOf(t, owner); !after.grewBy(before, expectedCost()) {
-		t.Fatalf("已确认成功但断库后费用未恢复: before=%+v after=%+v", before, after)
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
+			t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
+			isolatedSpendRedis(t)
+			h := newHarness(t, chatDeployment("sync-success-disconnect"))
+			admin := h.adminSession()
+			owner := h.openScope(t, admin, "sync-success-disconnect")
+			if cached {
+				h.ok("POST", "/v1/chat/completions", owner.key, map[string]any{"model": "sync-success-disconnect", "messages": []any{map[string]any{"role": "user", "content": "Verify confirmed delivery recovery."}}})
+				h.gw.FlushSpend()
+			}
+			before := h.moneyOf(t, owner)
+			req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"sync-success-disconnect","messages":[{"role":"user","content":"Verify confirmed delivery recovery."}]}`))
+			req.Header.Set("Authorization", "Bearer "+owner.key)
+			req.Header.Set("Content-Type", "application/json")
+			w := &disconnectOnSuccessfulWrite{ResponseRecorder: httptest.NewRecorder(), closeDB: func() { _ = h.db.Engine.Close() }}
+			h.gw.Handler().ServeHTTP(w, req)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "regression-ok") {
+				t.Fatal("测试需要客户端收到完整成功响应")
+			}
+			db, err := iam.Open(t.Context(), h.gw.Cfg.GeneralSettings.DatabaseURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			h.db.Engine = db.Engine
+			// 即使恢复时标记已到期，也必须优先处理 Redis 中已确认的成功终态。
+			if _, err := db.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at = now() - interval '1 second'`); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := db.RecoverExpiredDeliveries(t.Context(), time.Now(), 500); err != nil || n != 0 {
+				t.Fatalf("恢复实例缺少 Redis 时不能误判已确认结果: n=%d err=%v", n, err)
+			}
+			// 模拟旧实现已观察到空队列、随后确认入队的时序：先运行到期恢复，也不能抢写零费用。
+			if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), time.Now(), 500, h.gw.Live.ReserveDeliveryRecovery); err != nil || n != 0 {
+				t.Fatalf("Redis 中已确认的真实 HTTP 响应被未知恢复抢先结算: n=%d err=%v", n, err)
+			}
+			for range 2 {
+				h.gw.FlushSpend()
+			}
+			wantCost := expectedCost()
+			if cached {
+				wantCost = 0
+				if len(h.upstreamCalls()) != 1 {
+					t.Fatalf("缓存请求不应再次调用上游: calls=%v", h.upstreamCalls())
+				}
+			}
+			log := h.ok(http.MethodGet, "/spend/logs/ui/"+w.Header().Get("x-litellm-call-id"), admin, nil).json()
+			if log["status"] != "success" || !nearlyEqual(log["spend"].(float64), wantCost) {
+				t.Fatalf("HTTP 日志必须显示已确认费用: %+v", log)
+			}
+			if after := h.moneyOf(t, owner); !after.grewBy(before, wantCost) {
+				t.Fatalf("已确认成功但断库后费用未恢复: before=%+v after=%+v", before, after)
+			}
+		})
 	}
 }
 
