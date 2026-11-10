@@ -186,18 +186,18 @@ test("层级预算 " + scenario, async ({ page }) => {
     if (scenario === "guide") {
     await stableGoto(page, "/api-keys");
     await page.getByRole("button", { name: "English", exact: true }).click();
-    const english = page.getByRole("complementary", { name: translate("en", "quotaGuide.title") }).first();
-    await english.locator("summary").first().click();
+    const english = page.getByRole("complementary", { name: translate("en", "quotaGuide.title") });
+    await english.getByText(translate("en", "quotaGuide.title"), { exact: true }).click();
     await expect(english.getByText(translate("en", "quotaGuide.key"))).toBeVisible();
     await expect(english.getByText(translate("en", "quotaGuide.rateMeaning"))).toBeVisible();
     await expect(english.getByText(translate("en", "quotaGuide.singleTeam"))).not.toBeVisible();
     await english.getByText(translate("en", "quotaGuide.moreHeading")).click();
     await expect(english.getByText(translate("en", "quotaGuide.singleTeam"))).toBeVisible();
     await page.getByRole("button", { name: "中文", exact: true }).click();
-    const chinese = page.getByRole("complementary", { name: t("quotaGuide.title") }).first();
+    const chinese = page.getByRole("complementary", { name: t("quotaGuide.title") });
     await expect(chinese.getByText(translate("zh-CN", "quotaGuide.key"))).toBeVisible();
     await expect(chinese.getByText(translate("zh-CN", "quotaGuide.singleTeam"))).toBeVisible();
-    await chinese.locator("summary").first().click();
+    await chinese.getByText(t("quotaGuide.title"), { exact: true }).click();
     await expect(chinese.getByText(translate("zh-CN", "quotaGuide.key"))).not.toBeVisible();
     }
   } finally {

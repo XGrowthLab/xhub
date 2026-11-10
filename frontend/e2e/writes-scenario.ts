@@ -56,10 +56,10 @@ export function registerKeyWrite(kind: "edit" | "block" | "unblock" | "delete", 
       if (kind === "edit") {
         await page.setViewportSize({ width: 1440, height: 700 });
         const guide = page.getByRole("complementary", { name: t("quotaGuide.title") });
-        await expect(guide.locator("details").first()).not.toHaveAttribute("open");
-        await guide.locator("summary").first().click();
+        await expect(guide.locator(":scope > details")).not.toHaveAttribute("open");
+        await guide.getByText(t("quotaGuide.title"), { exact: true }).click();
         await expect(guide.getByText(t("quotaGuide.chain"), { exact: true })).toBeVisible();
-        await guide.locator("summary").first().click();
+        await guide.getByText(t("quotaGuide.title"), { exact: true }).click();
         await expect(page.getByRole("tab", { name: t("Settings"), exact: true })).toHaveCount(0);
         const scroll = page.getByRole("region", { name: t("Key Settings"), exact: true });
         const actions = page.getByRole("group", { name: t("keyEditor.actions"), exact: true });
