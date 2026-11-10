@@ -135,6 +135,7 @@ describe("Tokens column", () => {
     const tokensCell = screen.getByRole("cell", { name: /60.*session total/ });
     expect(tokensCell).not.toHaveTextContent("(0+0)");
     expect(tokensCell).not.toHaveTextContent("(7+3)");
+    expect(tokensCell).not.toHaveTextContent(/\(\d+\+\d+\)/);
   });
 });
 

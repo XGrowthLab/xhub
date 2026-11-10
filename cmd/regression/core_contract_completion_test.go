@@ -2,6 +2,7 @@ package regression
 
 import (
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/sunqirui1987/xhub/contracts/usage"
@@ -131,6 +132,21 @@ func TestUsageContractRealTraffic(t *testing.T) {
 	call("/spend/logs/ui/"+id, admin, 200)
 	call("/spend/logs/ui/missing", admin, 404)
 	session := detail["session_id"].(string)
+	if session == "" {
+		t.Fatal("真实请求缺少会话，无法验证聚合契约")
+	}
+	grouped := call("/spend/logs/ui?group_by_session=true&session_id="+url.QueryEscape(session), a.session, 200).json()["data"].([]any)
+	if len(grouped) != 1 {
+		t.Fatalf("真实会话聚合结果错误: %d", len(grouped))
+	}
+	group := grouped[0].(map[string]any)
+	prompt, promptOK := group["session_total_prompt_tokens"].(float64)
+	completion, completionOK := group["session_total_completion_tokens"].(float64)
+	total, totalOK := group["session_total_tokens"].(float64)
+	spend, spendOK := group["session_total_spend"].(float64)
+	if !promptOK || !completionOK || !totalOK || !spendOK || prompt+completion != total || total <= 0 || spend <= 0 {
+		t.Fatalf("真实会话汇总不一致: %+v", group)
+	}
 	call("/spend/logs/session/ui?session_id="+session, a.session, 200)
 	// 兼容空会话查询在鉴权前返回空页；仅锁定既有行为，不能误称为鉴权成功。
 	empty := call("/spend/logs/session/ui", "", 200).json()

@@ -230,12 +230,13 @@ type LogRecord struct {
 	SessionSpend    *float32           `json:"session_spend,omitempty"`
 
 	// SessionTotalCompletionTokens 会话筛选范围内的输出 Token 合计 / Total output tokens in the filtered session
-	SessionTotalCompletionTokens *int `json:"session_total_completion_tokens,omitempty"`
-	SessionTotalCount            *int `json:"session_total_count,omitempty"`
+	SessionTotalCompletionTokens *int64 `json:"session_total_completion_tokens,omitempty"`
+	SessionTotalCount            *int   `json:"session_total_count,omitempty"`
 
 	// SessionTotalPromptTokens 会话筛选范围内的输入 Token 合计 / Total input tokens in the filtered session
-	SessionTotalPromptTokens *int                          `json:"session_total_prompt_tokens,omitempty"`
-	SessionTotalTokens       *float32                      `json:"session_total_tokens,omitempty"`
+	SessionTotalPromptTokens *int64                        `json:"session_total_prompt_tokens,omitempty"`
+	SessionTotalSpend        *float64                      `json:"session_total_spend,omitempty"`
+	SessionTotalTokens       *int64                        `json:"session_total_tokens,omitempty"`
 	Spend                    float32                       `json:"spend"`
 	StartTime                string                        `json:"startTime"`
 	Status                   string                        `json:"status"`
@@ -887,6 +888,14 @@ func (a *LogRecord) UnmarshalJSON(b []byte) error {
 		delete(object, "session_total_prompt_tokens")
 	}
 
+	if raw, found := object["session_total_spend"]; found {
+		err = json.Unmarshal(raw, &a.SessionTotalSpend)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_total_spend': %w", err)
+		}
+		delete(object, "session_total_spend")
+	}
+
 	if raw, found := object["session_total_tokens"]; found {
 		err = json.Unmarshal(raw, &a.SessionTotalTokens)
 		if err != nil {
@@ -1190,6 +1199,13 @@ func (a LogRecord) MarshalJSON() ([]byte, error) {
 		object["session_total_prompt_tokens"], err = json.Marshal(a.SessionTotalPromptTokens)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'session_total_prompt_tokens': %w", err)
+		}
+	}
+
+	if a.SessionTotalSpend != nil {
+		object["session_total_spend"], err = json.Marshal(a.SessionTotalSpend)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session_total_spend': %w", err)
 		}
 	}
 

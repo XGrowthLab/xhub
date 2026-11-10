@@ -1517,16 +1517,24 @@
     "session_spend": {
       "type": "number"
     },
+    "session_total_spend": {
+      "type": "number",
+      "format": "double"
+    },
     "session_total_tokens": {
-      "type": "number"
+      "type": "integer",
+      "format": "int64",
+      "minimum": 0
     },
     "session_total_prompt_tokens": {
       "type": "integer",
+      "format": "int64",
       "minimum": 0,
       "description": "会话筛选范围内的输入 Token 合计"
     },
     "session_total_completion_tokens": {
       "type": "integer",
+      "format": "int64",
       "minimum": 0,
       "description": "会话筛选范围内的输出 Token 合计"
     },
