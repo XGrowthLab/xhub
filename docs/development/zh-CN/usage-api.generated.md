@@ -1520,6 +1520,16 @@
     "session_total_tokens": {
       "type": "number"
     },
+    "session_total_prompt_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "会话筛选范围内的输入 Token 合计"
+    },
+    "session_total_completion_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "会话筛选范围内的输出 Token 合计"
+    },
     "body_capture_status": {
       "type": "string",
       "description": "正文记录状态；历史日志可能缺少",

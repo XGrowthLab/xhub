@@ -223,23 +223,29 @@ type LogRecord struct {
 	RequestId          string              `json:"request_id"`
 
 	// Response 保留任意JSON类型、未知字段与null / Preserve arbitrary JSON values, unknown fields and null
-	Response             rawjson.RawMessage            `json:"response"`
-	SessionId            string                        `json:"session_id"`
-	SessionLlmCount      *int                          `json:"session_llm_count,omitempty"`
-	SessionSource        string                        `json:"session_source"`
-	SessionSpend         *float32                      `json:"session_spend,omitempty"`
-	SessionTotalCount    *int                          `json:"session_total_count,omitempty"`
-	SessionTotalTokens   *float32                      `json:"session_total_tokens,omitempty"`
-	Spend                float32                       `json:"spend"`
-	StartTime            string                        `json:"startTime"`
-	Status               string                        `json:"status"`
-	Streamed             bool                          `json:"streamed"`
-	TeamId               string                        `json:"team_id"`
-	TotalTokens          float32                       `json:"total_tokens"`
-	Tps                  *float32                      `json:"tps"`
-	TtftMs               *float32                      `json:"ttft_ms"`
-	User                 string                        `json:"user"`
-	AdditionalProperties map[string]rawjson.RawMessage `json:"-"`
+	Response        rawjson.RawMessage `json:"response"`
+	SessionId       string             `json:"session_id"`
+	SessionLlmCount *int               `json:"session_llm_count,omitempty"`
+	SessionSource   string             `json:"session_source"`
+	SessionSpend    *float32           `json:"session_spend,omitempty"`
+
+	// SessionTotalCompletionTokens 会话筛选范围内的输出 Token 合计 / Total output tokens in the filtered session
+	SessionTotalCompletionTokens *int `json:"session_total_completion_tokens,omitempty"`
+	SessionTotalCount            *int `json:"session_total_count,omitempty"`
+
+	// SessionTotalPromptTokens 会话筛选范围内的输入 Token 合计 / Total input tokens in the filtered session
+	SessionTotalPromptTokens *int                          `json:"session_total_prompt_tokens,omitempty"`
+	SessionTotalTokens       *float32                      `json:"session_total_tokens,omitempty"`
+	Spend                    float32                       `json:"spend"`
+	StartTime                string                        `json:"startTime"`
+	Status                   string                        `json:"status"`
+	Streamed                 bool                          `json:"streamed"`
+	TeamId                   string                        `json:"team_id"`
+	TotalTokens              float32                       `json:"total_tokens"`
+	Tps                      *float32                      `json:"tps"`
+	TtftMs                   *float32                      `json:"ttft_ms"`
+	User                     string                        `json:"user"`
+	AdditionalProperties     map[string]rawjson.RawMessage `json:"-"`
 }
 
 // LogRecordBodyCaptureStatus 正文记录状态；历史日志可能缺少 / Body capture status; may be absent on older logs
@@ -857,12 +863,28 @@ func (a *LogRecord) UnmarshalJSON(b []byte) error {
 		delete(object, "session_spend")
 	}
 
+	if raw, found := object["session_total_completion_tokens"]; found {
+		err = json.Unmarshal(raw, &a.SessionTotalCompletionTokens)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_total_completion_tokens': %w", err)
+		}
+		delete(object, "session_total_completion_tokens")
+	}
+
 	if raw, found := object["session_total_count"]; found {
 		err = json.Unmarshal(raw, &a.SessionTotalCount)
 		if err != nil {
 			return fmt.Errorf("error reading 'session_total_count': %w", err)
 		}
 		delete(object, "session_total_count")
+	}
+
+	if raw, found := object["session_total_prompt_tokens"]; found {
+		err = json.Unmarshal(raw, &a.SessionTotalPromptTokens)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_total_prompt_tokens': %w", err)
+		}
+		delete(object, "session_total_prompt_tokens")
 	}
 
 	if raw, found := object["session_total_tokens"]; found {
@@ -1150,10 +1172,24 @@ func (a LogRecord) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.SessionTotalCompletionTokens != nil {
+		object["session_total_completion_tokens"], err = json.Marshal(a.SessionTotalCompletionTokens)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session_total_completion_tokens': %w", err)
+		}
+	}
+
 	if a.SessionTotalCount != nil {
 		object["session_total_count"], err = json.Marshal(a.SessionTotalCount)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'session_total_count': %w", err)
+		}
+	}
+
+	if a.SessionTotalPromptTokens != nil {
+		object["session_total_prompt_tokens"], err = json.Marshal(a.SessionTotalPromptTokens)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session_total_prompt_tokens': %w", err)
 		}
 	}
 

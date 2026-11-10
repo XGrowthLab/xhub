@@ -321,9 +321,11 @@ export const getRequestLogsTableColumns = ({
         <div className="flex flex-col items-end">
           <span className="text-sm">
             {String(total || "0")}
-            <span className="text-muted-foreground text-xs ml-1">
-              ({String(prompt || "0")}+{String(completion || "0")})
-            </span>
+            {prompt != null && completion != null && (
+              <span className="text-muted-foreground text-xs ml-1">
+                ({String(prompt)}+{String(completion)})
+              </span>
+            )}
           </span>
           {showSessionTotal && <span className="text-[10px] text-muted-foreground">{t("session total")}</span>}
         </div>

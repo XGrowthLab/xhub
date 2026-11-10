@@ -43,7 +43,7 @@ func TestUsageSessionPagination(t *testing.T) {
 		if seen[row.RequestID] {
 			t.Fatalf("跨页重复 %s", row.RequestID)
 		}
-		if row.SessionID == "shared" && (row.SessionCount != 32 || row.SessionTokens != 160 || row.SessionSpend != 8 || row.RequestID != "page-31") {
+		if row.SessionID == "shared" && (row.SessionCount != 32 || row.SessionTokens != 160 || row.SessionPromptTokens != 64 || row.SessionCompletionTokens != 96 || row.SessionSpend != 8 || row.RequestID != "page-31") {
 			t.Fatalf("完整会话汇总或代表请求错误: %+v", row)
 		}
 	}

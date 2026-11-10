@@ -1520,6 +1520,16 @@ Return candidates from logs visible to the caller; model and supplier also requi
     "session_total_tokens": {
       "type": "number"
     },
+    "session_total_prompt_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total input tokens in the filtered session"
+    },
+    "session_total_completion_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total output tokens in the filtered session"
+    },
     "body_capture_status": {
       "type": "string",
       "description": "Body capture status; may be absent on older logs",
