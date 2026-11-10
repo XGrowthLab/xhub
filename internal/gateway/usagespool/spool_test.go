@@ -99,6 +99,9 @@ func TestSpoolDeliveryMarkerRecovery(t *testing.T) {
 			if err := s.BeginDelivery(marker); err != nil {
 				t.Fatal(err)
 			}
+			if status, err := s.Status(); err != nil || status.Pending != 1 || status.Replayable != 0 {
+				t.Fatalf("在途标记应占容量但不触发准入重放: %+v %v", status, err)
+			}
 			calls := 0
 			if _, err := s.Replay(t.Context(), 10, func(context.Context, iam.UsageRecord) error { calls++; return nil }); err != nil || calls != 0 {
 				t.Fatalf("在途标记被提前恢复: calls=%d err=%v", calls, err)
@@ -117,11 +120,17 @@ func TestSpoolDeliveryMarkerRecovery(t *testing.T) {
 				if err := s.CompleteDelivery(final); err != nil {
 					t.Fatal(err)
 				}
+				if status, err := s.Status(); err != nil || status.Pending != 1 || status.Replayable != 1 {
+					t.Fatalf("最终快照应可重放且继续占容量: %+v %v", status, err)
+				}
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
 			s = openSpool(t, Config{Dir: dir})
+			if status, err := s.Status(); err != nil || status.Replayable != 1 {
+				t.Fatalf("重启后未知标记也应可恢复: %+v %v", status, err)
+			}
 			if _, err := s.Replay(t.Context(), 10, func(_ context.Context, got iam.UsageRecord) error {
 				calls++
 				if confirmed && (got.Cost != final.Cost || got.DeliveryUnconfirmed) {

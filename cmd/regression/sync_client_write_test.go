@@ -22,6 +22,7 @@ import (
 // TestSyncClientWriteFailure 验证同步标准及透传对话的客户端写入错误或短写按失败零费用记录。
 // 使用真实网关、隔离 PG、可选磁盘队列、本机上游和注入式响应写入器；检查不重放、账单、日志及清理。
 func TestSyncClientWriteFailure(t *testing.T) {
+	t.Run("unprepared_error_no_cleanup", testUnpreparedFailureDoesNotCleanDelivery)
 	for _, disk := range []bool{false, true} {
 		for _, tc := range []struct {
 			name, path        string
@@ -233,8 +234,16 @@ func TestSyncSuccessWithoutSpoolDatabaseDisconnect(t *testing.T) {
 	if _, err := db.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at = now() - interval '1 second'`); err != nil {
 		t.Fatal(err)
 	}
+	// 模拟旧实现已观察到空队列、随后确认入队的时序：先运行到期恢复，也不能抢写零费用。
+	if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), time.Now(), 500, h.gw.Live.ReserveDeliveryRecovery); err != nil || n != 0 {
+		t.Fatalf("Redis 中已确认的真实 HTTP 响应被未知恢复抢先结算: n=%d err=%v", n, err)
+	}
 	for range 2 {
 		h.gw.FlushSpend()
+	}
+	log := h.ok(http.MethodGet, "/spend/logs/ui/"+w.Header().Get("x-litellm-call-id"), admin, nil).json()
+	if log["status"] != "success" || !nearlyEqual(log["spend"].(float64), expectedCost()) {
+		t.Fatalf("HTTP 日志必须显示已确认费用: %+v", log)
 	}
 	if after := h.moneyOf(t, owner); !after.grewBy(before, expectedCost()) {
 		t.Fatalf("已确认成功但断库后费用未恢复: before=%+v after=%+v", before, after)
@@ -244,6 +253,7 @@ func TestSyncSuccessWithoutSpoolDatabaseDisconnect(t *testing.T) {
 // TestSyncUnknownRecoveryWaitsForCorruptQueue 验证 Redis 队列损坏时不能将到期待确认账单误判为零费用。
 // 前置私有 PostgreSQL 和独立 Redis，修复队列后才允许未知状态恢复；测试结束自动清理资源。
 func TestSyncUnknownRecoveryWaitsForCorruptQueue(t *testing.T) {
+	t.Run("recovery_transaction_rollback", testSyncRecoveryRollbackAndRetry)
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	rdb := isolatedSpendRedis(t)
@@ -275,6 +285,7 @@ func TestSyncUnknownRecoveryWaitsForCorruptQueue(t *testing.T) {
 // TestSyncDeliveryConfirmedSpoolRecovery 验证响应已经写出而账单队列暂不可写时，磁盘快照重启后只结算一次。
 // 使用隔离数据库、真实 HTTP 网关及本机上游；临时故障约束与独立磁盘目录由测试清理。
 func TestSyncDeliveryConfirmedSpoolRecovery(t *testing.T) {
+	t.Run("confirmed_pending_clears_disk", testSyncPendingConfirmationClearsDisk)
 	dir := filepath.Join(t.TempDir(), "spool")
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
@@ -443,5 +454,121 @@ func TestSyncMissingDeliveryDoesNotBlockBilling(t *testing.T) {
 	rows, _ := h.gw.Live.PeekLogs(10)
 	if len(rows) != 1 || rows[0].RequestID != missing.RequestID {
 		t.Fatalf("冲突证据应保留: %+v", rows)
+	}
+}
+
+// testSyncRecoveryRollbackAndRetry 验证恢复权已写 Redis 后 PostgreSQL 失败不会发布零费用账单，重试仍能唯一恢复。
+// 使用隔离数据库、Redis、真实日志 HTTP 接口和本机供应商；测试框架清理 schema、服务和缓存。
+func testSyncRecoveryRollbackAndRetry(t *testing.T) {
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
+	isolatedSpendRedis(t)
+	h := newHarness(t, chatDeployment("recovery-rollback"))
+	admin := h.adminSession()
+	record := iam.UsageRecord{RequestID: "recovery-rollback", TS: time.Now().UTC(), Model: "recovery-rollback", CallType: "chat", Status: "success", HTTPStatus: 200, Cost: 0.25, DeliveryRedisGuard: true}
+	if err := h.db.PrepareDelivery(t.Context(), record, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at=now()-interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.Engine.Exec(`ALTER TABLE usage_pending ADD CONSTRAINT reject_recovery CHECK (false)`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := h.db.RecoverExpiredDeliveriesGuarded(t.Context(), time.Now(), 10, h.gw.Live.ReserveDeliveryRecovery); err == nil || n != 0 {
+		t.Fatalf("数据库失败不能报告已恢复: %d %v", n, err)
+	}
+	if n, err := h.db.Engine.Table("usage_events").Count(); err != nil || n != 0 {
+		t.Fatalf("事务失败不得发布账单: %d %v", n, err)
+	}
+	if n, err := h.db.Engine.Table("usage_delivery_pending").Count(); err != nil || n != 1 {
+		t.Fatalf("事务回滚必须保留恢复标记: %d %v", n, err)
+	}
+	if _, err := h.db.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT reject_recovery`); err != nil {
+		t.Fatal(err)
+	}
+	h.gw.FlushSpend()
+	h.gw.FlushSpend()
+	log := h.ok(http.MethodGet, "/spend/logs/ui/"+record.RequestID, admin, nil).json()
+	if log["status"] != "error" || log["spend"] != float64(0) {
+		t.Fatalf("重试后未知结果必须唯一恢复为失败零费用: %+v", log)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gw.Live.EnqueueConfirmedDelivery(live.SpendLog{RequestID: record.RequestID, Spend: record.Cost, SpendValid: true, DeliverySnapshot: string(raw)}); err == nil {
+		t.Fatal("未知结果已完成恢复后，迟到快照不能被声称已确认")
+	}
+	if n, err := h.db.Engine.Table("usage_events").Count(); err != nil || n != 1 {
+		t.Fatalf("不得重复恢复或重复计费: %d %v", n, err)
+	}
+}
+
+// testUnpreparedFailureDoesNotCleanDelivery 验证未进入同步交付的 HTTP 错误不会额外写交付表。
+// 前置私有 PG 和真实路由，以语句级触发器观察 DELETE（即便没有命中行），schema 删除时回收全部探针。
+func testUnpreparedFailureDoesNotCleanDelivery(t *testing.T) {
+	h := newHarness(t, chatDeployment("unprepared-error"))
+	for _, sql := range []string{
+		`CREATE TABLE delivery_cleanup_probe (calls int)`,
+		`CREATE FUNCTION observe_delivery_cleanup() RETURNS trigger AS $$ BEGIN INSERT INTO delivery_cleanup_probe VALUES (1); RETURN NULL; END; $$ LANGUAGE plpgsql`,
+		`CREATE TRIGGER observe_delivery_cleanup AFTER DELETE ON usage_delivery_pending FOR EACH STATEMENT EXECUTE FUNCTION observe_delivery_cleanup()`,
+	} {
+		if _, err := h.db.Engine.Exec(sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := h.do(http.MethodPost, "/v1/chat/completions", "", chatRequest("unprepared-error", "Verify authentication failure."))
+	if response.status != 401 {
+		t.Fatalf("预期未鉴权失败: %d %s", response.status, response.text())
+	}
+	if n, err := h.db.Engine.Table("delivery_cleanup_probe").Count(); err != nil || n != 0 {
+		t.Fatalf("未准备交付的错误不应执行清理写入: n=%d err=%v", n, err)
+	}
+}
+
+// testSyncPendingConfirmationClearsDisk 验证真实同步调用已在 PG 确认后，磁盘超限及最终入账失败不会遗留未知标记。
+// 隔离磁盘限制小于完整费用快照，故障仅作用于私有表；恢复后通过日志 HTTP 接口和各层消费核对唯一费用，夹具自动清理。
+func testSyncPendingConfirmationClearsDisk(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
+	t.Setenv("XHUB_USAGE_SPOOL_RECORD_BYTES", "2048")
+	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
+	h := newHarness(t, chatDeployment("sync-pending-confirmed"))
+	t.Cleanup(func() { _ = h.gw.CloseUsageSpool() })
+	admin := h.adminSession()
+	owner := h.openScope(t, admin, "sync-pending-confirmed")
+	before := h.moneyOf(t, owner)
+	h.onUpstream("sync-pending-confirmed", func() {
+		if _, err := h.db.Engine.Exec(`ALTER TABLE usage_events ADD CONSTRAINT reject_sync_event CHECK (cost=0)`); err != nil {
+			t.Error(err)
+		}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"sync-pending-confirmed","messages":[{"role":"user","content":"Verify pending confirmed charge."}]}`))
+	req.Header.Set("Authorization", "Bearer "+owner.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xhub-Label", strings.Repeat("x", 2048))
+	w := httptest.NewRecorder()
+	h.gw.Handler().ServeHTTP(w, req)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "regression-ok") {
+		t.Fatalf("请求必须真实成功: %d %s", w.Code, w.Body.String())
+	}
+	id := w.Header().Get("x-litellm-call-id")
+	if n, err := h.db.Engine.Table("usage_pending").Where("request_id=?", id).Count(); err != nil || n != 1 {
+		t.Fatalf("确认费用必须在 PG 保留: %d %v", n, err)
+	}
+	if files, err := filepath.Glob(filepath.Join(dir, "*.json")); err != nil || len(files) != 0 {
+		t.Fatalf("已确认后不能残留磁盘未知标记: %v %v", files, err)
+	}
+	if _, err := h.db.Engine.Exec(`ALTER TABLE usage_events DROP CONSTRAINT reject_sync_event`); err != nil {
+		t.Fatal(err)
+	}
+	h.gw.FlushSpend()
+	h.gw.FlushSpend()
+	log := h.ok(http.MethodGet, "/spend/logs/ui/"+id, admin, nil).json()
+	if log["status"] != "success" || !nearlyEqual(log["spend"].(float64), expectedCost()) {
+		t.Fatalf("已确认费用在恢复后错误: %+v", log)
+	}
+	if after := h.moneyOf(t, owner); !after.grewBy(before, expectedCost()) {
+		t.Fatalf("各层消费应且仅应增加一次: before=%+v after=%+v", before, after)
 	}
 }

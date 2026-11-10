@@ -20,7 +20,7 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 	if r.URL.Path != "/usage/queue-conflict" {
 		return false
 	}
-	var body struct{ Action, ID string }
+	var body struct{ Action, ID, RequestID string }
 	if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasPrefix(body.ID, "e2e-queue-conflict-") || s.Live == nil {
 		http.Error(w, "private redis fixture and valid test id required", http.StatusBadRequest)
 		return true
@@ -28,6 +28,45 @@ func browserQueueConflictControl(w http.ResponseWriter, r *http.Request, s *Serv
 	ctx := r.Context()
 	var err error
 	switch body.Action {
+	case "confirmation-status":
+		rows, _ := s.Live.PeekLogs(500)
+		queued := false
+		for _, row := range rows {
+			if row.RequestID == body.RequestID && row.DeliverySnapshot != "" && row.Spend > 0 {
+				queued = true
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"queued": queued})
+		return true
+	case "block-confirmation":
+		// 仅隔离夹具使用：让真实 HTTP 响应写出后转入 Redis，浏览器核对恢复前后的日志。
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending ADD CONSTRAINT e2e_reject_confirmation CHECK (false)`)
+	case "unblock-confirmation":
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT IF EXISTS e2e_reject_confirmation`)
+	case "recover-confirmation":
+		if body.RequestID == "" {
+			err = fmt.Errorf("request id required")
+			break
+		}
+		_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_pending DROP CONSTRAINT IF EXISTS e2e_reject_confirmation`)
+		if err == nil {
+			_, err = s.IAM.Engine.Exec(`UPDATE usage_delivery_pending SET expires_at=now()-interval '1 second' WHERE request_id=?`, body.RequestID)
+		}
+		if err == nil {
+			var n int
+			n, err = s.IAM.RecoverExpiredDeliveriesGuarded(ctx, time.Now(), 500, s.Live.ReserveDeliveryRecovery)
+			if err == nil && n != 0 {
+				err = fmt.Errorf("confirmed HTTP response incorrectly recovered as unknown: %d", n)
+			}
+		}
+		if err == nil {
+			s.FlushSpend()
+			var event *iam.UsageEvent
+			event, err = s.IAM.GetUsageEvent(ctx, iam.UsageQuery{}, body.RequestID)
+			if err == nil && (event.Status != "success" || event.Cost <= 0) {
+				err = fmt.Errorf("confirmed HTTP response lost its charge")
+			}
+		}
 	case "start", "start-missing":
 		record := iam.UsageRecord{RequestID: body.ID, TS: time.Now().UTC(), Model: "fixture-original", OwnerType: iam.OwnerPersonal, CallType: "chat", Status: "success", HTTPStatus: 200}
 		if body.Action == "start" {
@@ -87,6 +126,9 @@ func TestBrowserQueueConflictControl(t *testing.T) {
 	}{
 		{`{"action":"start","id":"outside-fixture"}`, 400},
 		{`{"action":"unknown","id":"e2e-queue-conflict-unit"}`, 500},
+		{`{"action":"block-confirmation","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"unblock-confirmation","id":"e2e-queue-conflict-unit"}`, 200},
+		{`{"action":"recover-confirmation","id":"e2e-queue-conflict-unit"}`, 500},
 		{`{"action":"start","id":"e2e-queue-conflict-unit"}`, 200},
 		{`{"action":"flush","id":"e2e-queue-conflict-unit"}`, 200},
 		{`{"action":"resolve","id":"e2e-queue-conflict-unit"}`, 200},

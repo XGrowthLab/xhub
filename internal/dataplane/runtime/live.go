@@ -128,29 +128,16 @@ func Flush(h Runtime) {
 	if db == nil {
 		return
 	}
-	allowRecovery := true
 	defer func() {
-		if !allowRecovery {
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if local, ok := h.(interface {
-			HasPendingLocalUsage(context.Context) (bool, error)
-		}); ok {
-			pending, err := local.HasPendingLocalUsage(ctx)
-			if err != nil || pending {
-				return
-			}
-		}
+		var guard iam.DeliveryRecoveryGuard
 		if redis != nil {
-			empty, err := redis.SpendQueueEmpty(ctx)
-			if err != nil || !empty {
-				return
-			}
+			guard = redis.ReserveDeliveryRecovery
 		}
-		// 确认队列已清空后才恢复未知响应，避免已保存的成功账单被零费用抢先覆盖。
-		if _, err := db.RecoverExpiredDeliveries(ctx, time.Now(), 500); err != nil {
+		// 在数据库行锁内逐 ID 与确认入队竞争恢复权，不依赖全局队列为空。
+		// 磁盘归属由数据库标记保护；Redis 不可用时守卫失败，绝不猜测为零费用。
+		if _, err := db.RecoverExpiredDeliveriesGuarded(ctx, time.Now(), 500, guard); err != nil {
 			util.Error("unconfirmed delivery recovery failed: %v", err)
 			return
 		}
@@ -162,12 +149,10 @@ func Flush(h Runtime) {
 	if local, ok := h.(interface{ FlushLocalUsage(context.Context) error }); ok {
 		if err := local.FlushLocalUsage(context.Background()); err != nil {
 			util.Error("local usage spool flush failed: %v", err)
-			allowRecovery = false
 		}
 	}
 	if err := db.FlushPendingUsage(context.Background(), 500); err != nil {
 		util.Error("pending spend flush failed: %v", err)
-		allowRecovery = false
 	}
 	if redis == nil {
 		return
@@ -185,12 +170,10 @@ func Flush(h Runtime) {
 			var confirmed iam.UsageRecord
 			if err := json.Unmarshal([]byte(row.DeliverySnapshot), &confirmed); err != nil || confirmed.RequestID != row.RequestID || confirmed.Cost != row.Spend || confirmed.KeyID != row.KeyID || confirmed.UserID != row.UserID || confirmed.TeamID != row.TeamID || confirmed.OrganizationID != row.OrgID || confirmed.ProjectID != row.ProjectID || confirmed.KeyHash != row.APIKey {
 				util.Error("invalid confirmed delivery queue snapshot request=%s", row.RequestID)
-				allowRecovery = false
 				return
 			}
 			if err := db.SettleConfirmedDelivery(context.Background(), confirmed); err != nil {
 				util.Error("confirmed delivery flush failed request=%s: %v", row.RequestID, err)
-				allowRecovery = false
 				if !errors.Is(err, iam.ErrConflict) {
 					return
 				}
@@ -211,7 +194,6 @@ func Flush(h Runtime) {
 			}); ok {
 				if err := local.AcknowledgeDeliverySpool(context.Background(), confirmed); err != nil {
 					util.Error("confirmed delivery disk acknowledgement failed: %v", err)
-					allowRecovery = false
 					return
 				}
 			}
@@ -222,19 +204,18 @@ func Flush(h Runtime) {
 	if len(records) == 0 {
 		// 本批只包含已严格结算的同步终态，仍须归还它们的 Redis 热费用。
 		if err := redis.AckFlushed(hotDeltas(logs), n, head); err != nil {
-			allowRecovery = false
+			util.Error("confirmed delivery queue acknowledgement failed: %v", err)
 		}
 		return
 	}
 	if err := db.RecordUsage(context.Background(), records); err != nil {
 		util.Error("spend flush failed: %v", err)
-		allowRecovery = false
 		return
 	}
 	// 数据库先成功再删除队列；同时扣回热预算，避免同一笔费用同时算在热状态与持久余额中。
 	// Ack 的队头比较防止另一刷写者改变队列后误删新记录，失败留待下一轮重试。
 	if err := redis.AckFlushed(hotDeltas(logs), n, head); err != nil {
-		allowRecovery = false
+		util.Error("spend queue acknowledgement failed: %v", err)
 	}
 }
 

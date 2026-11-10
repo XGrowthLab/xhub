@@ -119,7 +119,8 @@ func (s *Server) Handler() http.Handler {
 					s.finishSyncDelivery(r.Context(), *lw.delivery.delivery, lw.writeErr)
 					lw.delivery.delivery = nil
 				}
-				if s.IAM != nil {
+				// 只有本请求创建过标记才清理，避免普通鉴权/路由失败额外等待数据库写入。
+				if s.IAM != nil && lw.delivery != nil && lw.delivery.preparedID != "" {
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					if err := s.IAM.DiscardRecordedDelivery(ctx, lw.Header().Get("x-litellm-call-id")); err != nil {
 						util.Error("delivery marker cleanup failed: %v", err)

@@ -405,3 +405,47 @@ func TestDeliveryRecoveryRejectsCorruptSnapshotAtomically(t *testing.T) {
 		}
 	}
 }
+
+// TestDeliveryRecoveryGuard 验证 Redis 归属不能绕过守卫，守卫失败全事务回滚，跳过记录不会长期阻挡下一批。
+// 使用私有 PostgreSQL，仅注入协调结果验证数据库边界；真实 Redis 裁决由 runtime 回归覆盖，schema 自动清理。
+func TestDeliveryRecoveryGuard(t *testing.T) {
+	db := testDB(t)
+	now := time.Now()
+	for _, id := range []string{"guard-a", "guard-b"} {
+		record := usageRecord(id, "", 0.25)
+		record.DeliveryRedisGuard = true
+		if err := db.PrepareDelivery(t.Context(), record, now.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := db.RecoverExpiredDeliveries(t.Context(), now.Add(2*time.Minute), 10); err != nil || n != 0 {
+		t.Fatalf("无 Redis 守卫不能恢复归属 Redis 的账单: %d %v", n, err)
+	}
+	calls := 0
+	skip := func(_ context.Context, ids []string) (map[string]bool, error) {
+		calls++
+		if len(ids) != 1 {
+			t.Fatal(ids)
+		}
+		return map[string]bool{ids[0]: ids[0] == "guard-b"}, nil
+	}
+	if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), now.Add(2*time.Minute), 1, skip); err != nil || n != 0 {
+		t.Fatalf("第一批应保留确认记录: %d %v", n, err)
+	}
+	if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), now.Add(2*time.Minute), 1, skip); err != nil || n != 1 || calls != 2 {
+		t.Fatalf("后续未知记录不应饿死: %d %v calls=%d", n, err, calls)
+	}
+	failure := func(context.Context, []string) (map[string]bool, error) { return nil, errors.New("redis unavailable") }
+	if n, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), now.Add(2*time.Minute), 10, failure); err == nil || n != 0 {
+		t.Fatalf("守卫失败不能恢复: %d %v", n, err)
+	}
+	if n, err := db.Engine.Table("usage_delivery_pending").Where("request_id=?", "guard-a").Count(); err != nil || n != 1 {
+		t.Fatalf("失败后确认标记必须保留: %d %v", n, err)
+	}
+	if err := db.FlushPendingUsage(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if countEvents(t, db, "guard-a") != 0 || countEvents(t, db, "guard-b") != 1 {
+		t.Fatal("守卫未隔离确认记录和未知结果")
+	}
+}

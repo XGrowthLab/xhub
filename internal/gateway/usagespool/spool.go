@@ -49,8 +49,10 @@ type Config struct {
 // Status 只包含数量和健康状态，不暴露请求正文、费用归属或磁盘文件内容。
 type Status struct {
 	Pending, Reserved, Quarantined int
-	Bytes, ReservedBytes           int64
-	Healthy                        bool
+	// Replayable 排除当前实例仍在写响应的文件；容量仍由 Pending/Reserved 完整核算。
+	Replayable           int
+	Bytes, ReservedBytes int64
+	Healthy              bool
 }
 
 // envelope 以版本和内容摘要保护完整 UsageRecord；摘要检测损坏，不是来自不可信调用方的授权签名。
@@ -368,7 +370,8 @@ func sameDeliveryOwner(a, b iam.UsageRecord) bool {
 	return a.RequestID == b.RequestID && a.KeyID == b.KeyID && a.OwnerType == b.OwnerType && a.UserID == b.UserID && a.TeamID == b.TeamID && a.ProjectID == b.ProjectID && a.OrganizationID == b.OrganizationID && a.Model == b.Model && (a.CallType == "" || a.CallType == b.CallType) && a.BudgetReservationID == b.BudgetReservationID
 }
 
-// statusLocked 汇总容量和隔离状态；持mu调用，读取失败返回错误，不读取正文或对外暴露身份。
+// statusLocked 汇总容量、可重放数量和隔离状态；持 mu 调用，在途文件占容量但不计入 Replayable。
+// 返回统计或读取错误，不读取正文或对外暴露身份；Status 和准入调用共用。
 func (s *Spool) statusLocked() (Status, error) {
 	result := Status{Reserved: len(s.reserved), ReservedBytes: int64(len(s.reserved)) * s.config.MaxRecordBytes}
 	dir, err := s.root.Open(".")
@@ -389,6 +392,9 @@ func (s *Spool) statusLocked() (Status, error) {
 			return result, err
 		}
 		result.Pending++
+		if !s.activeDelivery[entry.Name()] {
+			result.Replayable++
+		}
 		result.Bytes += info.Size()
 	}
 	dir, err = s.root.Open("quarantine")

@@ -72,6 +72,13 @@ func (s *Server) finishSyncDelivery(ctx context.Context, record iam.UsageRecord,
 		}
 		return
 	}
+	if !diskSaved && record.DeliverySpoolOnly && s.usageSpool != nil {
+		// PG 已经原子保存最终快照；即使后续结算失败，也应清除磁盘上的旧未知标记和在途容量。
+		// 完整磁盘终态仍保留至实际入账后确认，只有未确认标记可以在此清理。
+		if err := s.usageSpool.DiscardUnconfirmedDelivery(record); err != nil {
+			util.Error("delivery spool cleanup failed request=%s: %v", record.RequestID, err)
+		}
+	}
 	if err := s.IAM.FlushPendingUsageRequest(persistCtx, record.RequestID); err != nil {
 		util.Error("delivery settlement pending request=%s: %v", record.RequestID, err)
 		return
@@ -79,10 +86,6 @@ func (s *Server) finishSyncDelivery(ctx context.Context, record iam.UsageRecord,
 	if diskSaved {
 		if err := s.usageSpool.Acknowledge(record); err != nil {
 			util.Error("delivery spool acknowledgement failed request=%s: %v", record.RequestID, err)
-		}
-	} else if record.DeliverySpoolOnly && s.usageSpool != nil {
-		if err := s.usageSpool.DiscardUnconfirmedDelivery(record); err != nil {
-			util.Error("delivery spool cleanup failed request=%s: %v", record.RequestID, err)
 		}
 	}
 }

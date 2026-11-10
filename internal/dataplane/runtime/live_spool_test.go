@@ -198,6 +198,21 @@ func TestFlushConfirmedDelivery(t *testing.T) {
 	if rows, _ := redis.PeekLogs(10); len(rows) != 2 {
 		t.Fatalf("冲突快照应保留以供排查: rows=%+v", rows)
 	}
+	unknown := rec
+	unknown.RequestID = "runtime-expired-unknown"
+	if err := db.PrepareDelivery(t.Context(), unknown, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Engine.Exec("UPDATE usage_delivery_pending SET expires_at=now()-interval '1 second' WHERE request_id=?", unknown.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		Flush(&deliveryRuntime{db: db, redis: redis})
+	}
+	unknownEvent, err := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, unknown.RequestID)
+	if err != nil || unknownEvent.Status != "error" || unknownEvent.Cost != 0 {
+		t.Fatalf("不相关冲突不能无限阻止未知结果按失败恢复: event=%+v err=%v", unknownEvent, err)
+	}
 	bad := rec
 	bad.RequestID = "runtime-corrupt"
 	if err := db.PrepareDelivery(t.Context(), bad, time.Now().Add(time.Minute)); err != nil {
@@ -216,5 +231,70 @@ func TestFlushConfirmedDelivery(t *testing.T) {
 	}
 	if n, err := db.Engine.Table("usage_delivery_pending").Where("request_id = ?", bad.RequestID).Count(); err != nil || n != 1 {
 		t.Fatalf("损坏队列不能触发零费用恢复: n=%d err=%v", n, err)
+	}
+}
+
+// TestConfirmedDeliveryRecoveryRace 验证检查空队列和恢复之间新入队的已确认账单不会被零费用覆盖。
+// 使用独立 PostgreSQL 与本地 Redis，按实际调用顺序确定性模拟并发交错；临时连接、数据库和进程由测试框架清理。
+func TestConfirmedDeliveryRecoveryRace(t *testing.T) {
+	binary, err := exec.LookPath("redis-server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	_, port, _ := net.SplitHostPort(address)
+	cmd := exec.Command(binary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	var redis *live.Client
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		redis, err = live.Open("redis://" + address + "/0")
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = redis.Close() })
+	db, err := iam.Open(t.Context(), testsupport.Postgres(t, "runtime_delivery_race"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	record := iam.UsageRecord{RequestID: "race-confirmed", OwnerType: iam.OwnerPersonal, TS: time.Now().UTC(), Model: "test", CallType: "chat", Status: "success", HTTPStatus: 200, Cost: 0.25}
+	if err := db.PrepareDelivery(t.Context(), record, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Engine.Exec("UPDATE usage_delivery_pending SET expires_at=now()-interval '1 second' WHERE request_id=?", record.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := redis.SpendQueueEmpty(t.Context())
+	if err != nil || !empty {
+		t.Fatalf("准备阶段要求队列为空: empty=%v err=%v", empty, err)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := live.SpendLog{RequestID: record.RequestID, Spend: record.Cost, SpendValid: true, Start: record.TS.Format(time.RFC3339Nano), DeliverySnapshot: string(raw)}
+	if err := redis.EnqueueConfirmedDelivery(row); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecoverExpiredDeliveriesGuarded(t.Context(), time.Now(), 500, redis.ReserveDeliveryRecovery); err != nil {
+		t.Fatal(err)
+	}
+	Flush(&deliveryRuntime{db: db, redis: redis})
+	event, err := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, record.RequestID)
+	if err != nil || event.Status != "success" || event.Cost != record.Cost {
+		t.Fatalf("已确认账单被错误恢复为零费用: event=%+v err=%v", event, err)
 	}
 }

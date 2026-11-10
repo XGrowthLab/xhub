@@ -52,10 +52,16 @@ Synchronous Chat, Responses and Messages calls write a body-free
 `usage_delivery_pending` marker before contacting the provider. Actual charges
 are confirmed only after the response is written and flushed. A write failure or
 an unknown outcome after process exit is recorded as failed with zero cost.
-Non-disk-owned markers expire after 24 hours, but recovery waits for local pending
-records and the shared Redis queue to drain. Disk-owned markers can only be
-recovered by the instance holding the original volume. Backlogs and conflicts can
-delay recovery and do not establish that a user canceled the request.
+Non-disk-owned markers expire after 24 hours and recover per request ID without
+waiting for the shared queue to drain. PostgreSQL row locks and atomic Redis deduplication
+arbitrate recovery against confirmation: persisted confirmations retain their charges;
+if unknown recovery claims the ID first, a late Redis confirmation explicitly fails.
+Recovery claims have no TTL and survive database rollback for retry; never clear the
+deduplication hash to bypass them. Redis-owned markers remain pending if Redis is
+missing or unavailable, or the queue is corrupt. Skipped confirmations rotate through
+recovery batches so they cannot permanently occupy all 500 positions. Disk-owned
+markers can only be recovered by the instance holding the original volume. An unknown
+result does not establish that a user canceled the request.
 A deterministic ownership conflict in a confirmed Redis record retains its raw
 evidence and hot charge and moves to the queue tail so other records can settle.
 It still requires manual reconciliation by request ID; do not delete evidence.

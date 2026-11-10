@@ -42,7 +42,8 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 	// 尚未持久化的账单不能被当成余额；沿用磁盘队列故障保护，不影响已经放行的调用。
 	if s.usageSpool != nil {
 		state, err := s.usageSpool.Status()
-		if err == nil && state.Pending > 0 {
+		// 在途同步标记保留容量但尚无最终账单，不能让每次准入反复解析全部在途文件。
+		if err == nil && state.Replayable > 0 {
 			err = s.FlushLocalUsage(r.Context())
 		}
 		if err != nil {
@@ -102,6 +103,8 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		}
 		if s.usageSpoolEnabled {
 			record.DeliveryPending, record.DeliverySpoolOnly, record.DeliveryUnconfirmed = true, true, true
+		} else if s.Live != nil {
+			record.DeliveryRedisGuard = true
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err := s.IAM.PrepareDelivery(ctx, record, time.Now().Add(24*time.Hour))

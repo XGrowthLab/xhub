@@ -162,8 +162,20 @@ func (db *DB) SettleConfirmedDelivery(ctx context.Context, record UsageRecord) e
 
 // RecoverExpiredDeliveries 将过期且尚未确认的记录原子转为零费用失败，返回已转移数量和错误。
 // ctx 控制数据库操作，now 为观察时间，limit 必须为正；多个实例通过行锁互斥，不调用上游。
-// 已转移记录仍由现有 FlushPendingUsage 精确结算；恢复后迟到的确认会被拒绝，不能再次收费。
+// 无 Redis 守卫时只处理不归属 Redis/磁盘的标记；已转移记录由 FlushPendingUsage 精确结算，迟到确认不能再次收费。
 func (db *DB) RecoverExpiredDeliveries(ctx context.Context, now time.Time, limit int) (int, error) {
+	return db.RecoverExpiredDeliveriesGuarded(ctx, now, limit, nil)
+}
+
+// DeliveryRecoveryGuard 在数据库行锁内原子竞争一批请求的恢复权，返回允许恢复的 ID 集合。
+// Redis 实现必须与确认入队共用不可过期的去重标识；错误或未返回的 ID 均不得写零费用。
+// 已取得的恢复权不因数据库回滚释放，后续恢复可以重试，但迟到的队列确认不能冒充已持久化成功。
+type DeliveryRecoveryGuard func(context.Context, []string) (map[string]bool, error)
+
+// RecoverExpiredDeliveriesGuarded 恢复到期未知结果；guard 与 Redis 确认入队串行裁决同一请求。
+// 参数 ctx/now/limit 控制事务、到期时间和检查批量；返回实际清理或转换数量及错误。
+// 不改变已有账单；缺少 Redis 守卫时跳过归属 Redis 的标记。跳过记录排到后续批次，磁盘标记仍由持卷实例处理。
+func (db *DB) RecoverExpiredDeliveriesGuarded(ctx context.Context, now time.Time, limit int, guard DeliveryRecoveryGuard) (int, error) {
 	if limit < 1 {
 		return 0, fmt.Errorf("invalid recovery batch size")
 	}
@@ -174,10 +186,13 @@ func (db *DB) RecoverExpiredDeliveries(ctx context.Context, now time.Time, limit
 	}
 	defer s.Rollback()
 	// 磁盘独占的标记必须由持有该卷的实例恢复；其他实例看不到其已确认终态，不能猜测失败。
-	rows, err := s.QueryString(`SELECT request_id,payload::text AS payload FROM usage_delivery_pending WHERE expires_at <= ? AND COALESCE((payload->>'DeliverySpoolOnly')::boolean, false) = false ORDER BY expires_at,request_id LIMIT ? FOR UPDATE SKIP LOCKED`, now, limit)
+	rows, err := s.QueryString(`SELECT request_id,payload::text AS payload FROM usage_delivery_pending WHERE expires_at <= ? AND COALESCE((payload->>'DeliverySpoolOnly')::boolean, false) = false ORDER BY recovery_checked_at NULLS FIRST,expires_at,request_id LIMIT ? FOR UPDATE SKIP LOCKED`, now, limit)
 	if err != nil {
 		return 0, err
 	}
+	recovered := 0
+	records := make([]UsageRecord, 0, len(rows))
+	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		// 已有最终账单的失败请求可能在清理标记前退出，不能用另一份未知快照覆盖或重复结算。
 		existing, err := s.QueryString(`SELECT EXISTS (SELECT 1 FROM usage_events WHERE request_id = ?) OR EXISTS (SELECT 1 FROM usage_pending WHERE request_id = ?) AS present`, row["request_id"], row["request_id"])
@@ -188,6 +203,7 @@ func (db *DB) RecoverExpiredDeliveries(ctx context.Context, now time.Time, limit
 			if _, err := s.Exec(`DELETE FROM usage_delivery_pending WHERE request_id = ?`, row["request_id"]); err != nil {
 				return 0, err
 			}
+			recovered++
 			continue
 		}
 		var record UsageRecord
@@ -200,15 +216,34 @@ func (db *DB) RecoverExpiredDeliveries(ctx context.Context, now time.Time, limit
 		if record.RequestID != row["request_id"] || record.Status != "error" || record.Cost != 0 {
 			return 0, fmt.Errorf("invalid delivery recovery snapshot")
 		}
+		records = append(records, record)
+		ids = append(ids, record.RequestID)
+	}
+	var allowed map[string]bool
+	if guard != nil && len(ids) > 0 {
+		allowed, err = guard(ctx, ids)
+		if err != nil {
+			return 0, err
+		}
+	}
+	for _, record := range records {
+		if (guard != nil && !allowed[record.RequestID]) || (guard == nil && record.DeliveryRedisGuard) {
+			// 不延长原截止时间，只更新检查顺序；超过一批的冲突不会饿死后面的未知结果。
+			if _, err := s.Exec(`UPDATE usage_delivery_pending SET recovery_checked_at = clock_timestamp() WHERE request_id = ?`, record.RequestID); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		if err := stageDelivery(s, record); err != nil {
 			return 0, err
 		}
 		if _, err := s.Exec(`DELETE FROM usage_delivery_pending WHERE request_id = ?`, record.RequestID); err != nil {
 			return 0, err
 		}
+		recovered++
 	}
 	if err := s.Commit(); err != nil {
 		return 0, err
 	}
-	return len(rows), nil
+	return recovered, nil
 }

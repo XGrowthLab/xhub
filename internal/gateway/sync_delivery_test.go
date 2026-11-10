@@ -176,3 +176,45 @@ func TestSyncDeliveryWriteFailureHidesNetworkAddresses(t *testing.T) {
 		}
 	}
 }
+
+// TestConfirmedPendingClearsUnknownDiskMarker 验证磁盘终态超限但 PG 已确认时，后续结算故障不遗留未知磁盘标记。
+// 前置私有 PG、受限临时磁盘；使用约束阻断最终入账，确认重试只恢复原费用并清理所有资源。
+func TestConfirmedPendingClearsUnknownDiskMarker(t *testing.T) {
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
+	t.Setenv("XHUB_USAGE_SPOOL_RECORD_BYTES", "2048")
+	db := testIdentityStore(t)
+	s := &Server{IAM: db}
+	s.initializeUsageSpool()
+	t.Cleanup(func() { _ = s.CloseUsageSpool() })
+	rec := iam.UsageRecord{RequestID: "confirmed-pending-disk", TS: time.Now().UTC(), Model: "test", CallType: "chat", Status: "success", HTTPStatus: 200, Cost: 0.25, DeliveryPending: true, DeliverySpoolOnly: true}
+	if err := db.PrepareDelivery(t.Context(), rec, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := iam.UnconfirmedDelivery(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.DeliveryUnconfirmed = true
+	if err := s.usageSpool.BeginDelivery(marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Engine.Exec(`ALTER TABLE usage_events ADD CONSTRAINT reject_confirmed_event CHECK (cost=0)`); err != nil {
+		t.Fatal(err)
+	}
+	rec.Label = strings.Repeat("x", 3000)
+	s.finishSyncDelivery(t.Context(), rec, nil)
+	if n, err := db.Engine.Table("usage_pending").Where("request_id=?", rec.RequestID).Count(); err != nil || n != 1 {
+		t.Fatalf("PG 必须保留最终快照: %d %v", n, err)
+	}
+	if st, err := s.usageSpool.Status(); err != nil || st.Pending != 0 || st.Reserved != 0 {
+		t.Fatalf("PG 已确认后不应残留未知磁盘标记/容量: %+v %v", st, err)
+	}
+	if _, err := db.Engine.Exec(`ALTER TABLE usage_events DROP CONSTRAINT reject_confirmed_event`); err != nil {
+		t.Fatal(err)
+	}
+	s.FlushSpend()
+	event, err := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, rec.RequestID)
+	if err != nil || event.Status != "success" || event.Cost != 0.25 {
+		t.Fatalf("已确认账单重试后费用错误: %+v %v", event, err)
+	}
+}
