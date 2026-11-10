@@ -426,6 +426,10 @@ return tostring(total)
 type SpendLog struct {
 	// DeliverySnapshot 仅用于数据库中断后的已确认同步响应，保存按原正文策略冻结的用量快照。
 	DeliverySnapshot string `json:"delivery_snapshot,omitempty"`
+	// 正文保存在独立存储；实时账单队列只保存结果与到期时刻。
+	BodyCaptureStatus    string `json:"body_capture_status,omitempty"`
+	BodyCaptureExpiresAt string `json:"body_capture_expires_at,omitempty"`
+	BodyCaptureID        string `json:"body_capture_id,omitempty"`
 	// 已验证完整用量的预算尝试 ID，随队列保留至 PostgreSQL 同事务结算。
 	BudgetReservationID string `json:"budget_reservation_id,omitempty"`
 	// 客户端明确指定的推理强度快照；独立于提示词保存，空值表示未指定或历史未记录，不推断厂商默认值。

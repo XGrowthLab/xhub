@@ -119,6 +119,10 @@ type RequestLog struct {
 	// UpstreamResponse 独立保存诊断，不受提示词存储开关控制。
 	UpstreamResponse string `xorm:"'upstream_response'"`
 	ProxyRequest     string `xorm:"'proxy_request'" json:"proxy_request"`
+	// 正文记录结果和到期时间，空值表示旧日志未记录原因。
+	BodyCaptureStatus    string `xorm:"'body_capture_status'" json:"body_capture_status"`
+	BodyCaptureExpiresAt string `xorm:"'body_capture_expires_at'" json:"body_capture_expires_at"`
+	BodyCaptureID        string `xorm:"'body_capture_id'" json:"-"`
 }
 
 // 告诉 xorm 这个结构体对应数据库表 request_logs。
@@ -162,6 +166,10 @@ type UsageRecord struct {
 	DeliverySpoolOnly bool `json:",omitempty"`
 	// DeliveryUnconfirmed 只用于磁盘恢复，表示客户端写出终态尚未持久化。
 	DeliveryUnconfirmed bool `json:",omitempty"`
+	// 正文存储独立于账单快照；队列只传状态，不携带新正文。
+	BodyCaptureStatus    string `json:"BodyCaptureStatus,omitempty"`
+	BodyCaptureExpiresAt string `json:"BodyCaptureExpiresAt,omitempty"`
+	BodyCaptureID        string `json:"BodyCaptureID,omitempty"`
 	// BudgetReservationID 关联已验证实际费用的独立尝试；为空时不释放其他尝试的未知费用占用。
 	BudgetReservationID string
 	// 客户端明确指定的推理强度快照；独立于提示词保存，空值表示未指定或历史未记录，不推断厂商默认值。
@@ -374,7 +382,8 @@ func insertEvent(s *xorm.Session, r UsageRecord) (bool, error) {
 // 测试：task_usage_test.go、cmd/regression/upstream_diagnostics_test.go 验证真实落库。
 func putRequestLog(s *xorm.Session, r UsageRecord) error {
 	row := RequestLog{RequestID: r.RequestID, RequestBody: r.RequestBody,
-		ResponseBody: r.ResponseBody, Error: r.Error, ProxyRequest: r.ProxyRequest, UpstreamResponse: r.UpstreamResponse}
+		ResponseBody: r.ResponseBody, Error: r.Error, ProxyRequest: r.ProxyRequest, UpstreamResponse: r.UpstreamResponse,
+		BodyCaptureStatus: r.BodyCaptureStatus, BodyCaptureExpiresAt: r.BodyCaptureExpiresAt, BodyCaptureID: r.BodyCaptureID}
 	if _, err := s.Insert(&row); err != nil {
 		return mapErr(err)
 	}
