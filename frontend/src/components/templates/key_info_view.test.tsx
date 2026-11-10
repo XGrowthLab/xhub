@@ -48,8 +48,8 @@ describe("simple key details", () => {
     const { close } = setup();
     expect(screen.getByRole("heading", { name: snapshot.key_alias })).toBeVisible();
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
-    const guide = screen.getByRole("complementary", { name: translate("en", "quotaGuide.title") });
-    expect(guide.querySelector(":scope > details")).not.toHaveAttribute("open");
+    expect(screen.getByRole("complementary", { name: translate("en", "quotaGuide.title") })).toBeVisible();
+    expect(screen.getByText(translate("en", "quotaGuide.chain"))).not.toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Back to keys" })); expect(close).toHaveBeenCalledOnce();
   });
   /** 保存仅传允许字段并精确保留共享与零；伪造隐藏配置也不能覆盖，成功同步响应，清理 DOM。 */
