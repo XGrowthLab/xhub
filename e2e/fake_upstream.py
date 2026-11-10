@@ -30,7 +30,7 @@ except ModuleNotFoundError:
 
 ERROR_LOG_JSON_DIAGNOSTIC = (
     "E2E upstream JSON diagnostic begin | "
-    + "0123456789abcdef" * 128
+    + "0123456789abcdef" * 512
     + " | E2E upstream JSON diagnostic end"
 )
 ERROR_LOG_TEXT_DIAGNOSTIC = (
@@ -716,11 +716,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if "responses" in path:
             payload = {
-                "id": "resp_e2e",
+                "id": "resp_" + uuid.uuid4().hex if model == "e2e-stream-options-native" else "resp_e2e",
                 "object": "response",
                 "status": "completed",
                 "model": model,
-                "output": [{"type": "message", "content": [{"type": "output_text", "text": "e2e-ok"}]}],
+                "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "e2e-ok"}]}],
                 "usage": {"input_tokens": 8, "output_tokens": 2, "total_tokens": 10},
             }
             if req.get("stream") is True:
