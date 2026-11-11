@@ -1,4 +1,12 @@
 export const protocolProbeZhCN = {
+  inconclusive: "未能确定 · 达到测试输出上限",
+  loadFailed: "探测状态加载失败，请稍后重试。",
+  configurationFailed: "请先保存对话模型，并检查供应商地址和凭据。",
+  unauthorized: "登录已过期，请重新登录。",
+  forbidden: "只有平台管理员可以发起探测。",
+  missing: "此部署已不存在，请刷新模型列表。",
+  conflict: "正在探测或配置已变更，请刷新后重试。",
+  unavailable: "探测结果暂时无法存储，请稍后重试。",
   title: "上游协议探测",
   automatic: "保存连接变更后自动探测",
   help: "通过简短回复、流式回复和工具往返验证 Chat、Responses、Messages。会产生少量供应商调用费用；配置未变化时不重复自动探测。",

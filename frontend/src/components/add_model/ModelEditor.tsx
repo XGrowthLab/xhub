@@ -1,4 +1,5 @@
 "use client";
+import { isProxyAdminRole } from "@/utils/roles";
 import { useT } from "@/i18n";
 import { useState } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
@@ -55,7 +56,7 @@ export default function ModelEditor({
   onCancel?: () => void;
 }) {
   const t = useT();
-  const { accessToken } = useAuthorized();
+  const { accessToken, userRole, isViewOnly } = useAuthorized();
   const queryClient = useQueryClient();
   const { data: credentials, isLoading: loadingSuppliers } = useCredentials();
   const { data: catalog, error: catalogError } = usePriceCatalog(accessToken);
@@ -382,7 +383,7 @@ export default function ModelEditor({
                 {textField("model_name", t("providerGuideUI.publicName"), t("providerGuideUI.publicPlaceholder"))}
                 <p className="text-xs leading-relaxed text-muted-foreground">{t("providerGuideUI.publicHelp")}</p>
                 {/* 探测范围由已选对话执行器决定；旧部署可能只有透传声明或尚未补全入口列表。 */}
-                {["bypass_openai_chat", "bypass_openai_responses", "bypass_anthropic_messages", "gemini_generate_content", "vertex_generate_content"].includes(String(values.transport)) && (
+                {isProxyAdminRole(userRole ?? "") && !isViewOnly && ["bypass_openai_chat", "bypass_openai_responses", "bypass_anthropic_messages", "gemini_generate_content", "vertex_generate_content"].includes(String(values.transport)) && (
                   <ProtocolProbePanel
                     id={model?.model_info?.id as string | undefined}
                     token={accessToken}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sunqirui1987/xhub/internal/config"
+	pd "github.com/sunqirui1987/xhub/internal/provider/deployment"
 )
 
 // probeViewHost 仅实现视图所需的凭据水合边界；输入模式决定保留/过期/失败，不访问数据库。
@@ -32,6 +33,10 @@ func (h probeViewHost) AttachCredential(m config.ModelEntry) (config.ModelEntry,
 // 纯内存模型及宿主，无持久数据需要清理。
 func TestProbeViewsAndPublicRedaction(t *testing.T) {
 	m := config.ModelEntry{ModelName: "test", LiteLLMParams: map[string]any{"api_key": "raw-secret"}, ModelInfo: map[string]any{"protocol_probe": map[string]any{"config_signature": "raw-hash", "connection_signature": "resolved-hash", "verified": map[string]any{"openai-chat": true}}}}
+	rawSignature := pd.ProbeSignature(m)
+	resolved, _ := probeViewHost{mode: "valid"}.AttachCredential(m)
+	m.ModelInfo["protocol_probe"].(map[string]any)["config_signature"] = rawSignature
+	m.ModelInfo["protocol_probe"].(map[string]any)["connection_signature"] = pd.ProbeSignature(resolved)
 	for _, mode := range []string{"valid", "expired", "error"} {
 		got := probeViews(probeViewHost{mode: mode}, []config.ModelEntry{m})[0]
 		if (got.ModelInfo["protocol_probe"] != nil) != (mode == "valid") {
@@ -52,7 +57,7 @@ func TestProbeViewsAndPublicRedaction(t *testing.T) {
 	if out["litellm_params"].(map[string]any)["api_key"] != "*****" {
 		t.Fatal("密钥暴露")
 	}
-	if m.ModelInfo["protocol_probe"].(map[string]any)["config_signature"] != "raw-hash" {
+	if m.ModelInfo["protocol_probe"].(map[string]any)["config_signature"] != rawSignature {
 		t.Fatal("脱敏修改了原记录")
 	}
 }

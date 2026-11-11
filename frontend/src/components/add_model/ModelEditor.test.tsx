@@ -7,6 +7,8 @@ import ModelEditor from "./ModelEditor";
 import type { EditorModel, PriceRate } from "./modelEditorPricing";
 
 const mocks = vi.hoisted(() => ({
+  role: "Admin",
+  viewOnly: false,
   catalog: undefined as undefined | { models: Record<string, unknown>[] },
   create: vi.fn(),
   patch: vi.fn(),
@@ -14,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "token" }) }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "token", userRole: mocks.role, isViewOnly: mocks.viewOnly }) }));
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => ({
     data: {
@@ -120,6 +122,7 @@ describe("ModelEditor", () => {
     setActiveLocale("zh-CN");
     vi.clearAllMocks();
     mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
     mocks.apiPost.mockResolvedValue({ models: [{ id: "discovered-only" }, { id: "claude-sonnet" }] });
     mocks.create.mockImplementation(async (_token, payload) => payload);
     mocks.patch.mockImplementation(async (_token, payload) => payload);
@@ -320,6 +323,7 @@ it("does not inherit a model directory when its current connection is unscoped",
 it.each(["zh-CN", "en"] as const)("%s saves explicit web search capability and fallback", async (locale) => {
   setActiveLocale(locale);
   mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
   mocks.apiPost.mockResolvedValue({ models: [] });
   mocks.patch.mockImplementation(async (_token, payload) => payload);
   const user = userEvent.setup();
@@ -337,6 +341,7 @@ it.each(["zh-CN", "en"] as const)("%s saves explicit web search capability and f
 it.each(["zh-CN", "en"] as const)("%s persists explicit adaptive Messages reasoning without changing model input", async (locale) => {
   setActiveLocale(locale);
   mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
   mocks.apiPost.mockResolvedValue({ models: [] });
   mocks.patch.mockClear();
   mocks.patch.mockImplementation(async (_token, payload) => payload);
@@ -370,6 +375,7 @@ it.each(["zh-CN", "en"] as const)("%s shows incompatible reasoning configuration
   setActiveLocale(locale);
   mocks.patch.mockClear();
   mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
   mocks.apiPost.mockResolvedValue({ models: [] });
   renderEditor({ model: { model_name: "public", litellm_params: { model: "upstream", custom_llm_provider: "openai", litellm_credential_name: "relay-a", input_cost_per_token: 0.000001 }, model_info: { id: "invalid-mode", transport: "bypass_openai_chat", endpoint_types: ["responses"], pricing_source: "manual", messages_reasoning_mode: "adaptive" } } });
   await userEvent.click(screen.getByRole("button", { name: t("providerGuideUI.saveChanges"), exact: true }));
@@ -382,6 +388,7 @@ it.each(["zh-CN", "en"] as const)("%s shows incompatible reasoning configuration
 it.each(["zh-CN", "en"] as const)("explains rename conflicts in %s", async (locale) => {
  setActiveLocale(locale);
  mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
    mocks.patch.mockRejectedValueOnce(new Error("model name already exists; rename cannot merge model permissions"));
  renderEditor({model:{model_name:"public-original",litellm_params:{model:"upstream-original",custom_llm_provider:"openai",litellm_credential_name:"relay-a",input_cost_per_token:0.000001},model_info:{id:"rename-conflict",transport:"bypass_openai_chat",endpoint_types:["chat"],pricing_source:"manual"}}});
  await userEvent.click(screen.getByRole("button",{name:t("providerGuideUI.saveChanges"),exact:true}));
@@ -393,10 +400,22 @@ it.each(["zh-CN", "en"] as const)("explains rename conflicts in %s", async (loca
 it.each(["zh-CN", "en"] as const)("%s scopes detection by upstream transport", async (locale) => {
   setActiveLocale(locale);
   mocks.catalog = catalog;
+    mocks.role = "Admin"; mocks.viewOnly = false;
   const dialogue: EditorModel = {model_name: "legacy", litellm_params: {model: "legacy", custom_llm_provider: "openai"}, model_info: {id: "legacy", transport: "bypass_openai_responses", endpoint_types: []}};
   const view = renderEditor({model: dialogue});
   expect(screen.getByRole("switch", {name: t("protocolProbe.automatic")})).toBeVisible();
   view.unmount();
   renderEditor({model: {...dialogue, model_info: {...dialogue.model_info, transport: "ark_contents_generation", endpoint_types: ["bypass:ark-video"]}}});
   expect(screen.queryByRole("switch", {name: t("protocolProbe.automatic")})).not.toBeInTheDocument();
+});
+
+/** 探测有供应商费用，编辑器只向非只读平台管理员显示；各角色独立渲染，测试结束复原角色并卸载。 */
+it("only exposes paid detection to platform administrators",()=>{
+ setActiveLocale("zh-CN");
+ for(const [role,viewOnly,visible] of [["Admin",false,true],["Admin",true,false],["Internal User",false,false]] as const){
+  mocks.role=role;mocks.viewOnly=viewOnly;
+  const view=renderEditor({model:{model_name:"probe",litellm_params:{model:"test",litellm_credential_name:"relay-a"},model_info:{id:"probe",transport:"bypass_openai_responses"}}});
+  expect(!!screen.queryByRole("region",{name:t("protocolProbe.title")})).toBe(visible);view.unmount();
+ }
+ mocks.role="Admin";mocks.viewOnly=false;
 });

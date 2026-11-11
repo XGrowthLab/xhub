@@ -357,12 +357,16 @@ try {
     for (const [lang, label, title] of [["zh", "接口领域", "API 参考"], ["en", "API domain", "API reference"]]) {
       await page.goto(base + `reference/${lang}/index.html`);
       await expect(page.getByRole("heading", {name: title, exact: true})).toBeVisible();
-      for (const [domain, count] of [["suppliers",5],["users",13],["keys",14],["models",9],["usage",10]]) {
+      for (const [domain, count] of [["suppliers",5],["users",13],["keys",14],["models",10],["usage",10]]) {
         await page.getByLabel(label, {exact: true}).selectOption(domain);
         await expect(page.locator(".swagger-ui .opblock")).toHaveCount(count);
         if (domain === "users") {
           await expect(page.getByRole("button", {name: /^GET \/account\/log-capture /})).toBeVisible();
           await expect(page.getByRole("button", {name: /^PUT \/account\/log-capture /})).toBeVisible();
+        }
+        // 新增协议探测必须在两种语言的模型接口参考中可见，避免只更新数量却漏掉实际操作。
+        if (domain === "models") {
+          await expect(page.getByRole("button", {name: /^POST \/model\/protocol_probe /})).toBeVisible();
         }
         assert.equal(await page.getByRole("button", {name: "Try it out", exact: true}).count(), 0);
         await expect(page.getByRole("link", {name: lang === "zh" ? "下载原始 OpenAPI" : "Download original OpenAPI", exact:true})).toHaveAttribute("href", `../specs/${domain}.json`);

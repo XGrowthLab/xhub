@@ -1,4 +1,12 @@
 export const protocolProbeEn = {
+  inconclusive: "Inconclusive · test output limit reached",
+  loadFailed: "Detection status could not be loaded. Try again later.",
+  configurationFailed: "Save a dialogue model with a valid provider connection before testing.",
+  unauthorized: "Your session has expired. Sign in again.",
+  forbidden: "Only a platform administrator can run detection.",
+  missing: "This deployment no longer exists. Refresh the model list.",
+  conflict: "Detection is already running or the saved configuration changed. Refresh and retry.",
+  unavailable: "Detection storage is temporarily unavailable. Try again later.",
   title: "Upstream protocol detection",
   automatic: "Detect after saving connection changes",
   help: "Checks Chat, Responses and Messages with a short reply, stream and tool round trip. Calls may incur provider charges. Unchanged settings are not tested again automatically.",

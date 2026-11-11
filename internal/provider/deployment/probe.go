@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"maps"
+	"strings"
 
 	"github.com/sunqirui1987/xhub/internal/config"
 	pc "github.com/sunqirui1987/xhub/internal/provider/contract"
@@ -45,11 +46,15 @@ func ValidatedProbeView(raw, attached config.ModelEntry) config.ModelEntry {
 }
 
 // verifiedTransport 只补充当前连接已通过整套检查的三种对话透传执行器；不改变普通接口选用的 transport。
-// 参数部署与入口 ID，返回额外执行器和是否有效。写入接口禁止接受 protocol_probe，以免客户端伪造证明。
+// 参数部署与入口 ID，返回额外执行器和是否可作为候选。原始签名用于无密钥目录的候选筛选；实际出站必须先用 ValidatedProbeView 同时校验原始与水合签名。
+// UI 目录也先复核凭据；禁止客户端写入 protocol_probe，不能把此函数单独当作凭据验证。
 func verifiedTransport(m config.ModelEntry, endpoint string) (pc.Transport, bool) {
 	record := ProbeRecord(m)
+	if record == nil || !strings.HasPrefix(endpoint, "bypass:") {
+		return pc.Transport{}, false
+	}
 	sig := ProbeSignature(m)
-	if record == nil || (record["config_signature"] != sig && record["connection_signature"] != sig) {
+	if record["config_signature"] != sig && record["connection_signature"] != sig {
 		return pc.Transport{}, false
 	}
 	valid, _ := record["verified"].(map[string]any)

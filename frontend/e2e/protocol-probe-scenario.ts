@@ -45,6 +45,7 @@ export function registerProtocolProbe(locale: "en" | "zh-CN") {
           model_name: name,
           litellm_params: {
             model: "test",
+            deployment_id: name + "-router",
             custom_llm_provider: "openai",
             litellm_credential_name: name,
             input_cost_per_token: 0.000001,
@@ -126,6 +127,15 @@ export function registerProtocolProbe(locale: "en" | "zh-CN") {
       await page.getByRole("button", { name: tr("Send message"), exact: true }).click();
       await expect(page.getByText("PROBE_OK", { exact: true })).toBeVisible();
       expect(JSON.stringify(fixture.requests.at(-1)?.body)).toContain("用户原文");
+      // 后台删除后旧编辑窗口仍可点击；真实 404 必须显示双语“部署不存在”，不能误称为供应商故障。
+      await stableGoto(page, "/models-and-endpoints?model=" + id);
+      await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
+      const stalePanel = page.getByRole("region", {name: tr("protocolProbe.title")});
+      expect((await page.request.post(GATEWAY + "/model/delete", {headers, data:{id}})).status()).toBe(200);
+      id = "";
+      await stalePanel.getByRole("button", {name:tr("protocolProbe.manual"),exact:true}).click();
+      await expect(stalePanel.getByRole("alert")).toHaveText(tr("protocolProbe.missing"));
+
     } finally {
       try {
         if (key)

@@ -2,6 +2,7 @@ package regression
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,10 +21,29 @@ import (
 func TestProtocolProbeLifecycle(t *testing.T) {
 	var calls atomic.Int32
 	var failure atomic.Bool
+	var limited atomic.Bool
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if failure.Load() {
 			w.WriteHeader(503)
+			return
+		}
+		if limited.Load() {
+			var b map[string]any
+			json.NewDecoder(r.Body).Decode(&b)
+			protocol := map[string]string{"/v1/chat/completions": "openai-chat", "/v1/responses": "openai-responses", "/v1/messages": "anthropic-messages"}[r.URL.Path]
+			d := protocolfixture.Reply(protocol, b)
+			switch protocol {
+			case "openai-chat":
+				d["choices"].([]any)[0].(map[string]any)["finish_reason"] = "length"
+			case "openai-responses":
+				d["status"] = "incomplete"
+				d["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+			default:
+				d["stop_reason"] = "max_tokens"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(d)
 			return
 		}
 		protocolfixture.Serve(w, r)
@@ -36,7 +56,7 @@ func TestProtocolProbeLifecycle(t *testing.T) {
 	member := h.signIn(t, tenant)
 	name := "protocol-probe-regression"
 	id := "probe-deployment"
-	body := map[string]any{"model_name": name, "litellm_params": map[string]any{"model": "test", "api_base": up.URL, "api_key": "fixture-protocol-key", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}, "model_info": map[string]any{"id": id, "transport": "bypass_openai_responses", "auto_probe": true, "protocol_probe": map[string]any{"verified": map[string]any{"openai-chat": true}}}}
+	body := map[string]any{"model_name": name, "litellm_params": map[string]any{"model": "test", "deployment_id": "separate-router-id", "api_base": up.URL, "api_key": "fixture-protocol-key", "input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}, "model_info": map[string]any{"id": id, "transport": "bypass_openai_responses", "auto_probe": true, "protocol_probe": map[string]any{"verified": map[string]any{"openai-chat": true}}}}
 	created := h.ok("POST", "/model/new", admin, body).json()
 	if created["model_info"].(map[string]any)["protocol_probe"] != nil {
 		t.Fatal("客户端伪造结果被保存")
@@ -100,6 +120,17 @@ func TestProtocolProbeLifecycle(t *testing.T) {
 		t.Fatal("暂时故障撤销已验证能力")
 	}
 	failure.Store(false)
+	limited.Store(true)
+	uncertain := h.ok("POST", "/model/protocol_probe", admin, map[string]any{"id": id}).json()["model_info"].(map[string]any)["protocol_probe"].(map[string]any)
+	if len(uncertain["verified"].(map[string]any)) != 3 {
+		t.Fatal("测试输出不足撤销了此前成功验证")
+	}
+	for _, r := range uncertain["results"].([]any) {
+		if r.(map[string]any)["status"] != "inconclusive" {
+			t.Fatal("测试上限未标记为不确定")
+		}
+	}
+	limited.Store(false)
 	// 模型管理字段必须留在服务器生成；只改价格不会重复验证。
 	h.ok("POST", "/model/update", admin, map[string]any{"id": id, "litellm_params": map[string]any{"input_cost_per_token": 0.000003}, "model_info": map[string]any{"protocol_probe": nil}})
 	before := calls.Load()
@@ -207,13 +238,19 @@ func TestProtocolProbeCredentialRotation(t *testing.T) {
 	if r := h.do("POST", "/model/update", admin, map[string]any{"id": id, "model_info": map[string]any{"auto_probe": "true"}}); r.status != 400 {
 		t.Fatal("自动探测开关接受非布尔值")
 	}
+	oldLimit := h.gw.Store.DB.Stats().MaxOpenConnections
+	h.gw.Store.DB.SetMaxOpenConns(1)
 	h.ok("POST", "/model/protocol_probe", admin, map[string]any{"id": id})
+	h.gw.Store.DB.SetMaxOpenConns(oldLimit)
 	if !strings.Contains(string(h.ok("GET", "/model/available", admin, nil).body), "/bypass/anthropic/v1/messages") {
 		t.Fatal("成功协议未加入可用入口")
 	}
 	h.ok("PATCH", "/credentials/"+id, admin, map[string]any{"credential_values": map[string]any{"api_base": up.URL, "api_key": "rotated-key"}})
 	if strings.Contains(string(h.ok("GET", "/v2/model/info?modelId="+id, admin, nil).body), "verified") {
 		t.Fatal("已轮换连接仍展示旧证明")
+	}
+	if strings.Contains(string(h.ok("GET", "/model_group/info", admin, nil).body), "/bypass/anthropic/v1/messages") {
+		t.Fatal("调试台显示轮换后的旧验证入口")
 	}
 	payer := h.personalBillingSession()
 	rejected := h.do("POST", "/bypass/anthropic/v1/messages", payer, map[string]any{"model": id, "max_tokens": 20, "messages": []any{map[string]any{"role": "user", "content": "Hello"}}})
@@ -232,4 +269,58 @@ func TestProtocolProbeCredentialRotation(t *testing.T) {
 	}
 	h.ok("POST", "/model/delete", admin, map[string]any{"id": id})
 	h.ok("DELETE", "/credentials/"+id, admin, nil)
+}
+
+// TestProtocolProbeSlowStorageDoesNotLockModels 在真实 PostgreSQL 锁住模型行，确认探测等待写库时正常模型目录仍可读取。
+// 使用本地协议上游；事务回滚、租约释放与 harness 清理确保无残留，不依赖外部凭据。
+func TestProtocolProbeSlowStorageDoesNotLockModels(t *testing.T) {
+	h := newHarness(t)
+	admin := h.adminSession()
+	up := httptest.NewServer(http.HandlerFunc(protocolfixture.Serve))
+	defer up.Close()
+	id := "probe-slow-storage"
+	h.ok("POST", "/model/new", admin, map[string]any{"model_name": id, "litellm_params": map[string]any{"model": "test", "api_base": up.URL, "api_key": "fixture-protocol-key"}, "model_info": map[string]any{"id": id, "transport": "bypass_openai_responses"}})
+	tx, err := h.gw.Store.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`SELECT id FROM proxy_models WHERE id=$1 FOR UPDATE`, id); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() { done <- h.do("POST", "/model/protocol_probe", admin, map[string]any{"id": id}).status }()
+	deadline := time.Now().Add(5 * time.Second)
+	waiting := false
+	for time.Now().Before(deadline) {
+		err = h.gw.Store.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'UPDATE proxy_models SET model_info_json=jsonb_set%')`).Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !waiting {
+		t.Fatal("未观察到探测结果等待数据库行锁")
+	}
+	readable := make(chan struct{})
+	go func() { h.gw.Models(); close(readable) }()
+	select {
+	case <-readable:
+	case <-time.After(time.Second):
+		t.Fatal("探测写库持有全局模型锁")
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-done; code != 200 {
+		t.Fatalf("解锁后探测未完成: %d", code)
+	}
+	var leases int
+	if err = h.gw.Store.DB.QueryRow(`SELECT count(*) FROM kv WHERE kind='protocol_probe_lease'`).Scan(&leases); err != nil || leases != 0 {
+		t.Fatalf("探测租约未清理: %d %v", leases, err)
+	}
+	h.ok("POST", "/model/delete", admin, map[string]any{"id": id})
 }

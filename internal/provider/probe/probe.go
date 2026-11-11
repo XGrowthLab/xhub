@@ -65,6 +65,10 @@ func Run(ctx context.Context, client *http.Client, dep config.ModelEntry, protoc
 			return result
 		}
 		if stage == "stream" {
+			if strings.Contains(contentType, "text/event-stream") && streamLimited(raw, protocol) {
+				result.Status = "inconclusive"
+				return result
+			}
 			if !strings.Contains(contentType, "text/event-stream") || !validStream(raw, protocol) {
 				result.Status = "protocol_mismatch"
 				return result
@@ -72,6 +76,10 @@ func Run(ctx context.Context, client *http.Client, dep config.ModelEntry, protoc
 			continue
 		}
 		var doc map[string]any
+		if strings.Contains(contentType, "application/json") && json.Unmarshal(raw, &doc) == nil && limitedReply(doc, protocol) {
+			result.Status = "inconclusive"
+			return result
+		}
 		if !strings.Contains(contentType, "application/json") || json.Unmarshal(raw, &doc) != nil || !validReply(doc, protocol, stage == "tool_call") {
 			result.Status = "protocol_mismatch"
 			return result
@@ -139,6 +147,7 @@ func requestBody(protocol, model string) map[string]any {
 		b["input"] = []any{map[string]any{"role": "user", "content": "Reply with PROBE_OK."}}
 		b["max_output_tokens"] = 256
 		b["store"] = false
+		b["include"] = []string{"reasoning.encrypted_content"}
 	} else {
 		b["messages"] = []any{map[string]any{"role": "user", "content": "Reply with PROBE_OK."}}
 		if protocol == "openai-chat" {
@@ -193,7 +202,7 @@ func validReply(d map[string]any, p string, tool bool) bool {
 			return false
 		}
 		if tool {
-			return c["finish_reason"] == "tool_calls"
+			return (c["finish_reason"] == "tool_calls" || c["finish_reason"] == "stop") && len(list(m["tool_calls"])) > 0
 		}
 		return c["finish_reason"] == "stop" && strings.TrimSpace(text(m["content"])) != ""
 	case "openai-responses":
@@ -382,4 +391,42 @@ func validStream(raw []byte, p string) bool {
 		}
 	}
 	return scanner.Err() == nil && len(data) == 0 && started && content && terminal
+}
+
+// limitedReply 识别探测输出预算耗尽，返回是否只能得出“不确定”；限制不足不代表协议不支持，也不自动增加费用重试。
+// 参数为已解码响应和协议，纯读取；普通与流式探测共用，不把截断当成功。
+func limitedReply(d map[string]any, p string) bool {
+	switch p {
+	case "openai-chat":
+		for _, c := range list(d["choices"]) {
+			if object(c)["finish_reason"] == "length" {
+				return true
+			}
+		}
+	case "openai-responses":
+		return d["status"] == "incomplete" && object(d["incomplete_details"])["reason"] == "max_output_tokens"
+	case "anthropic-messages":
+		return d["stop_reason"] == "max_tokens"
+	}
+	return false
+}
+
+// streamLimited 从有界 SSE 中查找输出预算耗尽终态；参数原始流和协议，返回是否未能完成验证，无存储副作用。
+func streamLimited(raw []byte, p string) bool {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		var d map[string]any
+		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &d) != nil {
+			continue
+		}
+		if limitedReply(d, p) || (p == "openai-responses" && limitedReply(object(d["response"]), p)) || (p == "anthropic-messages" && limitedReply(object(d["delta"]), p)) {
+			return true
+		}
+	}
+	return false
 }

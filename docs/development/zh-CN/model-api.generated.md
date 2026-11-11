@@ -15,7 +15,7 @@
 | `POST /model/disable` | 停用部署 | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | 启用部署 | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | 探测保存的部署 | 200, 400, 401, 403, 404 |
-| `POST /model/protocol_probe` | 探测已保存部署协议 | 200, 400, 401, 403, 404, 409, 500, 503 |
+| `POST /model/protocol_probe` | 探测已保存部署协议 | 200, 400, 401, 403, 404, 409, 503 |
 
 ### GET /v2/model/info
 
@@ -1342,7 +1342,8 @@
         "protocol_mismatch",
         "http_error",
         "response_too_large",
-        "configuration_error"
+        "configuration_error",
+        "inconclusive"
       ]
     },
     "stage": {

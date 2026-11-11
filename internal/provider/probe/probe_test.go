@@ -109,3 +109,107 @@ func TestToolAssociationAndReplyBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// TestReasoningAndForcedToolVariants 在真实 HTTP 往返中验证强制工具 stop 终态，以及无服务端存储的加密推理项回传。
+// 供应商变体由本地严格服务返回；四步缺任一步都失败，结束关闭服务，不保存正文。
+func TestReasoningAndForcedToolVariants(t *testing.T) {
+	for _, p := range []string{"openai-chat", "openai-responses"} {
+		t.Run(p, func(t *testing.T) {
+			calls := 0
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var b map[string]any
+				json.NewDecoder(r.Body).Decode(&b)
+				if p == "openai-responses" {
+					includes := list(b["include"])
+					if b["store"] != false || len(includes) != 1 || includes[0] != "reasoning.encrypted_content" {
+						w.WriteHeader(400)
+						return
+					}
+					if calls == 4 {
+						found := false
+						for _, v := range list(b["input"]) {
+							if object(v)["type"] == "reasoning" && object(v)["encrypted_content"] == "test-opaque" {
+								found = true
+							}
+						}
+						if !found {
+							w.WriteHeader(400)
+							return
+						}
+					}
+				}
+				reply := protocolfixture.Reply(p, b)
+				if b["tool_choice"] != nil {
+					if p == "openai-chat" {
+						object(list(reply["choices"])[0])["finish_reason"] = "stop"
+					} else {
+						reply["output"] = append([]any{map[string]any{"type": "reasoning", "id": "rs-probe", "summary": []any{}, "encrypted_content": "test-opaque"}}, list(reply["output"])...)
+					}
+				}
+				if b["stream"] == true {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Write([]byte(protocolfixture.Stream(p, reply)))
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(reply)
+				}
+			}))
+			defer up.Close()
+			result := Run(t.Context(), up.Client(), config.ModelEntry{LiteLLMParams: map[string]any{"model": "test", "api_base": up.URL, "api_key": "fake"}}, p)
+			if result.Status != "verified" || calls != 4 {
+				t.Fatalf("合法工具变体失败: %+v calls=%d", result, calls)
+			}
+		})
+	}
+}
+
+// TestOutputLimitIsInconclusive 验证三协议 JSON/SSE 输出被探测上限截断均为未确定，不能误开入口或撤销旧验证。
+// 使用本地服务器和原生截断字段，无真实供应商费用；每个服务随子测试关闭。
+func TestOutputLimitIsInconclusive(t *testing.T) {
+	for _, p := range Protocols() {
+		for _, stream := range []bool{false, true} {
+			t.Run(p+map[bool]string{false: "-json", true: "-sse"}[stream], func(t *testing.T) {
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var b map[string]any
+					json.NewDecoder(r.Body).Decode(&b)
+					d := protocolfixture.Reply(p, b)
+					limit := func() {
+						switch p {
+						case "openai-chat":
+							object(list(d["choices"])[0])["finish_reason"] = "length"
+						case "openai-responses":
+							d["status"] = "incomplete"
+							d["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+						default:
+							d["stop_reason"] = "max_tokens"
+						}
+					}
+					if stream && b["stream"] == true {
+						limit()
+						event := any(d)
+						if p == "openai-responses" {
+							event = map[string]any{"type": "response.incomplete", "response": d}
+						} else if p == "anthropic-messages" {
+							event = map[string]any{"type": "message_delta", "delta": d}
+						}
+						raw, _ := json.Marshal(event)
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.Write(append(append([]byte("data: "), raw...), []byte("\n\n")...))
+						return
+					}
+					if !stream {
+						limit()
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(d)
+				}))
+				defer up.Close()
+				got := Run(t.Context(), up.Client(), config.ModelEntry{LiteLLMParams: map[string]any{"model": "test", "api_base": up.URL, "api_key": "fake"}}, p)
+				if got.Status != "inconclusive" {
+					t.Fatalf("截断误分类: %+v", got)
+				}
+			})
+		}
+	}
+}

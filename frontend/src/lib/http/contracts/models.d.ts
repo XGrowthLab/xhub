@@ -190,7 +190,7 @@ export interface paths {
         put?: never;
         /**
          * 探测已保存部署协议 / Detect protocols for a saved deployment
-         * @description 仅平台管理员。逐协议完成普通回复、流式结束及工具往返后开启额外透传；调用可能收费。200表示探测完成，须检查各协议结果。暂时故障保留相同连接的旧验证，不改变普通路由。 / Platform admin only. Enables additional passthrough after reply, stream termination and tool round trip checks. Provider charges may apply. HTTP200 means detection completed; inspect each protocol result. Temporary failures retain prior proof for the same connection; normal routing is unchanged.
+         * @description 仅平台管理员。逐协议完成普通回复、流式结束及工具往返后开启额外透传；调用可能收费。200表示探测完成，须检查各协议结果。暂时故障保留相同连接的旧验证，不改变普通路由。 / Platform admin only. Enables additional passthrough after reply, stream termination and tool round trip checks. Provider charges may apply. HTTP200 means detection completed; inspect each protocol result. Temporary failures retain prior proof for the same connection; normal routing is unchanged. 400：不可探测的配置；404：部署不存在；409：任务运行中或配置已变化；503：存储不可用。 / 400: invalid probe configuration; 404: missing deployment; 409: busy or changed configuration; 503: storage unavailable.
          */
         post: operations["detectDeploymentProtocols"];
         delete?: never;
@@ -429,7 +429,7 @@ export interface components {
             /** @enum {string} */
             protocol: "openai-chat" | "openai-responses" | "anthropic-messages";
             /** @enum {string} */
-            status: "verified" | "unverified" | "temporarily_failed" | "protocol_mismatch" | "http_error" | "response_too_large" | "configuration_error";
+            status: "verified" | "unverified" | "temporarily_failed" | "protocol_mismatch" | "http_error" | "response_too_large" | "configuration_error" | "inconclusive";
             /** @enum {string} */
             stage: "configuration" | "reply" | "stream" | "tool_call" | "tool_result" | "complete";
             http_status?: number;
@@ -810,7 +810,6 @@ export interface operations {
             403: components["responses"]["Error403"];
             404: components["responses"]["Error404"];
             409: components["responses"]["Error409"];
-            500: components["responses"]["Error500"];
             503: components["responses"]["Error503"];
         };
     };

@@ -395,7 +395,7 @@ func GroupInfo(s Host, w http.ResponseWriter, r *http.Request) {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
-	util.WriteJSON(w, 200, map[string]any{"data": playgroundGroups(list)})
+	util.WriteJSON(w, 200, map[string]any{"data": playgroundGroups(probeViews(s, list))})
 }
 
 // playgroundGroups 是 Playground 的模型列表；能力从部署的 endpoint_types 读取。

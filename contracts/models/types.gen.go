@@ -60,6 +60,7 @@ const (
 const (
 	ConfigurationError ProtocolProbeResultStatus = "configuration_error"
 	HttpError          ProtocolProbeResultStatus = "http_error"
+	Inconclusive       ProtocolProbeResultStatus = "inconclusive"
 	ProtocolMismatch   ProtocolProbeResultStatus = "protocol_mismatch"
 	ResponseTooLarge   ProtocolProbeResultStatus = "response_too_large"
 	TemporarilyFailed  ProtocolProbeResultStatus = "temporarily_failed"

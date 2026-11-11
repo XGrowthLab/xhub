@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useT } from "@/i18n";
+import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -29,31 +30,33 @@ export function ProtocolProbePanel({
   const t = useT();
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const key = ["protocolProbe", id];
   const { data, isError } = useQuery({
     queryKey: key,
     enabled: !!id && !!token,
-    refetchInterval: automatic ? 5000 : false,
+    refetchInterval: (query) => query.state.data?.automatic ? 5000 : false,
     queryFn: async () => {
-      const result = await apiClient.get<{ data?: { model_info?: { protocol_probe?: ProbeRecord } }[] }>(
+      const result = await apiClient.get<{ data?: { model_info?: { protocol_probe?: ProbeRecord; auto_probe?: boolean } }[] }>(
         `/v2/model/info?modelId=${encodeURIComponent(id!)}`,
         { accessToken: token! },
       );
-      return result.data?.[0]?.model_info?.protocol_probe ?? null;
+      const info = result.data?.[0]?.model_info;
+      return { record: info?.protocol_probe ?? null, automatic: info?.auto_probe === true };
     },
   });
   /** run 仅探测已保存部署；成功刷新当前状态及模型目录，失败不伪造支持能力，finally 恢复按钮。 */
   const run = async () => {
     setBusy(true);
-    setFailed(false);
+    setFailed(null);
     try {
       await apiClient.post("/model/protocol_probe", { accessToken: token!, body: { id } });
       await client.invalidateQueries({ queryKey: key });
       await client.invalidateQueries({ queryKey: ["models"] });
       await client.invalidateQueries({ queryKey: ["mine-models"] });
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      const messages: Record<number, string> = { 400: "configurationFailed", 401: "unauthorized", 403: "forbidden", 404: "missing", 409: "conflict", 503: "unavailable" };
+      setFailed(error instanceof ApiError ? messages[error.status] ?? "failed" : "failed");
     } finally {
       setBusy(false);
     }
@@ -74,11 +77,11 @@ export function ProtocolProbePanel({
       {!id && <p className="text-xs text-muted-foreground">{t("protocolProbe.saveFirst")}</p>}
       {(failed || isError) && (
         <p role="alert" className="text-sm text-destructive">
-          {t("protocolProbe.failed")}
+          {t("protocolProbe." + (failed ?? "loadFailed"))}
         </p>
       )}
       <div className="grid gap-2 sm:grid-cols-3" aria-label={t("protocolProbe.status")}>
-        {(data?.results ?? []).map((result) => (
+        {(data?.record?.results ?? []).map((result) => (
           <div key={result.protocol} className="min-w-0 rounded-lg border bg-background p-3 text-xs">
             <p className="font-medium">
               {{ "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages" }[
@@ -94,14 +97,14 @@ export function ProtocolProbePanel({
               {t("protocolProbe." + result.stage)}
               {result.http_status ? ` · HTTP ${result.http_status}` : ""}
             </p>
-            {result.status !== "verified" && data?.verified?.[result.protocol] && (
+            {result.status !== "verified" && data?.record?.verified?.[result.protocol] && (
               <p className="mt-2">{t("protocolProbe.retained")}</p>
             )}
           </div>
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        {data?.checked_at ? t("protocolProbe.checked", { time: data.checked_at }) : t("protocolProbe.empty")}
+        {data?.record?.checked_at ? t("protocolProbe.checked", { time: data.record.checked_at }) : t("protocolProbe.empty")}
       </p>
       <p className="text-xs leading-5 text-muted-foreground">{t("protocolProbe.scope")}</p>
     </section>

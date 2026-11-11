@@ -37,3 +37,49 @@ func TestSaveProtocolProbeCompareAndSet(t *testing.T) {
 		t.Fatalf("删除后被重建: %v %v", ok, err)
 	}
 }
+
+// TestProtocolProbeLeaseAndPersistedSnapshot 验证单连接池仍能取得/释放租约、不同部署不互斥、过期接管及旧 owner 不能误删新租约。
+// 数据库夹具自动删除 schema，快照使用原始持久字段而非运行时补字段。
+func TestProtocolProbeLeaseAndPersistedSnapshot(t *testing.T) {
+	st, _ := openModelWeightStores(t)
+	st.DB.SetMaxOpenConns(1)
+	acquire := func(id, owner string, want bool) {
+		t.Helper()
+		got, err := st.AcquireProtocolProbe(t.Context(), id, owner)
+		if err != nil || got != want {
+			t.Fatalf("租约 %s/%s got=%v want=%v err=%v", id, owner, got, want, err)
+		}
+	}
+	acquire("a", "one", true)
+	acquire("a", "two", false)
+	acquire("b", "two", true)
+	if _, err := st.DB.Exec(`UPDATE kv SET created_at=(clock_timestamp()-interval '151 seconds')::text WHERE kind='protocol_probe_lease' AND id='a'`); err != nil {
+		t.Fatal(err)
+	}
+	acquire("a", "two", true)
+	if err := st.ReleaseProtocolProbe(t.Context(), "a", "one"); err != nil {
+		t.Fatal(err)
+	}
+	acquire("a", "three", false)
+	if err := st.ReleaseProtocolProbe(t.Context(), "a", "two"); err != nil {
+		t.Fatal(err)
+	}
+	acquire("a", "three", true)
+	row := ProxyModel{ID: "persisted", ModelName: "test", Params: map[string]any{"model": "test"}, Info: map[string]any{"transport": "bypass_openai_chat"}}
+	if err := st.UpsertProxyModel(row); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := st.ProtocolProbeModel(t.Context(), row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Info["db_model"] != nil || snapshot.Info["id"] != nil {
+		t.Fatal("快照注入了运行时字段")
+	}
+	if ok, err := st.SaveProtocolProbe(t.Context(), snapshot, map[string]any{"verified": true}); err != nil || !ok {
+		t.Fatalf("原始快照无法保存: %v %v", ok, err)
+	}
+	if _, err := st.ProtocolProbeModel(t.Context(), "missing"); err == nil {
+		t.Fatal("不存在的部署读成成功")
+	}
+}

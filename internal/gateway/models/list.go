@@ -42,7 +42,6 @@ func List(s Host, w http.ResponseWriter, r *http.Request) {
 		s.LockModels()
 		list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 		s.UnlockModels()
-		list = probeViews(s, list)
 		names := proxyModelNames(list)
 		if queryBool(r.URL.Query().Get("only_model_access_groups")) {
 			names = nil
@@ -96,7 +95,6 @@ func availableNames(s Host, r *http.Request, p *auth.Principal) []string {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
-	list = probeViews(s, list)
 
 	proxyNames := proxyModelNames(list)
 	adminExpand := scope == "expand" && hasAdminModelView(p)
@@ -393,11 +391,9 @@ func Info(s Host, w http.ResponseWriter, r *http.Request) {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
-	list = probeViews(s, list)
-
 	modelID := strings.TrimSpace(r.URL.Query().Get("modelId"))
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
-	rows := make([]map[string]any, 0, len(list))
+	selected := make([]config.ModelEntry, 0, len(list))
 	for _, m := range list {
 		if m.ModelName == "" || providerShell(m.ModelInfo) {
 			continue
@@ -412,6 +408,10 @@ func Info(s Host, w http.ResponseWriter, r *http.Request) {
 		if search != "" && !strings.Contains(strings.ToLower(id+" "+m.ModelName+" "+m.ParamString("model", "")+" "+m.ParamString("litellm_credential_name", "")+" "+m.ParamString("custom_llm_provider", "")), search) {
 			continue
 		}
+		selected = append(selected, m)
+	}
+	rows := make([]map[string]any, 0, len(selected))
+	for _, m := range probeViews(s, selected) {
 		row := Public(m)
 		// The page switches on these two fields to decide which rows it may
 		// edit, and they are not part of the stored record.

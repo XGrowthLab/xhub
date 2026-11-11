@@ -15,7 +15,7 @@ Generated from OpenAPI; no production handler is replaced. See model-contract.md
 | `POST /model/disable` | Disable deployment | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | Enable deployment | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | Probe stored deployment | 200, 400, 401, 403, 404 |
-| `POST /model/protocol_probe` | Detect protocols for a saved deployment | 200, 400, 401, 403, 404, 409, 500, 503 |
+| `POST /model/protocol_probe` | Detect protocols for a saved deployment | 200, 400, 401, 403, 404, 409, 503 |
 
 ### GET /v2/model/info
 
@@ -234,7 +234,7 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
 
 ### POST /model/protocol_probe
 
-Platform admin only. Enables additional passthrough after reply, stream termination and tool round trip checks. Provider charges may apply. HTTP200 means detection completed; inspect each protocol result. Temporary failures retain prior proof for the same connection; normal routing is unchanged.
+400: invalid probe configuration; 404: missing deployment; 409: busy or changed configuration; 503: storage unavailable.
 
 ```json
 {
@@ -1342,7 +1342,8 @@ Platform admin only. Enables additional passthrough after reply, stream terminat
         "protocol_mismatch",
         "http_error",
         "response_too_large",
-        "configuration_error"
+        "configuration_error",
+        "inconclusive"
       ]
     },
     "stage": {
