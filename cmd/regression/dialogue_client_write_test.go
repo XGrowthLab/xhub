@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/sunqirui1987/xhub/internal/router"
 )
 
 // dialogueWriteProbe 在真实网关入口注入短写或写入失败，上游和持久化仍使用真实隔离服务。
@@ -111,8 +113,10 @@ func TestDialogueFlushFailureCanceledContext(t *testing.T) {
 		{"responses", "/responses", `{"model":"dialogue-flush","input":"Hello","stream":true}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			isolatedSpendRedis(t)
+			rdb := isolatedSpendRedis(t)
+			var calls atomic.Int32
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
 				w.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprint(w, "data: {\"id\":\"chat-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n")
 			}))
@@ -124,6 +128,8 @@ func TestDialogueFlushFailureCanceledContext(t *testing.T) {
 			h := newHarness(t, dep)
 			admin := h.adminSession()
 			owner := h.openScope(t, admin, "dialogue-flush")
+			template := routeTemplate(t, h, admin, "dialogue flush health", routeTemplateBody([]any{}, 3, 10, 1, 60))
+			bindTemplate(t, h, admin, "key", owner.keyID, template)
 			req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
 			ctx, cancel := context.WithCancel(req.Context())
 			defer cancel()
@@ -136,6 +142,18 @@ func TestDialogueFlushFailureCanceledContext(t *testing.T) {
 			failure := log["metadata"].(map[string]any)["upstream_response"].(map[string]any)["failure"].(map[string]any)
 			if log["status"] != "error" || parseFloatOrZero(fmt.Sprint(log["spend"])) != 0 || failure["kind"] != "client_write_error" {
 				t.Fatalf("对话流刷新失败诊断或费用错误: log=%v failure=%v", log, failure)
+			}
+			diagnostic := log["metadata"].(map[string]any)["upstream_response"].(map[string]any)
+			if err := validateCancellationEvidence(diagnostic, fmt.Sprint(log["error"]), true); err != nil {
+				t.Fatal(err)
+			}
+			deployment := router.CooldownID(h.gw.Cfg.ModelList[0])
+			if calls.Load() != 1 || rdb.Exists(t.Context(), "xhub:fails:"+deployment, "xhub:cooldown:"+deployment).Val() != 0 {
+				t.Fatalf("客户端写失败触发重试或供应商冷却: calls=%d", calls.Load())
+			}
+			recovered := h.do("POST", "/chat/completions", owner.key, map[string]any{"model": "dialogue-flush", "messages": []any{map[string]any{"role": "user", "content": "Recover."}}, "stream": true})
+			if recovered.status != 200 || calls.Load() != 2 {
+				t.Fatalf("客户端写失败后健康部署不可用: calls=%d response=%s", calls.Load(), recovered.describe())
 			}
 		})
 	}
