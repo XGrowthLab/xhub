@@ -84,7 +84,7 @@ func (s *Server) withCredential(dep config.ModelEntry) (config.ModelEntry, error
 	}
 	out.ModelInfo["catalog_id"] = catalogID
 	out.LiteLLMParams = credentials.Hydrate(dep.LiteLLMParams, values)
-	return out, nil
+	return providerdeployment.ValidatedProbeView(dep, out), nil
 }
 
 // enforceIdentityLimits 为数据面校验主体状态、模型权限和预算。

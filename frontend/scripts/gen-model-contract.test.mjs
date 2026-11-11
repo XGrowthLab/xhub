@@ -12,7 +12,7 @@ test("model contract generators cover real routes and reject all artifact drift"
   assert.equal(Object.keys(artifacts).length, 4);
   assert.match(artifacts["contracts/models/types.gen.go"], /type Deployment struct/);
   const ts = artifacts["frontend/src/lib/http/contracts/models.d.ts"];
-  for (const op of ["listDeployments", "listModelGroups", "createDeployment", "updateDeployment", "patchDeployment", "deleteDeployment", "disableDeployment", "enableDeployment", "probeDeployment"]) assert.ok(ts.includes(op), op);
+  for (const op of ["listDeployments", "listModelGroups", "createDeployment", "updateDeployment", "patchDeployment", "deleteDeployment", "disableDeployment", "enableDeployment", "probeDeployment", "detectDeploymentProtocols"]) assert.ok(ts.includes(op), op);
   assert.match(artifacts["docs/development/en/model-api.generated.md"], /HTTP200 may be unhealthy/);
   assert.match(artifacts["docs/development/zh-CN/model-api.generated.md"], /必须检查healthy/);
   const root = mkdtempSync(join(tmpdir(), "xhub-models-"));

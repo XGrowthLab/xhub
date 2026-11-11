@@ -86,6 +86,7 @@ func Groups(s Host, w http.ResponseWriter, r *http.Request) {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
+	list = probeViews(s, list)
 	groups, err := groupModels(list, defaults, r.URL.Query().Get("search"))
 	if err != nil {
 		util.WriteError(w, 500, "invalid_model_default", err.Error())

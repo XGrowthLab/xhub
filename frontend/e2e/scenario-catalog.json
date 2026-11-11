@@ -3553,5 +3553,19 @@
     "title": "personal body recording for an ordinary user",
     "kind": "implemented",
     "environment": "default offline"
+  },
+  {
+    "id": "REG-protocol-probe-en",
+    "file": "e2e/scenarios/regression/protocol-probe-en.test.ts",
+    "title": "upstream protocol detection en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-protocol-probe-zh-CN",
+    "file": "e2e/scenarios/regression/protocol-probe-zh-CN.test.ts",
+    "title": "upstream protocol detection zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
   }
 ]

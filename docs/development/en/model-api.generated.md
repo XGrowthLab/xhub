@@ -15,6 +15,7 @@ Generated from OpenAPI; no production handler is replaced. See model-contract.md
 | `POST /model/disable` | Disable deployment | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | Enable deployment | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | Probe stored deployment | 200, 400, 401, 403, 404 |
+| `POST /model/protocol_probe` | Detect protocols for a saved deployment | 200, 400, 401, 403, 404, 409, 500, 503 |
 
 ### GET /v2/model/info
 
@@ -231,6 +232,34 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
 ```
 
 
+### POST /model/protocol_probe
+
+Platform admin only. Enables additional passthrough after reply, stream termination and tool round trip checks. Provider charges may apply. HTTP200 means detection completed; inspect each protocol result. Temporary failures retain prior proof for the same connection; normal routing is unchanged.
+
+```json
+{
+  "required": true,
+  "content": {
+    "application/json": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
+```
+
+
 ## Schemas
 
 ### Parameters
@@ -326,6 +355,10 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean",
+      "description": "Detect saved connection changes; no periodic upstream calls"
     }
   },
   "required": [],
@@ -1210,6 +1243,12 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean"
+    },
+    "protocol_probe": {
+      "$ref": "#/components/schemas/ProtocolProbeRecord"
     }
   },
   "required": [
@@ -1271,5 +1310,89 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
       ]
     }
   ]
+}
+```
+
+### ProtocolProbeResult
+
+```json
+{
+  "type": "object",
+  "required": [
+    "protocol",
+    "status",
+    "stage",
+    "checked_at"
+  ],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "openai-chat",
+        "openai-responses",
+        "anthropic-messages"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unverified",
+        "temporarily_failed",
+        "protocol_mismatch",
+        "http_error",
+        "response_too_large",
+        "configuration_error"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "configuration",
+        "reply",
+        "stream",
+        "tool_call",
+        "tool_result",
+        "complete"
+      ]
+    },
+    "http_status": {
+      "type": "integer"
+    },
+    "checked_at": {
+      "type": "string"
+    }
+  }
+}
+```
+
+### ProtocolProbeRecord
+
+```json
+{
+  "type": "object",
+  "required": [
+    "checked_at",
+    "results",
+    "verified"
+  ],
+  "properties": {
+    "checked_at": {
+      "type": "string"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/ProtocolProbeResult"
+      }
+    },
+    "verified": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  },
+  "additionalProperties": false
 }
 ```

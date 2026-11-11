@@ -46,6 +46,9 @@ func AllowsEndpoint(m config.ModelEntry, endpoint string) error {
 		if e.ID != endpoint {
 			continue
 		}
+		if _, ok := verifiedTransport(m, endpoint); ok {
+			return nil
+		}
 		if t, ok := Execution(m); ok {
 			if providercapability.CompatibleEndpoint(e, t) {
 				return nil
@@ -65,6 +68,13 @@ func ResolveHit(hit providercontract.Hit, m config.ModelEntry) (providercontract
 	t, ok := Execution(m)
 	if !ok {
 		return providercontract.Hit{}, fmt.Errorf("execution profile missing")
+	}
+	// 额外验证只覆盖 create；不能将对话探测外推为计数、后台任务读取等操作已支持。
+	if extra, verified := verifiedTransport(m, hit.Transport.EndpointID); verified && t.Protocol != extra.Protocol {
+		if hit.Action.Name != "create" {
+			return providercontract.Hit{}, fmt.Errorf("operation has not been verified for this protocol")
+		}
+		t = extra
 	}
 	// 原厂计数没有跨协议等价实现，禁止把 Anthropic 请求发给 OpenAI 执行器。
 	if hit.Action.Name == "count_tokens" && t.Protocol != hit.Transport.Protocol {

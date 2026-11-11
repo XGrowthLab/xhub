@@ -42,6 +42,7 @@ func List(s Host, w http.ResponseWriter, r *http.Request) {
 		s.LockModels()
 		list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 		s.UnlockModels()
+		list = probeViews(s, list)
 		names := proxyModelNames(list)
 		if queryBool(r.URL.Query().Get("only_model_access_groups")) {
 			names = nil
@@ -95,6 +96,7 @@ func availableNames(s Host, r *http.Request, p *auth.Principal) []string {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
+	list = probeViews(s, list)
 
 	proxyNames := proxyModelNames(list)
 	adminExpand := scope == "expand" && hasAdminModelView(p)
@@ -391,6 +393,7 @@ func Info(s Host, w http.ResponseWriter, r *http.Request) {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
+	list = probeViews(s, list)
 
 	modelID := strings.TrimSpace(r.URL.Query().Get("modelId"))
 	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))

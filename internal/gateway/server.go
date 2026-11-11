@@ -34,6 +34,8 @@ const Version = family.ProxyVersion
 // row is written, so a handler must AnnotateCall and RememberExchange before
 // RecordSpend.
 type Server struct {
+	// probeAttempts 在当前进程记住已发出的自动探测，持久化故障不会触发循环付费重试；由 mu 保护。
+	probeAttempts map[string]string
 	// usageSpool 保存独立磁盘账单；启用但初始化失败时拒绝付费准入，不能退化成仅内存日志。
 	usageSpool        *usagespool.Spool
 	usageSpoolEnabled bool
@@ -204,6 +206,8 @@ func (s *Server) serveListener(ln net.Listener) error {
 		flush.Add(1)
 		go func() { defer flush.Done(); s.logCaptureCleanupLoop(ctx) }()
 	}
+	flush.Add(1)
+	go func() { defer flush.Done(); s.protocolProbeLoop(ctx) }()
 	go s.archiveLoop(ctx)
 	return (&http.Server{Handler: s.Handler()}).Serve(ln)
 }

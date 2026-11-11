@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   patch: vi.fn(),
   apiPost: vi.fn(),
+  apiGet: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "token" }) }));
@@ -39,7 +40,10 @@ vi.mock("@/app/(dashboard)/hooks/models/usePriceCatalog", () => ({
 }));
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
 vi.mock("@/components/networking", () => ({
-  apiClient: { post: (...args: unknown[]) => mocks.apiPost(...args) },
+  apiClient: {
+    post: (...args: unknown[]) => mocks.apiPost(...args),
+    get: (...args: unknown[]) => mocks.apiGet(...args),
+  },
   modelCreateCall: (...args: unknown[]) => mocks.create(...args),
   modelPatchUpdateCall: (...args: unknown[]) => mocks.patch(...args),
 }));
@@ -92,7 +96,10 @@ const relayA = {
   credential_info: { custom_llm_provider: "openai", api_base: "https://relay-a.example" },
 };
 
+/** renderEditor 为编辑器测试提供独立查询缓存和默认空探测状态；参数为表单属性，返回测试 DOM 句柄，测试库负责卸载。 */
 function renderEditor(props: React.ComponentProps<typeof ModelEditor> = {}) {
+  // 探测状态读取默认返回尚未探测，不把测试桩缺少 GET 实现当作后台错误。
+  mocks.apiGet.mockResolvedValue({ data: [] });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -375,9 +382,21 @@ it.each(["zh-CN", "en"] as const)("%s shows incompatible reasoning configuration
 it.each(["zh-CN", "en"] as const)("explains rename conflicts in %s", async (locale) => {
  setActiveLocale(locale);
  mocks.catalog = catalog;
- mocks.patch.mockRejectedValueOnce(new Error("model name already exists; rename cannot merge model permissions"));
+   mocks.patch.mockRejectedValueOnce(new Error("model name already exists; rename cannot merge model permissions"));
  renderEditor({model:{model_name:"public-original",litellm_params:{model:"upstream-original",custom_llm_provider:"openai",litellm_credential_name:"relay-a",input_cost_per_token:0.000001},model_info:{id:"rename-conflict",transport:"bypass_openai_chat",endpoint_types:["chat"],pricing_source:"manual"}}});
  await userEvent.click(screen.getByRole("button",{name:t("providerGuideUI.saveChanges"),exact:true}));
  await waitFor(()=>expect(screen.getByRole("alert")).toHaveTextContent(t("providerGuideUI.renameConflict")));
  expect(screen.getByDisplayValue("public-original")).toBeVisible();
+});
+
+/** 旧对话部署没有标准入口声明也能配置探测；媒体部署不显示对话探测。双语组件卸载后无持久数据。 */
+it.each(["zh-CN", "en"] as const)("%s scopes detection by upstream transport", async (locale) => {
+  setActiveLocale(locale);
+  mocks.catalog = catalog;
+  const dialogue: EditorModel = {model_name: "legacy", litellm_params: {model: "legacy", custom_llm_provider: "openai"}, model_info: {id: "legacy", transport: "bypass_openai_responses", endpoint_types: []}};
+  const view = renderEditor({model: dialogue});
+  expect(screen.getByRole("switch", {name: t("protocolProbe.automatic")})).toBeVisible();
+  view.unmount();
+  renderEditor({model: {...dialogue, model_info: {...dialogue.model_info, transport: "ark_contents_generation", endpoint_types: ["bypass:ark-video"]}}});
+  expect(screen.queryByRole("switch", {name: t("protocolProbe.automatic")})).not.toBeInTheDocument();
 });

@@ -44,8 +44,12 @@ func DeploymentEndpoints(m config.ModelEntry) []EndpointBinding {
 		if !providercapability.DialogueProtocol(e.Protocol) || AllowsEndpoint(m, e.ID) != nil {
 			continue
 		}
+		transportID := selected
+		if extra, ok := verifiedTransport(m, e.ID); ok {
+			transportID = extra.ID
+		}
 		for _, path := range e.Paths {
-			out = append(out, EndpointBinding{EndpointID: e.ID, Transport: selected, Kind: e.Kind, Protocol: e.Protocol, Family: e.Family, Method: "POST", Path: providercontract.Expand(path, map[string]string{"model": url.PathEscape(m.ModelName)})})
+			out = append(out, EndpointBinding{EndpointID: e.ID, Transport: transportID, Kind: e.Kind, Protocol: e.Protocol, Family: e.Family, Method: "POST", Path: providercontract.Expand(path, map[string]string{"model": url.PathEscape(m.ModelName)})})
 		}
 	}
 	// 非对话异步操作保留显式执行器的任务路径，不承诺跨媒体转换。

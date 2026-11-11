@@ -33,6 +33,12 @@ func Public(m config.ModelEntry) map[string]any {
 		info["id"] = m.ModelName
 	}
 	stripModelOwnership(info)
+	if probe, ok := info["protocol_probe"].(map[string]any); ok {
+		probe = maps.Clone(probe)
+		delete(probe, "config_signature")
+		delete(probe, "connection_signature")
+		info["protocol_probe"] = probe
+	}
 	params := redactLiteLLMParams(m.LiteLLMParams)
 
 	if err := providerdeployment.ValidateDeployment(m); err != nil {
@@ -88,6 +94,7 @@ func New(s Host, w http.ResponseWriter, r *http.Request) {
 		info = map[string]any{}
 	}
 	stripModelOwnership(info)
+	delete(info, "protocol_probe")
 	if _, ok := info["disabled"].(bool); !ok {
 		info["disabled"] = false
 	}
@@ -188,6 +195,9 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 			m.ModelInfo = map[string]any{}
 		}
 		for k, v := range info {
+			if k == "protocol_probe" {
+				continue
+			}
 			m.ModelInfo[k] = v
 		}
 	}

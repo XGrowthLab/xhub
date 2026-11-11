@@ -49,7 +49,7 @@ test("视频模型无需公共接口定义即可创建查询任务：/api/v3/con
       const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
       await card.getByRole("button", { name: "API 接入", exact: true }).click();
       const dialog = page.getByRole("dialog", { name, exact: true });
-      await expect(dialog.getByRole("combobox", { name: "选择调用接口" })).toHaveValue(native.path);
+      await expect(dialog.getByLabel("请求路径", { exact: true })).toHaveText(native.path);
       await expect(dialog.getByRole("link", { name: "查看 API 接口定义" })).toHaveCount(0);
       await expect(dialog.getByRole("link", { name: "管理虚拟密钥" })).toBeVisible();
       await expect(dialog.getByRole("heading", { name: "2. 创建生成任务" })).toBeVisible();
@@ -187,7 +187,7 @@ test("视频模型无需公共接口定义即可创建查询任务：/v3/content
       const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
       await card.getByRole("button", { name: "API 接入", exact: true }).click();
       const dialog = page.getByRole("dialog", { name, exact: true });
-      await expect(dialog.getByRole("combobox", { name: "选择调用接口" })).toHaveValue(native.path);
+      await expect(dialog.getByLabel("请求路径", { exact: true })).toHaveText(native.path);
       await expect(dialog.getByRole("link", { name: "查看 API 接口定义" })).toHaveCount(0);
       await expect(dialog.getByRole("link", { name: "管理虚拟密钥" })).toBeVisible();
       await expect(dialog.getByRole("heading", { name: "2. 创建生成任务" })).toBeVisible();

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Check, Copy, Terminal } from "lucide-react";
 import { useT } from "@/i18n";
 import { getProxyBaseUrl } from "@/components/networking";
+import { EndpointPicker } from "@/components/llm_calls/EndpointPicker";
 import { endpointLabel } from "@/components/llm_calls/model_endpoints";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -176,24 +177,7 @@ export function MyModelDetail({
               </p>
             ) : (
               <>
-                <label className="block space-y-2 font-medium">
-                  {t("myModels.selectEndpoint")}
-                  <select
-                    aria-label={t("myModels.selectEndpoint")}
-                    className="block h-11 w-full min-w-0 rounded-md border bg-background px-3 font-normal"
-                    value={endpoint?.path}
-                    onChange={(event) => setPath(event.target.value)}
-                  >
-                    {endpoints.map((item) => (
-                      <option key={item.method + item.path} value={item.path}>
-                        {endpointLabel(item)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <code className="block break-all text-xs">
-                  {endpoint?.method} {endpoint?.path}
-                </code>
+                <EndpointPicker endpoints={endpoints} value={endpoint?.path} onChange={value=>setPath(value??endpoints[0]?.path??"")} label={t("myModels.selectEndpoint")}/>
                 <Button variant="outline" size="sm" onClick={() => setTab("docs")}>
                   {t("myModels.viewParameters")}
                 </Button>
@@ -212,7 +196,7 @@ export function MyModelDetail({
                         </div>
                         <pre
                           aria-label={t("myModels." + step.copy)}
-                          className="max-h-96 overflow-auto bg-slate-950 p-5 text-xs leading-6 text-slate-100"
+                          className="max-h-72 overflow-auto border-t bg-slate-950 px-4 py-4 font-mono text-xs leading-5 text-slate-100"
                         >
                           <code>{step.command}</code>
                         </pre>

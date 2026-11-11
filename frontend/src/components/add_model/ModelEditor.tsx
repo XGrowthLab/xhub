@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { ProtocolProbePanel } from "./ProtocolProbePanel";
 import EndpointTypeField from "./EndpointTypeField";
 import { CachePriceWarning, cachePricesFromRates } from "./CachePriceWarning";
 import { BILLING_CATEGORIES, type BillingMode } from "./billing_categories";
@@ -380,6 +381,15 @@ export default function ModelEditor({
                 </div>
                 {textField("model_name", t("providerGuideUI.publicName"), t("providerGuideUI.publicPlaceholder"))}
                 <p className="text-xs leading-relaxed text-muted-foreground">{t("providerGuideUI.publicHelp")}</p>
+                {/* 探测范围由已选对话执行器决定；旧部署可能只有透传声明或尚未补全入口列表。 */}
+                {["bypass_openai_chat", "bypass_openai_responses", "bypass_anthropic_messages", "gemini_generate_content", "vertex_generate_content"].includes(String(values.transport)) && (
+                  <ProtocolProbePanel
+                    id={model?.model_info?.id as string | undefined}
+                    token={accessToken}
+                    automatic={values.auto_probe === true}
+                    onChange={value => set("auto_probe", value)}
+                  />
+                )}
                 <EndpointTypeField
                   key={String(values.supplier)}
                   selectedProvider={String(values.custom_llm_provider || "")}
