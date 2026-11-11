@@ -25,3 +25,11 @@ rg 'GET|POST|DELETE|PATCH' internal/gateway/*/mount.go
 [SAML configuration and metadata registration](saml-login.md)
 
 [Manual reconciliation of uncertain charges](budget-reconciliation.md)
+
+## Upstream protocol detection
+
+[Configuration and validation boundaries](upstream-protocol-detection.md). Requires a platform administrator and an existing saved deployment.
+
+| Method and path | Handler | Registration |
+| --- | --- | --- |
+| `POST /model/protocol_probe` | `ProbeProtocol` | [mount.go](../../../internal/gateway/models/mount.go) |

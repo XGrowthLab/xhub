@@ -44,16 +44,7 @@ func Module(h Host) util.Module {
 		reg.Handle("POST /price/model/reset", func(w http.ResponseWriter, r *http.Request) { ResetPriceModel(h, w, r) })
 		reg.Handle("POST /price/provider", func(w http.ResponseWriter, r *http.Request) { UpsertPriceProvider(h, w, r) })
 		reg.Handle("DELETE /price/provider", func(w http.ResponseWriter, r *http.Request) { DeletePriceProvider(h, w, r) })
-		// 托管到真实网关的探测服务；没有该能力的宿主明确失败，不伪造成功。
-		reg.Handle("POST /model/protocol_probe", func(w http.ResponseWriter, r *http.Request) {
-			if runner, ok := h.(interface {
-				ProtocolProbe(http.ResponseWriter, *http.Request)
-			}); ok {
-				runner.ProtocolProbe(w, r)
-			} else {
-				util.WriteError(w, 503, "protocol_probe_unavailable", "protocol probe unavailable")
-			}
-		})
+		reg.Handle("POST /model/protocol_probe", func(w http.ResponseWriter, r *http.Request) { ProbeProtocol(h, w, r) })
 		reg.Handle("POST /model/new", func(w http.ResponseWriter, r *http.Request) { New(h, w, r) })
 		reg.Handle("POST /model/builtin/refresh", func(w http.ResponseWriter, r *http.Request) { RefreshBuiltin(h, w, r) })
 		reg.Handle("POST /model/builtin/models", func(w http.ResponseWriter, r *http.Request) { ListBuiltin(h, w, r) })
