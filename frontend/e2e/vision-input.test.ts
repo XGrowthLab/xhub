@@ -132,7 +132,7 @@ for (const locale of ["zh-CN", "en"] as const)
             await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
             await page
               .getByRole("option")
-              .filter({ hasText: new RegExp("(?:^|\\s)" + path.replaceAll("/", "\\/") + "$") })
+              .filter({ has: page.getByText(path, { exact: true }) })
               .click();
             if (path.endsWith("responses")) {
               const session = page.getByRole("switch", { name: t("Use API session management") });
