@@ -51,7 +51,7 @@ export function registerNotificationsScenario(locale: "en" | "zh-CN") {
       await stableGoto(page, "/message-center");
       const tr = (key: string) => translate(locale, key);
       await expect(page.getByRole("heading", { name: tr("notifications.budgetTitle") })).toBeVisible();
-      await expect(page.getByText(tr("notifications.budgetMessage", { threshold: 80 }))).toBeVisible();
+      await expect(page.getByText(translate(locale, "notifications.budgetMessage", { threshold: 80 }))).toBeVisible();
       const firstToken = await sessionBearer(page);
       const list = await page.request.get(GATEWAY + "/notifications?limit=20&offset=0", { headers: { Authorization: "Bearer " + firstToken } });
       expect(list.status(), await list.text()).toBe(200); const result = await list.json();
