@@ -873,6 +873,7 @@
       "GET /audit/logs",
       "GET /budget/reservations",
       "GET /notifications",
+      "GET /notifications/market-detail",
       "GET /notifications/unread",
       "GET /project/info",
       "GET /project/list",

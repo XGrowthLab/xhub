@@ -1904,6 +1904,14 @@
       "status": "peripheral-unmigrated"
     },
     {
+      "route": "GET /notifications/market-detail",
+      "sources": [
+        "internal/gateway/identity/mount.go"
+      ],
+      "contract": null,
+      "status": "peripheral-unmigrated"
+    },
+    {
       "route": "GET /notifications/unread",
       "sources": [
         "internal/gateway/identity/mount.go"

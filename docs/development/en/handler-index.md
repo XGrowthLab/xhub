@@ -19,6 +19,7 @@ rg 'GET|POST|DELETE|PATCH' internal/gateway/*/mount.go
 | `GET /account/log-capture` | `LogCaptureSettings` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `PUT /account/log-capture` | `LogCaptureSettings` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `GET /notifications` | `NotificationsList` | [mount.go](../../../internal/gateway/identity/mount.go) |
+| `GET /notifications/market-detail` | `NotificationMarketDetail` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `GET /notifications/unread` | `NotificationsUnread` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `POST /notifications/read` | `NotificationsRead` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `GET /spend/logs/ui/filter-options` | `LogFilterOptions` | [mount.go](../../../internal/gateway/usage/mount.go) |

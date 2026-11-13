@@ -13,6 +13,20 @@ export interface NotificationPage {
   total: number;
 }
 
+/** 按 Unicode 字符偏移读取一页市场事件详情；id 属于当前消息，失败或异常分页抛错，不缓存完整报价。 */
+export async function getMarketNotificationDetail(
+  token: string, id: string, offset: number, signal?: AbortSignal,
+): Promise<{ text: string; next_offset: number | null }> {
+  const response = await apiClient.get<{ text: string; next_offset: number | null }>("/notifications/market-detail", {
+    accessToken: token, query: { id, offset }, signal,
+  });
+  if (!response || typeof response.text !== "string" || [...response.text].length > 16384 ||
+      (response.next_offset !== null && (!Number.isSafeInteger(response.next_offset) || response.next_offset <= offset || response.next_offset !== offset + [...response.text].length))) {
+    throw new Error(t("notifications.invalidData"));
+  }
+  return response;
+}
+
 /** 获取当前会话的一页消息；token 为会话凭据，offset/limit 为分页参数，异常或畸形响应会抛错。 */
 export async function listNotifications(
   token: string,

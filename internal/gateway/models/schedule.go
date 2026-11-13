@@ -188,6 +188,10 @@ func refreshCatalog(ctx context.Context, s Host, scheduled bool) (int, error) {
 		if err != nil {
 			return err
 		}
+		// 事件与目录同一事务提交；失败、取消或被后续轮次取代都不能产生变化通知。
+		if err := recordMarketChanges(ctx, tx, attemptID, stamp, prior, doc); err != nil {
+			return err
+		}
 		// 首次同步固化旧计费目录；后续来源更新、离线重启均不会替换它。
 		baseline := catalog.PriceDocument{Version: 1, Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt(), Models: map[string]map[string]any{}, Providers: catalog.Providers()}
 		for id := range catalog.CostMap() {

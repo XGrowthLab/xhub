@@ -25,6 +25,7 @@ func Module(h interface {
 	return util.Bind("identity", func(reg util.Registrar) {
 		// 消息中心只允许当前登录用户访问自己的消息，不改变已有权限规则。
 		reg.Handle("GET /notifications", func(w http.ResponseWriter, r *http.Request) { NotificationsList(h, w, r) })
+		reg.Handle("GET /notifications/market-detail", func(w http.ResponseWriter, r *http.Request) { NotificationMarketDetail(h, w, r) })
 		reg.Handle("GET /notifications/unread", func(w http.ResponseWriter, r *http.Request) { NotificationsUnread(h, w, r) })
 		reg.Handle("POST /notifications/read", func(w http.ResponseWriter, r *http.Request) { NotificationsRead(h, w, r) })
 		// 用户个人设置沿用会话鉴权，具体处理器不接受指定其他账号。
