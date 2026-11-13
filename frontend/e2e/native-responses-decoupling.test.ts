@@ -45,7 +45,7 @@ for (const locale of ["en", "zh-CN"] as const) test("native Responses rollout " 
     await page.getByPlaceholder(tr("Select a Model"), { exact: true }).click();
     await page.getByRole("option", { name, exact: true }).click();
     await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();
-    await page.getByRole("option", { name: "OpenAI Responses · /v1/responses", exact: true }).click();
+    await page.getByRole("option", { name: /^OpenAI Responses\s*\/v1\/responses$/ }).click();
     await page.route("**/responses", async (route) => {
       if (route.request().method() !== "POST") return route.continue();
       const request = route.request().postDataJSON();

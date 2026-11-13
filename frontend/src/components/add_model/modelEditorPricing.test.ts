@@ -181,3 +181,14 @@ it.each(["zh-CN", "en"] as const)("%s validates and preserves explicit Messages 
   expect(buildEditorModel({ ...baseValues, input_cost_per_token: "1" }).model_info.messages_reasoning_mode).toBe("disabled");
   setActiveLocale("zh-CN");
 });
+
+/** 自动探测开关只由显式布尔值启用；草稿默认关闭，读取及保存保持同一值，纯函数无资源清理。 */
+it("preserves the explicit automatic protocol detection setting",()=>{
+ expect(editorDefaults().auto_probe).toBe(false);
+ const original={model_name:"probe",litellm_params:{model:"test"},model_info:{auto_probe:true}};
+ expect(editorDefaults(original).auto_probe).toBe(true);
+ const values={...baseValues,input_cost_per_token:"1"};
+ expect(buildEditorModel(values).model_info.auto_probe).toBe(false);
+ expect(buildEditorModel({...values,auto_probe:true}).model_info.auto_probe).toBe(true);
+ expect(buildEditorModel({...values,auto_probe:"true"}).model_info.auto_probe).toBe(false);
+});

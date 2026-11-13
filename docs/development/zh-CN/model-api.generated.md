@@ -15,6 +15,7 @@
 | `POST /model/disable` | 停用部署 | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | 启用部署 | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | 探测保存的部署 | 200, 400, 401, 403, 404 |
+| `POST /model/protocol_probe` | 探测已保存部署协议 | 200, 400, 401, 403, 404, 409, 503 |
 
 ### GET /v2/model/info
 
@@ -231,6 +232,34 @@
 ```
 
 
+### POST /model/protocol_probe
+
+仅平台管理员。逐协议完成普通回复、流式结束及工具往返后开启额外透传；调用可能收费。200表示探测完成，须检查各协议结果。暂时故障保留相同连接的旧验证，不改变普通路由。
+
+```json
+{
+  "required": true,
+  "content": {
+    "application/json": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
+```
+
+
 ## 数据结构
 
 ### Parameters
@@ -326,6 +355,10 @@
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean",
+      "description": "保存连接变更后探测，不定时调用上游"
     }
   },
   "required": [],
@@ -1210,6 +1243,12 @@
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean"
+    },
+    "protocol_probe": {
+      "$ref": "#/components/schemas/ProtocolProbeRecord"
     }
   },
   "required": [
@@ -1271,5 +1310,90 @@
       ]
     }
   ]
+}
+```
+
+### ProtocolProbeResult
+
+```json
+{
+  "type": "object",
+  "required": [
+    "protocol",
+    "status",
+    "stage",
+    "checked_at"
+  ],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "openai-chat",
+        "openai-responses",
+        "anthropic-messages"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unverified",
+        "temporarily_failed",
+        "protocol_mismatch",
+        "http_error",
+        "response_too_large",
+        "configuration_error",
+        "inconclusive"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "configuration",
+        "reply",
+        "stream",
+        "tool_call",
+        "tool_result",
+        "complete"
+      ]
+    },
+    "http_status": {
+      "type": "integer"
+    },
+    "checked_at": {
+      "type": "string"
+    }
+  }
+}
+```
+
+### ProtocolProbeRecord
+
+```json
+{
+  "type": "object",
+  "required": [
+    "checked_at",
+    "results",
+    "verified"
+  ],
+  "properties": {
+    "checked_at": {
+      "type": "string"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/ProtocolProbeResult"
+      }
+    },
+    "verified": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  },
+  "additionalProperties": false
 }
 ```

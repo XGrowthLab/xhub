@@ -25,6 +25,7 @@ func Available(s Host, w http.ResponseWriter, r *http.Request) {
 	s.LockModels()
 	list := append([]config.ModelEntry(nil), (*s.ModelTable())...)
 	s.UnlockModels()
+	list = probeViews(s, list)
 	teamID := r.URL.Query().Get("team_id")
 	ctx := r.Context()
 	data := make([]map[string]any, 0)

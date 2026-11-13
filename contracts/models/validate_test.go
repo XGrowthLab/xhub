@@ -20,6 +20,9 @@ func TestModelContractRequests(t *testing.T) {
 		valid      bool
 	}{
 		{"/model/new", `{"model_name":"m","litellm_params":{"model":"up","extension":true},"model_info":{"transport":"openai_chat","endpoint_types":["chat"]}}`, true},
+		{"/model/protocol_probe", `{"id":"m"}`, true},
+		{"/model/protocol_probe", `{}`, false},
+		{"/model/protocol_probe", `{"id":42}`, false},
 		{"/model/new", `{}`, false}, {"/model/new", `{"model_name":42}`, false},
 		{"/model/update", `{"id":"m","litellm_params":{"api_key":"*****"},"model_info":{"custom":null}}`, true},
 		{"/model/update", `{"disabled":"false"}`, false},

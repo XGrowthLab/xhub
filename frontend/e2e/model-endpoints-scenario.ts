@@ -1217,7 +1217,7 @@ test("upstream-only chat automatically exposes all customer dialogue APIs", asyn
       ]) {
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
         await expect(page.getByRole("option")).toHaveCount(8);
-        await page.getByRole("option").filter({ hasText: " · " + target.path }).click();
+        await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(
           (response) =>
@@ -1326,7 +1326,7 @@ test("upstream-only responses automatically exposes all customer dialogue APIs",
       ]) {
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
         await expect(page.getByRole("option")).toHaveCount(8);
-        await page.getByRole("option").filter({ hasText: " · " + target.path }).click();
+        await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(
           (response) =>
@@ -1435,7 +1435,7 @@ test("upstream-only claude automatically exposes all customer dialogue APIs", as
       ]) {
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
         await expect(page.getByRole("option")).toHaveCount(8);
-        await page.getByRole("option").filter({ hasText: " · " + target.path }).click();
+        await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(
           (response) =>

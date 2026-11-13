@@ -139,7 +139,7 @@ export function registerAgentHistoryScenario(locale: "en" | "zh-CN") {
       await page.getByRole("option", { name: `history-messages-${locale}`, exact: true }).click();
       await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();
       await page
-        .getByRole("option", { name: "Anthropic Messages · /v1/messages", exact: true })
+        .getByRole("option", { name: /^Anthropic Messages\s*\/v1\/messages$/ })
         .click();
       await page
         .getByPlaceholder(tr("Type your message... (Shift+Enter for new line)"))

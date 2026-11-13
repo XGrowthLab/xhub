@@ -54,9 +54,10 @@ import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
 import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
-import EndpointSelector from "./EndpointSelector";
+
 import { isModelCompatibleWithEndpoint } from "./EndpointUtils";
-import { endpointLabel, modelEndpoints, endpointUIType } from "@/components/llm_calls/model_endpoints";
+import { EndpointPicker } from "@/components/llm_calls/EndpointPicker";
+import { modelEndpoints, endpointUIType } from "@/components/llm_calls/model_endpoints";
 import NativeEndpointPlayground from "./NativeEndpointPlayground";
 import { ChatCurlGuide } from "./ChatCurlGuide";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -1206,10 +1207,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     endpointType === EndpointType.RESPONSES ||
     endpointType === EndpointType.ANTHROPIC_MESSAGES;
   const modelsForEndpoint = modelInfo;
-  const endpointOptions = supportedEndpoints.map((endpoint) => ({
-    value: endpoint.path,
-    label: endpointLabel(endpoint),
-  }));
   // 切换模型仅保留仍受支持的路径，不能因两个端点使用同一表单而混淆它们。
   useEffect(() => {
     if (!modelInfo.length) return;
@@ -1333,13 +1330,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <label className="mb-2 flex items-center text-sm font-medium text-foreground">
                     <Wrench className="mr-2 size-4" aria-hidden="true" /> {t("myModels.customerEndpoint")}
                   </label>
-                  <EndpointSelector
-                    options={endpointOptions}
-                    disabled={!selectedModel || !endpointOptions.length}
-                    endpointType={selectedBinding ? endpointPath : null}
-                    onEndpointChange={handleEndpointChange}
-                    className="mb-4"
-                  />
+                  <EndpointPicker endpoints={supportedEndpoints} value={selectedBinding ? endpointPath : null} onChange={handleEndpointChange} disabled={!selectedModel || !supportedEndpoints.length} label={t("myModels.customerEndpoint")} />
 
                   {endpointType === EndpointType.SPEECH && (
                     <div className="mb-4">

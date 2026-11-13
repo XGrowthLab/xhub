@@ -208,6 +208,7 @@ x-litellm-call-id 关联调用与日志，x-litellm-response-cost 表示这次�
 | `POST /price/model/reset` | `ResetPriceModel` | [mount.go](../../../internal/gateway/models/mount.go) |
 | `POST /price/provider` | `UpsertPriceProvider` | [mount.go](../../../internal/gateway/models/mount.go) |
 | `DELETE /price/provider` | `DeletePriceProvider` | [mount.go](../../../internal/gateway/models/mount.go) |
+| `POST /model/protocol_probe` | `ProbeProtocol` | [mount.go](../../../internal/gateway/models/mount.go) |
 | `POST /model/new` | `New` | [mount.go](../../../internal/gateway/models/mount.go) |
 | `POST /model/builtin/refresh` | `RefreshBuiltin` | [mount.go](../../../internal/gateway/models/mount.go) |
 | `POST /model/builtin/models` | `ListBuiltin` | [mount.go](../../../internal/gateway/models/mount.go) |

@@ -69,7 +69,7 @@ export function registerAnalyticsBoundary(locale: Locale) {
       await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();
       await page
         .getByRole("option")
-        .filter({ hasText: /(?:^|\s)\/v1\/chat\/completions$/ })
+        .filter({ has: page.getByText("/v1/chat/completions", { exact: true }) })
         .click();
       const prompt = "Verify billed chat remains visible after unsupported analytics operations.";
       await page.getByTestId("chat-composer-input").fill(prompt);

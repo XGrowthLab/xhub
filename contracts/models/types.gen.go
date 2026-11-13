@@ -5,6 +5,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 
 	rawjson "encoding/json"
 )
@@ -36,6 +37,35 @@ const (
 // Defines values for DeletedDeploymentDeleted.
 const (
 	DeletedDeploymentDeletedTrue DeletedDeploymentDeleted = true
+)
+
+// Defines values for ProtocolProbeResultProtocol.
+const (
+	AnthropicMessages ProtocolProbeResultProtocol = "anthropic-messages"
+	OpenaiChat        ProtocolProbeResultProtocol = "openai-chat"
+	OpenaiResponses   ProtocolProbeResultProtocol = "openai-responses"
+)
+
+// Defines values for ProtocolProbeResultStage.
+const (
+	Complete      ProtocolProbeResultStage = "complete"
+	Configuration ProtocolProbeResultStage = "configuration"
+	Reply         ProtocolProbeResultStage = "reply"
+	Stream        ProtocolProbeResultStage = "stream"
+	ToolCall      ProtocolProbeResultStage = "tool_call"
+	ToolResult    ProtocolProbeResultStage = "tool_result"
+)
+
+// Defines values for ProtocolProbeResultStatus.
+const (
+	ConfigurationError ProtocolProbeResultStatus = "configuration_error"
+	HttpError          ProtocolProbeResultStatus = "http_error"
+	Inconclusive       ProtocolProbeResultStatus = "inconclusive"
+	ProtocolMismatch   ProtocolProbeResultStatus = "protocol_mismatch"
+	ResponseTooLarge   ProtocolProbeResultStatus = "response_too_large"
+	TemporarilyFailed  ProtocolProbeResultStatus = "temporarily_failed"
+	Unverified         ProtocolProbeResultStatus = "unverified"
+	Verified           ProtocolProbeResultStatus = "verified"
 )
 
 // ConnectionFailure defines model for ConnectionFailure.
@@ -271,6 +301,31 @@ type ModelInfo = rawjson.RawMessage
 // Parameters 上游参数允许扩展；读取时敏感顶层字符串打码，不能认为所有嵌套字段均脱敏 / Extensible upstream parameters; sensitive top-level strings are masked, not arbitrary nested fields
 type Parameters = rawjson.RawMessage
 
+// ProtocolProbeRecord defines model for ProtocolProbeRecord.
+type ProtocolProbeRecord struct {
+	CheckedAt string                `json:"checked_at"`
+	Results   []ProtocolProbeResult `json:"results"`
+	Verified  map[string]bool       `json:"verified"`
+}
+
+// ProtocolProbeResult defines model for ProtocolProbeResult.
+type ProtocolProbeResult struct {
+	CheckedAt  string                      `json:"checked_at"`
+	HttpStatus *int                        `json:"http_status,omitempty"`
+	Protocol   ProtocolProbeResultProtocol `json:"protocol"`
+	Stage      ProtocolProbeResultStage    `json:"stage"`
+	Status     ProtocolProbeResultStatus   `json:"status"`
+}
+
+// ProtocolProbeResultProtocol defines model for ProtocolProbeResult.Protocol.
+type ProtocolProbeResultProtocol string
+
+// ProtocolProbeResultStage defines model for ProtocolProbeResult.Stage.
+type ProtocolProbeResultStage string
+
+// ProtocolProbeResultStatus defines model for ProtocolProbeResult.Status.
+type ProtocolProbeResultStatus string
+
 // PublicModelInfo 读取时保证稳定ID和状态；其他扩展保持原值 / Stable ID and status on read; extensions preserved
 type PublicModelInfo = rawjson.RawMessage
 
@@ -287,6 +342,12 @@ type ListModelGroupsParams struct {
 
 	// Size 保留既有字符串解析 / Existing string parsing retained
 	Size *string `form:"size,omitempty" json:"size,omitempty"`
+}
+
+// DetectDeploymentProtocolsJSONBody defines parameters for DetectDeploymentProtocols.
+type DetectDeploymentProtocolsJSONBody struct {
+	Id                   string                 `json:"id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // ListDeploymentsParams defines parameters for ListDeployments.
@@ -319,8 +380,77 @@ type EnableDeploymentJSONRequestBody = DeploymentSelector
 // CreateDeploymentJSONRequestBody defines body for CreateDeployment for application/json ContentType.
 type CreateDeploymentJSONRequestBody = CreateDeployment
 
+// DetectDeploymentProtocolsJSONRequestBody defines body for DetectDeploymentProtocols for application/json ContentType.
+type DetectDeploymentProtocolsJSONRequestBody DetectDeploymentProtocolsJSONBody
+
 // UpdateDeploymentJSONRequestBody defines body for UpdateDeployment for application/json ContentType.
 type UpdateDeploymentJSONRequestBody = UpdateDeployment
 
 // PatchDeploymentJSONRequestBody defines body for PatchDeployment for application/json ContentType.
 type PatchDeploymentJSONRequestBody = UpdateDeployment
+
+// Getter for additional properties for DetectDeploymentProtocolsJSONBody. Returns the specified
+// element and whether it was found
+func (a DetectDeploymentProtocolsJSONBody) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DetectDeploymentProtocolsJSONBody
+func (a *DetectDeploymentProtocolsJSONBody) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DetectDeploymentProtocolsJSONBody to handle AdditionalProperties
+func (a *DetectDeploymentProtocolsJSONBody) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DetectDeploymentProtocolsJSONBody to handle AdditionalProperties
+func (a DetectDeploymentProtocolsJSONBody) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}

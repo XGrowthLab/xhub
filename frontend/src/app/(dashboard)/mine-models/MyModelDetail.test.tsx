@@ -53,7 +53,8 @@ it("从卡片直接打开四标签详情并复制实际接口示例", async () =
   expect(within(dialog).getByRole("tab", { name: "API 接入" })).toHaveAttribute("aria-selected", "true");
   expect(within(dialog).queryByRole("link", { name: "查看 API 接口定义" })).not.toBeInTheDocument();
   expect(within(dialog).getByRole("link", { name: "管理虚拟密钥" })).toHaveAttribute("href", expect.stringContaining("api-keys"));
-  await user.selectOptions(screen.getByRole("combobox", { name: "选择调用接口" }), "/v1/responses");
+  await user.click(screen.getByRole("combobox", { name: "选择调用接口" }));
+  await user.click(await screen.findByRole("option", { name: /OpenAI Responses/ }));
   const code = screen.getByLabelText("复制调用示例", { selector: "pre" });
   expect(code).toHaveTextContent('"input": "Hello"');
   expect(code).toHaveTextContent("https://gateway.test/v1/responses");
