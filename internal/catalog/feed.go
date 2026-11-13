@@ -328,8 +328,9 @@ func BuildPriceDocument(raw []byte) (PriceDocument, error) {
 	seen := map[string]bool{}
 	for _, model := range feed.Data {
 		id := strings.TrimSpace(model.ID)
+		// 丢弃无 ID 或重复项会让不完整数据被误认为模型下架；整轮保留旧快照并报告错误。
 		if id == "" || seen[id] {
-			continue
+			return PriceDocument{}, fmt.Errorf("market feed has empty or duplicate model id")
 		}
 		seen[id] = true
 		s := supplierFor(model.Issuer.Name)
