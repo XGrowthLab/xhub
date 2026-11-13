@@ -1,10 +1,9 @@
-// Package models refreshes the market price catalog on a timer when the console
-// has armed one. A scheduled reload is the same call as the manual one: fetch
-// the feed, and only swap the prices in if the fetch produced a usable catalog.
+// Package models 每日同步市场资料；手动和定时同步均不替换部署计费价格。
 package models
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,14 +17,14 @@ import (
 
 var reloadLoops sync.Map
 
-// StartScheduledReload runs the armed reload plan. It returns immediately when
-// no plan is armed, and otherwise re-reads the plan each cycle so a console
-// change takes effect without a restart.
-// 参数 s（Host）：能读框架记录的宿主。
-// 返回：无。子 goroutine 在进程退出时随之结束。
-// 调用：gateway.New。
-// 测试：无直接单测
+// StartScheduledReload 为首次启动创建每日计划，并启动已启用计划的后台循环。
+// s 为配置宿主；无返回值，无存储或初始化失败时不启动，已关闭计划保持关闭。
+// 网关启动和管理端启用计划时调用；按宿主去重，数据库关闭或进程退出时结束。
 func StartScheduledReload(s Host) {
+	if err := ensureDailyReload(context.Background(), s); err != nil {
+		util.Error("initialize market schedule: %v", err)
+		return
+	}
 	plan := loadCostReload(s)
 	if !plan.Scheduled || plan.IntervalHours == nil {
 		return
@@ -41,11 +40,12 @@ func StartScheduledReload(s Host) {
 
 // reloadNow 从 Modelink 或运维配置的镜像读取完整价格；失败时保留当前目录。
 // 参数 ctx（context.Context）：取消和超时。
-// 返回 int（int）：换上的模型条数；error（error）：抓取或应用失败时不为 nil，此时价格表不动。
-// 调用：ReloadCostMap、scheduledReloadLoop。
+// 返回模型条数与抓取错误；成功或失败均不修改当前计费目录。
+// 调用：来源可达性测试；生产同步使用 refreshCatalog，不修改计费目录。
 // 测试：schedule_test.go 的缺失源、失败源与目录保留断言。
 func reloadNow(ctx context.Context) (int, error) {
-	return catalog.ReloadFromMarket(ctx, priceFeedURL())
+	doc, err := catalog.FetchMarket(ctx, priceFeedURL())
+	return len(doc.Models), err
 }
 
 // priceFeedURL 解析运行时价格来源；参数无，返回显式镜像或 Modelink 默认地址。
@@ -57,11 +57,11 @@ func priceFeedURL() string {
 	return catalog.MarketURL
 }
 
-// scheduledReloadLoop 每分钟重读一次重载计划。计划里的下次运行时间到了就拉市场目录并换上。按分钟轮询，取消或改间隔不用等整段间隔结束。
+// scheduledReloadLoop 每分钟检查同步计划，到期只更新市场资料；修改开关与间隔无需重启。
 // 参数 s（Host）：能读和保存重载计划的宿主。
-// 返回：无。这个循环一直跑到进程退出。抓取失败时不改正在使用的价格，也不把下次运行时间往后推。
+// 返回：无。这个循环一直跑到进程退出。失败保留快照和部署价，下一次重试安排在一小时后。
 // 调用：StartScheduledReload 在计划已启用时。
-// 测试：无直接单测
+// 测试：deployment_prices_test.go 验证计划持久化、并发同步和失败后的重试时间。
 func scheduledReloadLoop(s Host) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -85,24 +85,13 @@ func scheduledReloadLoop(s Host) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		n, err := refreshLocalCatalog(ctx, s)
+		n, err := refreshCatalog(ctx, s, true)
 		cancel()
 		if err != nil {
-			// A failed reload leaves the prices in use and the plan armed, so the
-			// next cycle tries again. Pushing next_run out would hide the failure.
-			util.Error("scheduled price reload failed: %v", err)
+			util.Error("scheduled market refresh failed: %v", err)
 			continue
 		}
-		stamp := time.Now().UTC().Format(time.RFC3339)
-		plan.LastRun = &stamp
-		if plan.IntervalHours != nil {
-			next := time.Now().UTC().Add(time.Duration(*plan.IntervalHours) * time.Hour).Format(time.RFC3339)
-			plan.NextRun = &next
-		}
-		if err := saveCostReload(s, plan); err != nil {
-			util.Error("scheduled price reload could not save its plan: %v", err)
-			continue
-		}
+
 		util.Info("scheduled price reload applied %d models", n)
 	}
 }
@@ -110,50 +99,78 @@ func scheduledReloadLoop(s Host) {
 // refreshLocalCatalog 拉取并保存完整本地快照；参数为上下文和宿主，返回模型数与错误。
 // 手动及定时刷新调用；远程移除条目保留但标记不可售，失败不覆盖目录，上下架状态独立持久化。
 func refreshLocalCatalog(ctx context.Context, s Host) (int, error) {
-	doc, err := catalog.FetchMarket(ctx, priceFeedURL())
-	if err != nil {
-		return 0, err
-	}
+	return refreshCatalog(ctx, s, false)
+}
+
+// refreshCatalog 在数据库锁内复核到期时间、抓取来源并保存市场快照和同步状态。
+// scheduled 为真时跳过其他实例已完成的轮次；失败保留目录并记录可见错误，一小时后重试。
+func refreshCatalog(ctx context.Context, s Host, scheduled bool) (int, error) {
 	if s.RecordStore() == nil {
 		return 0, fmt.Errorf("local catalog store unavailable")
 	}
-	// 不把手工价格覆盖固化进市场基线。
-	previous, err := s.RecordStore().ListConfig(priceSnapshotNS)
-	if err != nil {
-		return 0, err
-	}
-	var prior catalog.PriceDocument
-	if raw, exists := previous["catalog"]; exists {
-		bytes, _ := json.Marshal(raw)
-		if err := json.Unmarshal(bytes, &prior); err != nil {
-			return 0, err
+	var count int
+	var fetchErr error
+	err := s.RecordStore().MarketTransaction(ctx, func(tx *sql.Tx) error {
+		plan, err := readCostReload(ctx, tx)
+		if err != nil {
+			return err
 		}
-	} else {
-		// 首次刷新取编译基线补齐历史记录，不把手工价格覆盖固化进市场快照。
-		prior.Models = map[string]map[string]any{}
+		if scheduled {
+			if !plan.Scheduled || plan.NextRun == nil {
+				return nil
+			}
+			due, err := time.Parse(time.RFC3339, *plan.NextRun)
+			if err != nil || time.Now().Before(due) {
+				return nil
+			}
+		}
+		// 在数据库锁内拉取，避免较慢的旧响应覆盖新快照；超时由调用方限制。
+		var doc catalog.PriceDocument
+		fetchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		doc, fetchErr = catalog.FetchMarket(fetchCtx, priceFeedURL())
+		cancel()
+		stamp := time.Now().UTC().Format(time.RFC3339)
+		plan.LastAttempt = &stamp
+		if fetchErr != nil {
+			plan.LastError = "market_fetch_failed"
+			if plan.Scheduled {
+				next := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+				plan.NextRun = &next
+			}
+			return writeCatalogJSON(ctx, tx, costReloadNS, costReloadKey, plan.public())
+		}
+		plan.LastError = ""
+		plan.LastRun = &stamp
+		if plan.Scheduled && plan.IntervalHours != nil {
+			next := time.Now().UTC().Add(time.Duration(*plan.IntervalHours) * time.Hour).Format(time.RFC3339)
+			plan.NextRun = &next
+		}
+		if err := writeCatalogJSON(ctx, tx, costReloadNS, costReloadKey, plan.public()); err != nil {
+			return err
+		}
+		count = len(doc.Models)
+		prior, err := marketDocument(ctx, tx)
+		if err != nil {
+			return err
+		}
+		// 首次同步固化旧计费目录；后续来源更新、离线重启均不会替换它。
+		baseline := catalog.PriceDocument{Version: 1, Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt(), Models: map[string]map[string]any{}, Providers: catalog.Providers()}
 		for id := range catalog.CostMap() {
 			if row, ok := catalog.BaselineModel(id); ok {
-				prior.Models[id] = row
+				baseline.Models[id] = row
 			}
 		}
-	}
-	for id, row := range prior.Models {
-		if _, exists := doc.Models[id]; !exists {
-			copy := map[string]any{}
-			for key, value := range row {
-				copy[key] = value
-			}
-			copy["feed_unavailable"] = true
-			doc.Models[id] = copy
+		raw, err := json.Marshal(baseline)
+		if err != nil {
+			return err
 		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_config(namespace,key,value_json) VALUES($1,'catalog',$2) ON CONFLICT(namespace,key) DO NOTHING`, priceSnapshotNS, string(raw)); err != nil {
+			return err
+		}
+		return writeCatalogJSON(ctx, tx, marketSnapshotNS, "catalog", retainDelisted(doc, prior))
+	})
+	if err == nil {
+		err = fetchErr
 	}
-	if err := s.RecordStore().PutConfig(priceSnapshotNS, "catalog", doc); err != nil {
-		return 0, err
-	}
-	n, err := catalog.ApplyDocument(doc)
-	if err != nil {
-		return 0, err
-	}
-	LoadPriceOverrides(s)
-	return n, nil
+	return count, err
 }

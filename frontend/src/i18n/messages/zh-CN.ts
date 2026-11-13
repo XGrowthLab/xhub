@@ -1,3 +1,4 @@
+import { marketSync } from "./marketSync.zh-CN";
 import { samlRefresh } from "./samlRefresh.zh-CN";
 import { budgetReconciliationZhCN } from "./budgetReconciliation.zh-CN";
 import { probesZhCN } from "./probes.zh-CN";
@@ -10,6 +11,7 @@ import { routeTemplatesZhCN } from "./routeTemplates.zh-CN";
 import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
+ marketSync,
   logsUX: {
     captureTitle: "记录我的请求与响应",
     captureDescription: "开启后记录个人请求与响应的正文，默认保留 {days} 天。平台管理员可按现有权限查看；错误信息可能包含上游回显。",

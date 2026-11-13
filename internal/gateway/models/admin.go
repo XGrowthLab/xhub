@@ -98,6 +98,10 @@ func New(s Host, w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "invalid_request", err.Error())
 		return
 	}
+	if err := bindInitialMarketPrice(r.Context(), s, params, info); err != nil {
+		util.WriteError(w, 400, "invalid_request", err.Error())
+		return
+	}
 	if err := validateDeployment(s, name, params, info); err != nil {
 		util.WriteError(w, 400, "invalid_request", err.Error())
 		return
@@ -177,6 +181,13 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 			m.LiteLLMParams = map[string]any{}
 		}
 		for k, v := range params {
+			// 目录模式表单会省略费率；已有确认快照不得因编辑说明等字段退回旧目录。
+			if k == "rates" && v == nil && m.ModelInfo["market_price_revision"] != nil {
+				incoming, _ := body["model_info"].(map[string]any)
+				if (incoming["pricing_source"] == nil || incoming["pricing_source"] == "catalog") && (incoming["base_model"] == nil || incoming["base_model"] == m.ModelInfo["base_model"]) {
+					continue
+				}
+			}
 			if secret, ok := v.(string); ok && secret == "*****" {
 				continue
 			}
@@ -357,19 +368,22 @@ func CostMapSource(s Host, w http.ResponseWriter, r *http.Request) {
 	if s.RequireManage(w, r) == nil {
 		return
 	}
-	// The catalog is generated from the market feed and embedded, then refreshed
-	// in place by a reload. source is "market" either way, and generated_at says
-	// how old the embedded copy is.
+	doc, err := readMarket(r.Context(), s)
+	if err != nil {
+		util.WriteError(w, 500, "internal", "market catalog unavailable")
+		return
+	}
+	// 展示独立市场资料时间，不使用已冻结计费基线的时间。
 	util.WriteJSON(w, 200, map[string]any{
 		"source":          "market",
-		"url":             catalog.PriceSource(),
+		"url":             doc.Source,
 		"is_env_forced":   catalog.EnvForced(),
 		"fallback_reason": nil,
-		"loaded_at":       catalog.LoadedAt(),
-		"generated_at":    catalog.PriceGeneratedAt(),
+		"loaded_at":       marketLoadedAt(s),
+		"generated_at":    doc.GeneratedAt,
 		"source_revision": nil,
 		"etag":            nil,
-		"model_count":     catalog.Count(),
+		"model_count":     len(doc.Models),
 	})
 }
 

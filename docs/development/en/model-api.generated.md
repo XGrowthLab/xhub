@@ -15,6 +15,8 @@ Generated from OpenAPI; no production handler is replaced. See model-contract.md
 | `POST /model/disable` | Disable deployment | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | Enable deployment | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | Probe stored deployment | 200, 400, 401, 403, 404 |
+| `GET /price/deployments` | Compare deployed prices | 200, 401, 403, 500, 503 |
+| `POST /price/deployments/apply` | Confirm single or bulk price changes | 200, 400, 401, 403, 409, 500, 503 |
 
 ### GET /v2/model/info
 
@@ -224,6 +226,29 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
     "application/json": {
       "schema": {
         "$ref": "#/components/schemas/ConnectionRequest"
+      }
+    }
+  }
+}
+```
+
+
+### GET /price/deployments
+
+Admin only; returns current prices, source candidates and versions. Complex or delisted prices cannot be applied automatically
+
+
+### POST /price/deployments/apply
+
+Admin only; submit unique deployment IDs and preview versions. Server rechecks prices; any conflict rolls the batch back with 409. Historical bills remain unchanged
+
+```json
+{
+  "required": true,
+  "content": {
+    "application/json": {
+      "schema": {
+        "$ref": "#/components/schemas/DeploymentPriceSelection"
       }
     }
   }
@@ -1271,5 +1296,197 @@ Uses stored URL and credentials only; HTTP200 may be unhealthy; bypasses budget 
       ]
     }
   ]
+}
+```
+
+### DeploymentPriceRate
+
+```json
+{
+  "type": "object",
+  "required": [
+    "measure",
+    "side",
+    "window",
+    "source_key",
+    "usd",
+    "unit_size"
+  ],
+  "properties": {
+    "measure": {
+      "type": "string"
+    },
+    "side": {
+      "type": "string"
+    },
+    "variant": {
+      "type": "string"
+    },
+    "window": {
+      "type": "string"
+    },
+    "source_key": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "unit_size": {
+      "type": "number"
+    },
+    "fallback": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPricePreview
+
+```json
+{
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "base_model",
+    "manual",
+    "current",
+    "proposed",
+    "changed",
+    "reason",
+    "version"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "base_model": {
+      "type": "string"
+    },
+    "manual": {
+      "type": "boolean"
+    },
+    "current": {
+      "type": "array",
+      "nullable": true,
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceRate"
+      }
+    },
+    "proposed": {
+      "type": "array",
+      "nullable": true,
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceRate"
+      }
+    },
+    "changed": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "",
+        "unmapped",
+        "delisted",
+        "config_model",
+        "unsupported_pricing",
+        "incomplete_pricing"
+      ]
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceList
+
+```json
+{
+  "type": "object",
+  "required": [
+    "deployments",
+    "generated_at"
+  ],
+  "properties": {
+    "deployments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPricePreview"
+      }
+    },
+    "generated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceSelection
+
+```json
+{
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceResult
+
+```json
+{
+  "type": "object",
+  "required": [
+    "updated"
+  ],
+  "properties": {
+    "updated": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    }
+  },
+  "additionalProperties": true
 }
 ```

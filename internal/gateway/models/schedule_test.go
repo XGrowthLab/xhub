@@ -65,17 +65,16 @@ func TestLocalCatalogRefreshPersistence(t *testing.T) {
 	if row == nil || row["delisted"] != true || row["pricing_rules_v2"] == nil || row["input_cost_per_token"] != 0.000007 {
 		t.Fatalf("本地记录或覆盖丢失: %#v", row)
 	}
-	// 手工覆盖只覆盖价格，不应掩盖最新市场撤回状态。
-	base, _ := catalog.BaselineModel("snapshot-a")
-	if base["feed_unavailable"] != true || row["feed_unavailable"] != true {
+	// 市场完整资料与计费覆盖分开，来源撤回不能因手工定价消失。
+	if row["feed_unavailable"] != true {
 		t.Fatal("上游撤回未存档")
 	}
-	saved, _ := h.store.ListConfig(priceSnapshotNS)
+	saved, _ := h.store.ListConfig(marketSnapshotNS)
 	failing = true
 	if _, err := refreshLocalCatalog(context.Background(), h); err == nil {
 		t.Fatal("失败源未返回错误")
 	}
-	after, _ := h.store.ListConfig(priceSnapshotNS)
+	after, _ := h.store.ListConfig(marketSnapshotNS)
 	if !reflect.DeepEqual(saved, after) {
 		t.Fatal("失败源污染快照")
 	}

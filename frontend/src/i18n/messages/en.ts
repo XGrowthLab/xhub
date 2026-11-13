@@ -1,3 +1,4 @@
+import { marketSync } from "./marketSync.en";
 import { samlRefresh } from "./samlRefresh.en";
 import { budgetReconciliationEn } from "./budgetReconciliation.en";
 import { probesEn } from "./probes.en";
@@ -9,6 +10,7 @@ import { routeTemplatesEn } from "./routeTemplates.en";
 import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
+ marketSync,
   logsUX: {
     captureTitle: "Record my requests and responses",
     captureDescription: "When enabled, personal request and response bodies are kept for {days} days by default. Platform administrators can view them under existing permissions; error messages may echo upstream content.",

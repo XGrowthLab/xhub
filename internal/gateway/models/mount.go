@@ -38,6 +38,8 @@ func Module(h Host) util.Module {
 		reg.Handle("GET /schedule/model_cost_map_reload/status", func(w http.ResponseWriter, r *http.Request) { CostMapReloadStatus(h, w, r) })
 		// The price catalog: the embedded price baseline plus whatever an
 		// operator adds or edits from the console.
+		reg.Handle("GET /price/deployments", func(w http.ResponseWriter, r *http.Request) { DeploymentPrices(h, w, r) })
+		reg.Handle("POST /price/deployments/apply", func(w http.ResponseWriter, r *http.Request) { ApplyDeploymentPrices(h, w, r) })
 		reg.Handle("GET /price/catalog", func(w http.ResponseWriter, r *http.Request) { PriceList(h, w, r) })
 		reg.Handle("POST /price/model", func(w http.ResponseWriter, r *http.Request) { UpsertPriceModel(h, w, r) })
 		reg.Handle("POST /price/model/listing", func(w http.ResponseWriter, r *http.Request) { SetPriceListing(h, w, r) })

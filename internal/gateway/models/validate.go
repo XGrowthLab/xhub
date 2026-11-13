@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -100,6 +101,14 @@ func validateDeployment(s Host, name string, params, info map[string]any) error 
 	}
 	if id := str(info["base_model"]); id != "" {
 		row, ok := catalog.ModelRow(id)
+		if !ok && s.RecordStore() != nil {
+			doc, err := readMarket(context.Background(), s)
+			if err != nil {
+				return fmt.Errorf("market catalog unavailable")
+			}
+			row, ok = doc.Models[id]
+		}
+
 		if !ok {
 			return fmt.Errorf("pricing model %s does not exist", id)
 		}

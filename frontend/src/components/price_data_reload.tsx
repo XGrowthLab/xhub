@@ -43,6 +43,7 @@ interface ReloadStatus {
   interval_hours: number | null;
   last_run: string | null;
   next_run: string | null;
+  last_error?: string;
 }
 
 interface CostMapSourceInfo {
@@ -109,47 +110,52 @@ const formatModelCount = (count: number | null | undefined) => {
   return count.toLocaleString();
 };
 
-const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => { const t = useT(); return ((
-  <>
-    {sourceInfo.source_revision && (
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-muted-foreground">{t("Source revision:")}</span>
-        <Tooltip>
-          <TooltipTrigger render={<code className="font-mono" />}>
-            {shortRevision(sourceInfo.source_revision)}
-          </TooltipTrigger>
-          <TooltipContent>{sourceInfo.source_revision}</TooltipContent>
-        </Tooltip>
-      </div>
-    )}
+const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => {
+  const t = useT();
+  return (
+    <>
+      {sourceInfo.source_revision && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">{t("Source revision:")}</span>
+          <Tooltip>
+            <TooltipTrigger render={<code className="font-mono" />}>
+              {shortRevision(sourceInfo.source_revision)}
+            </TooltipTrigger>
+            <TooltipContent>{sourceInfo.source_revision}</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
 
-    {sourceInfo.etag && (
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-muted-foreground">ETag:</span>
-        <Tooltip>
-          <TooltipTrigger render={<code className="max-w-60 truncate font-mono" />}>{sourceInfo.etag}</TooltipTrigger>
-          <TooltipContent>{sourceInfo.etag}</TooltipContent>
-        </Tooltip>
-      </div>
-    )}
+      {sourceInfo.etag && (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">ETag:</span>
+          <Tooltip>
+            <TooltipTrigger render={<code className="max-w-60 truncate font-mono" />}>{sourceInfo.etag}</TooltipTrigger>
+            <TooltipContent>{sourceInfo.etag}</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
 
-    {sourceInfo.loaded_at && (
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{t("Loaded at:")}</span>
-        <span className="font-medium">{formatDateTime(sourceInfo.loaded_at)}</span>
-      </div>
-    )}
+      {sourceInfo.loaded_at && (
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">{t("Loaded at:")}</span>
+          <span className="font-medium">{formatDateTime(sourceInfo.loaded_at)}</span>
+        </div>
+      )}
 
-    {sourceInfo.loaded_at && (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Info className="size-3.5 shrink-0" />
-        <span>
-          {t("Reported by the worker that answered this request. Other workers pick up a reload on their next poll, and the Last run time is the latest reload any worker recorded")}
-        </span>
-      </div>
-    )}
-  </>
-)); };
+      {sourceInfo.loaded_at && (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Info className="size-3.5 shrink-0" />
+          <span>
+            {t(
+              "Reported by the worker that answered this request. Other workers pick up a reload on their next poll, and the Last run time is the latest reload any worker recorded",
+            )}
+          </span>
+        </div>
+      )}
+    </>
+  );
+};
 
 const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   accessToken,
@@ -165,7 +171,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [isScheduling, setIsScheduling] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
-  const [hours, setHours] = useState<number | "">(6);
+  const [hours, setHours] = useState<number | "">(24);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
   const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
 
@@ -220,7 +226,9 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await reloadModelCostMap(accessToken);
 
       if (response.status === "success") {
-        toast.success(t("Price data reloaded successfully! {value0} models updated.", { value0: (response.models_count || 0) }));
+        toast.success(
+          t("Price data reloaded successfully! {value0} models updated.", { value0: response.models_count || 0 }),
+        );
         onReloadSuccess?.();
         await fetchReloadStatus();
         await fetchSourceInfo();
@@ -409,7 +417,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
               {sourceInfo.fallback_reason && (
                 <div className="flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs">
                   <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-                  <span>{t("Fell back to local: {value0}", { value0: (sourceInfo.fallback_reason) })}</span>
+                  <span>{t("Fell back to local: {value0}", { value0: sourceInfo.fallback_reason })}</span>
                 </div>
               )}
             </CardContent>
@@ -431,6 +439,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">{t("Last run:")}</span>
                 <span>{formatDateTime(reloadStatus.last_run)}</span>
+                {reloadStatus.last_error && (
+                  <span role="alert" className="text-destructive">
+                    {t("marketSync.syncFailed")}
+                  </span>
+                )}
               </div>
 
               {reloadStatus.scheduled && (
@@ -473,7 +486,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
                 <InputGroupAddon align="inline-end">{t("hours")}</InputGroupAddon>
               </InputGroup>
               <p className="text-sm text-muted-foreground">
-                {t("This will automatically fetch the latest pricing data from the remote source every {hours} hours.", { hours })}</p>
+                {t(
+                  "This will automatically fetch the latest pricing data from the remote source every {hours} hours.",
+                  { hours },
+                )}
+              </p>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setShowScheduleModal(false)}>
