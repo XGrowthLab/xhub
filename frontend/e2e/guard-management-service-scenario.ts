@@ -3,6 +3,51 @@ import { translate, type Locale } from "../src/i18n/translate";
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto, watchGateway } from "./helpers";
 import { matchesGatewayResponse } from "./gateway-response.cjs";
 import { test } from "./guard-resource-fixture";
+import { createServer, type ServerResponse } from "node:http";
+import { once } from "node:events";
+
+/** 用本地真实 HTTP 服务复现导航与未完成 501 设置读取的竞争；page 为当前浏览器，
+ * 验证检查点等待原始响应正文后才允许导航；异常时释放响应和监听，不触碰外部服务。 */
+async function verifyOptionalReadBeforeNavigation(page: import("@playwright/test").Page) {
+  let pending: ServerResponse | undefined;
+  const server = createServer((req, res) => {
+    if (req.url === "/get/user_banner") {
+      pending = res;
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<!doctype html><title>Optional settings fixture</title>");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("fixture listener unavailable");
+  const origin = `http://127.0.0.1:${address.port}`;
+  let fixturePage: import("@playwright/test").Page | undefined;
+  try {
+    fixturePage = await page.context().newPage();
+    await fixturePage.goto(origin);
+    const watcher = watchGateway(fixturePage);
+    const sent = fixturePage.waitForRequest(origin + "/get/user_banner");
+    await fixturePage.evaluate(() => { void fetch("/get/user_banner").then(response => response.text()); });
+    await sent;
+    // 请求已发出但服务还没有返回；旧实现的检查点会提前通过并让下一次导航截断响应。
+    let settled = false;
+    const checkpoint = (async () => { await watcher.assertOk(); settled = true; })();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled, "可选请求未完成时检查点不能通过").toBe(false);
+    await expect.poll(() => !!pending).toBe(true);
+    pending!.writeHead(501, { "content-type": "application/json", "cache-control": "no-store" });
+    pending!.end(JSON.stringify({ error: { type: "unsupported_settings_operation", code: "501", message: "Unavailable" } }));
+    await checkpoint;
+    await fixturePage.goto(origin + "/done");
+  } finally {
+    pending?.end();
+    await fixturePage?.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
+  }
+}
 
 /** 注册双语护栏配置闭环；locale 决定可访问名称，不伪造管理接口或数据面响应。
  * 前置隔离 PostgreSQL、真实管理员与本地 HTTP 上游；验证草稿调试、保存、重读、脱敏、编辑拦截和删除。
@@ -14,6 +59,7 @@ export function registerGuardManagementService(locale: Locale) {
     const name = "guard-service-" + locale + "-" + Date.now();
 
     const tr = (key: string) => translate(locale, key);
+    await verifyOptionalReadBeforeNavigation(page);
     const watched = watchGateway(page);
     await loginAdmin(page);
     await page.getByRole("button", { name: locale === "en" ? "English" : "中文", exact: true }).click();
