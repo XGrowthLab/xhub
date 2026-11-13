@@ -6,6 +6,7 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { apiClient, keyDeleteCall, keyUpdateCall } from "../networking";
 import { toast } from "@/lib/toast";
+import { translate } from "@/i18n/translate";
 import KeyInfoView from "./key_info_view";
 
 const editor = vi.hoisted(() => ({ submit: undefined as undefined | ((values: Record<string, unknown>) => Promise<void>), reconcile: undefined as undefined | (() => Promise<void>), canReconcile: false }));
@@ -47,7 +48,8 @@ describe("simple key details", () => {
     const { close } = setup();
     expect(screen.getByRole("heading", { name: snapshot.key_alias })).toBeVisible();
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
-    expect(screen.getByText("How quota allocation works").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByRole("complementary", { name: translate("en", "quotaGuide.title") })).toBeVisible();
+    expect(screen.getByText(translate("en", "quotaGuide.chain"))).not.toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Back to keys" })); expect(close).toHaveBeenCalledOnce();
   });
   /** 保存仅传允许字段并精确保留共享与零；伪造隐藏配置也不能覆盖，成功同步响应，清理 DOM。 */

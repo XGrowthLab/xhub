@@ -1,3 +1,4 @@
+import { translate } from "../src/i18n/translate";
 import { expect, test } from "@playwright/test";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./helpers";
 
@@ -185,9 +186,19 @@ test("层级预算 " + scenario, async ({ page }) => {
     if (scenario === "guide") {
     await stableGoto(page, "/api-keys");
     await page.getByRole("button", { name: "English", exact: true }).click();
-    await expect(page.getByRole("complementary", { name: "How quota allocation works" })).toBeVisible();
+    const english = page.getByRole("complementary", { name: translate("en", "quotaGuide.title") });
+    await english.getByText(translate("en", "quotaGuide.title"), { exact: true }).click();
+    await expect(english.getByText(translate("en", "quotaGuide.key"))).toBeVisible();
+    await expect(english.getByText(translate("en", "quotaGuide.rateMeaning"))).toBeVisible();
+    await expect(english.getByText(translate("en", "quotaGuide.singleTeam"))).not.toBeVisible();
+    await english.getByText(translate("en", "quotaGuide.moreHeading")).click();
+    await expect(english.getByText(translate("en", "quotaGuide.singleTeam"))).toBeVisible();
     await page.getByRole("button", { name: "中文", exact: true }).click();
-    await expect(page.getByRole("complementary", { name: t("quotaGuide.title") })).toBeVisible();
+    const chinese = page.getByRole("complementary", { name: t("quotaGuide.title") });
+    await expect(chinese.getByText(translate("zh-CN", "quotaGuide.key"))).toBeVisible();
+    await expect(chinese.getByText(translate("zh-CN", "quotaGuide.singleTeam"))).toBeVisible();
+    await chinese.getByText(t("quotaGuide.title"), { exact: true }).click();
+    await expect(chinese.getByText(translate("zh-CN", "quotaGuide.key"))).not.toBeVisible();
     }
   } finally {
     // 为失败后的真实接口清理保留独立时间，避免测试超时掩盖原始错误。

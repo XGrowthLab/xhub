@@ -27,4 +27,4 @@ bash scripts/regression.sh --verbose "TestRate|TestQuotaHierarchy|TestBudget|Tes
 [Test prerequisites](testing.md) · [Next: permissions](permissions.md)
 
 
-Personal API key monetary caps do not reserve funds. Blank keys and console calls share actual remaining personal money. Key creation is allowed even when money is exhausted, but inference is rejected. RPM/TPM and organization/team/personal allocations retain their reservation rules.
+Personal API key monetary caps do not reserve funds. Blank keys and console calls share actual remaining personal money. Key creation is allowed even when money is exhausted, but inference is rejected. Organization/team/personal monetary allocations retain their reservation rules. RPM/TPM enforce the hierarchy without reserving unused capacity for idle siblings.

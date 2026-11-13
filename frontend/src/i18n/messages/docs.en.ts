@@ -159,7 +159,7 @@ const base = {
         "Allocate Organization → Team → Person budgets in USD. Key caps do not reserve money: keys and console calls share actual personal remaining funds. Spending plus unused non-key allocations must fit within the parent. Blank shares the parent remainder; zero blocks spending. Budgets are cumulative, without monthly resets. Each person belongs to at most one team. After leaving, personal budgets remain independent. Unrestricted business uses a separate unlimited organization and team.",
       heading2: "Request limits",
       body2:
-        "Set RPM and TPM on organization, team, user and API Key pages. Fixed child allocations sum within each parent; blank intermediates pass fixed descendants upward. Blank shares unreserved capacity and zero blocks calls. UTC calendar minutes reset counters; admission atomically counts the unique path and 429 consumes no capacity. TPM uses the incoming estimate rather than final output usage. Multiple instances need shared Redis.",
+        "Set RPM and TPM on organization, team, user and API Key pages. Fixed child allocations sum within each parent; blank intermediates pass fixed descendants upward. Blank shares the parent's remaining capacity in the current minute; unused fixed limits do not reserve capacity, and zero blocks calls. UTC calendar minutes reset counters; admission atomically counts the unique path and 429 consumes no capacity. TPM uses the incoming estimate rather than final output usage. Multiple instances need shared Redis.",
       heading3: "Handle rejections",
       body3:
         "Inspect key and related entity settings, then logs. Changes require management permissions. Displayed balances are not provider invoices or guarantees about concurrent settlement.",
