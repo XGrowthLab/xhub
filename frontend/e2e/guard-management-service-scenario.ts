@@ -41,6 +41,16 @@ async function verifyOptionalReadBeforeNavigation(page: import("@playwright/test
     pending!.end(JSON.stringify({ error: { type: "unsupported_settings_operation", code: "501", message: "Unavailable" } }));
     await checkpoint;
     await fixturePage.goto(origin + "/done");
+    // CI 中旧文档的未响应请求被导航取消时，Chromium 没有派发 requestfailed。
+    // 在隔离页面复现该事件缺失，验证主框架导航仍能结束旧请求跟踪。
+    pending = undefined;
+    const oldRequest = fixturePage.waitForRequest(origin + "/get/user_banner");
+    await fixturePage.evaluate(() => { void fetch("/get/user_banner").then(response => response.text()).catch(() => {}); });
+    await oldRequest;
+    await expect.poll(() => !!pending).toBe(true);
+    fixturePage.removeAllListeners("requestfailed");
+    await fixturePage.goto(origin + "/next");
+    await watcher.assertOk();
   } finally {
     pending?.end();
     await fixturePage?.close();

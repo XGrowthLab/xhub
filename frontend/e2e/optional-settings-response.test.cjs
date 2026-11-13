@@ -64,3 +64,44 @@ test('optional request cancelled before response releases the checkpoint', async
  await tracker.drain();
  assert.deepEqual(bad,[]);
 });
+
+/** 模拟主页面导航时浏览器未报告取消；旧请求不挂起，新页面 501 仍须验证原始正文。 */
+test('navigation releases unanswered reads and still checks later page responses', async () => {
+ const bad=[], tracker=createOptionalReadTracker(bad);
+ const old={url:()=>base.url,method:()=>base.method};
+ tracker.begin(old);
+ tracker.navigation();
+ const current={url:()=>base.url,method:()=>base.method};
+ tracker.begin(current);
+ tracker.response({request:()=>current,url:()=>base.url,status:()=>501,headers:()=>({'cache-control':'no-store'}),json:()=>Promise.resolve(base.body)});
+ await tracker.drain();
+ assert.deepEqual(bad,[]);
+});
+
+/** 导航时已有 501 但正文未完成，或导航后收到旧请求 501，均应报告而非视为成功。 */
+test('navigation never hides an observed or late 501 response', async () => {
+ for(const observed of [false,true]) {
+  const bad=[], tracker=createOptionalReadTracker(bad);
+  const request={url:()=>base.url,method:()=>base.method};
+  const response={request:()=>request,url:()=>base.url,status:()=>501,headers:()=>({'cache-control':'no-store'}),json:()=>new Promise(()=>{})};
+  tracker.begin(request);
+  if(observed) tracker.response(response);
+  tracker.navigation();
+  if(!observed) tracker.response(response);
+  await tracker.drain();
+  assert.equal(bad.length,1,'不可核验的 501 必须报告');
+ }
+});
+
+/** 一个 frame 的导航只释放该 frame 的旧请求；其他 frame 返回的错误仍会严格报告。 */
+test('navigation preserves outstanding requests from other frames', async () => {
+ const bad=[], tracker=createOptionalReadTracker(bad), first={}, second={};
+ const old={url:()=>base.url,method:()=>base.method,frame:()=>first};
+ const other={url:()=>base.url,method:()=>base.method,frame:()=>second};
+ tracker.begin(old);
+ tracker.begin(other);
+ tracker.navigation(first);
+ tracker.response({request:()=>other,url:()=>base.url,status:()=>501,headers:()=>({'cache-control':'no-store'}),json:()=>Promise.resolve({error:{type:'unexpected'}})});
+ await tracker.drain();
+ assert.equal(bad.length,1,'其他 frame 的错误正文不得被导航掩盖');
+});

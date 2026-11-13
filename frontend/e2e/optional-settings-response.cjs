@@ -17,12 +17,16 @@ function isExpectedOptionalSettingsFailure({url, method, status, cacheControl, b
  * drain 等待当前及等待期间新增的请求。不改变网络响应或将未知错误视为成功。 */
 function createOptionalReadTracker(bad) {
   const active = new Map();
+  const navigated = new WeakSet();
   const checks = [];
   function begin(request) {
     if (!isOptionalSettingsRead({url: request.url(), method: request.method(), status: 501}) || active.has(request)) return;
     let resolve;
     const check = new Promise(done => { resolve = done; });
-    active.set(request, {resolve, observed: false});
+    // service worker 请求可能没有所属 frame；不推断其页面归属。
+    let frame;
+    try { frame = request.frame?.(); } catch { frame = undefined; }
+    active.set(request, {resolve, frame, observed: false});
     checks.push(check);
   }
   function finish(request) {
@@ -33,6 +37,12 @@ function createOptionalReadTracker(bad) {
   }
   function response(res) {
     const request = res.request();
+    if (navigated.has(request)) {
+      // 旧页面的响应若迟到，不能将无法核验的 501 静默判为合法降级。
+      if (isOptionalSettingsRead({url: res.url(), method: request.method(), status: res.status()}))
+        bad.push(`unreadable 501 ${request.method()} ${request.url()}`);
+      return;
+    }
     begin(request);
     const item = active.get(request);
     if (!item) return;
@@ -57,6 +67,16 @@ function createOptionalReadTracker(bad) {
     if (item.observed) bad.push(`unreadable 501 ${request.method()} ${request.url()}`);
     finish(request);
   }
+  /** 指定 frame 导航会取消其旧请求，但浏览器不保证发出 requestfailed；终止对应旧请求等待。
+   * 已观察到 501 时正文不可读仍报错；其他 frame 与新文档的请求继续正常验证。 */
+  function navigation(frame) {
+    for (const [request, item] of active) {
+      if (frame !== undefined && item.frame !== frame) continue;
+      navigated.add(request);
+      if (item.observed) bad.push(`unreadable 501 ${request.method()} ${request.url()}`);
+      finish(request);
+    }
+  }
   async function drain() {
     let checked = 0;
     while (checked < checks.length) {
@@ -65,6 +85,6 @@ function createOptionalReadTracker(bad) {
       await Promise.all(batch);
     }
   }
-  return {begin, response, failed, drain};
+  return {begin, response, failed, navigation, drain};
 }
 module.exports = { isExpectedOptionalSettingsFailure, isOptionalSettingsRead, createOptionalReadTracker };
