@@ -56,10 +56,10 @@ export function registerKeyWrite(kind: "edit" | "block" | "unblock" | "delete", 
       if (kind === "edit") {
         await page.setViewportSize({ width: 1440, height: 700 });
         const guide = page.getByRole("complementary", { name: t("quotaGuide.title") });
-        await expect(guide.locator("details")).not.toHaveAttribute("open");
-        await guide.locator("summary").click();
+        await expect(guide.locator(":scope > details")).not.toHaveAttribute("open");
+        await guide.getByText(t("quotaGuide.title"), { exact: true }).click();
         await expect(guide.getByText(t("quotaGuide.chain"), { exact: true })).toBeVisible();
-        await guide.locator("summary").click();
+        await guide.getByText(t("quotaGuide.title"), { exact: true }).click();
         await expect(page.getByRole("tab", { name: t("Settings"), exact: true })).toHaveCount(0);
         const scroll = page.getByRole("region", { name: t("Key Settings"), exact: true });
         const actions = page.getByRole("group", { name: t("keyEditor.actions"), exact: true });
@@ -79,12 +79,12 @@ export function registerKeyWrite(kind: "edit" | "block" | "unblock" | "delete", 
         await page.setViewportSize({ width: 1440, height: 700 });
         await scroll.hover(); await page.mouse.wheel(0, 1800);
         await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-        await expect(page.getByRole("switch", { name: t("keyEditor.enableRotation"), exact: true })).toBeInViewport();
+        await expect(page.getByText(t("keyEditor.rotationUnsupported"), { exact: true })).toBeInViewport();
         await expect(actions.getByRole("button", { name: t("Save Changes"), exact: true })).toBeInViewport();
         // 切换真实语言后保留用户输入，覆盖中英文标签。
         await page.getByRole("button", { name: "English", exact: true }).click();
         await expect(page.getByLabel("Key Alias", { exact: true })).toHaveValue(alias);
-        await expect(page.getByRole("switch", { name: "Enable Auto-Rotation", exact: true })).toBeVisible();
+        await expect(page.getByText("Automatic rotation is not supported. Rotate keys manually and update your clients.", { exact: true })).toBeVisible();
         await page.getByRole("button", { name: "中文", exact: true }).click();
         await page.getByLabel(t("Max Budget (USD)"), { exact: true }).fill("10");
         await page.getByLabel(t("RPM Limit"), { exact: true }).fill("100");

@@ -179,10 +179,12 @@ func (q UsageQuery) logOrder() string {
 
 // UsageSession 是分页后的会话代表请求与完整筛选范围内的统计，仅用于读取，不创建数据库表。
 type UsageSession struct {
-	UsageEvent    `xorm:"extends"`
-	SessionCount  int64   `xorm:"session_count"`
-	SessionSpend  float64 `xorm:"session_spend"`
-	SessionTokens int64   `xorm:"session_tokens"`
+	UsageEvent              `xorm:"extends"`
+	SessionCount            int64   `xorm:"session_count"`
+	SessionSpend            float64 `xorm:"session_spend"`
+	SessionTokens           int64   `xorm:"session_tokens"`
+	SessionPromptTokens     int64   `xorm:"session_prompt_tokens"`
+	SessionCompletionTokens int64   `xorm:"session_completion_tokens"`
 }
 
 // ListUsageSessions 在授权和筛选之后先合并会话，再计数和分页。参数 ctx 控制取消，q 指定
@@ -206,7 +208,9 @@ func (db *DB) ListUsageSessions(ctx context.Context, q UsageQuery) ([]UsageSessi
 	ROW_NUMBER() OVER (PARTITION BY ` + partition + ` ORDER BY ts DESC, id DESC) AS session_rank,
 	COUNT(*) OVER (PARTITION BY ` + partition + `) AS session_count,
 	SUM(cost) OVER (PARTITION BY ` + partition + `) AS session_spend,
-	SUM(prompt_tokens + completion_tokens) OVER (PARTITION BY ` + partition + `) AS session_tokens
+	SUM(prompt_tokens + completion_tokens) OVER (PARTITION BY ` + partition + `) AS session_tokens,
+	SUM(prompt_tokens) OVER (PARTITION BY ` + partition + `) AS session_prompt_tokens,
+	SUM(completion_tokens) OVER (PARTITION BY ` + partition + `) AS session_completion_tokens
 	FROM scoped) `
 	var count struct{ Total int64 }
 	_, err = db.session(ctx).SQL(cte+"SELECT COUNT(*) AS total FROM ranked WHERE session_rank = 1", args...).Get(&count)

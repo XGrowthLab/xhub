@@ -357,12 +357,13 @@ try {
     for (const [lang, label, title] of [["zh", "接口领域", "API 参考"], ["en", "API domain", "API reference"]]) {
       await page.goto(base + `reference/${lang}/index.html`);
       await expect(page.getByRole("heading", {name: title, exact: true})).toBeVisible();
-      for (const [domain, count] of [["suppliers",5],["users",13],["keys",14],["models",11],["usage",10]]) {
+      for (const [domain, count] of [["suppliers",5],["users",13],["keys",14],["models",12],["usage",10]]) {
         await page.getByLabel(label, {exact: true}).selectOption(domain);
         await expect(page.locator(".swagger-ui .opblock")).toHaveCount(count);
         if (domain === "models") {
           await expect(page.getByRole("button", {name: /^GET \/price\/deployments /})).toBeVisible();
           await expect(page.getByRole("button", {name: /^POST \/price\/deployments\/apply /})).toBeVisible();
+          await expect(page.getByRole("button", {name: /^POST \/model\/protocol_probe /})).toBeVisible();
         }
         if (domain === "users") {
           await expect(page.getByRole("button", {name: /^GET \/account\/log-capture /})).toBeVisible();

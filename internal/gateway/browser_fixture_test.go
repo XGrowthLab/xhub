@@ -584,6 +584,11 @@ func TestBrowserEnterpriseFixture(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, "enterprise-fixture.json"), metadata, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// 浏览器保存模型后由同一个生产维护循环自动探测；退出先取消并等待，不留下付费请求。
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	probeDone := make(chan struct{})
+	go func() { defer close(probeDone); s.protocolProbeLoop(probeCtx) }()
+	defer func() { stopProbe(); <-probeDone }()
 	server := &http.Server{Addr: "127.0.0.1:" + os.Getenv("E2E_GW_PORT"), Handler: fixtureHandler}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

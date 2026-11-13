@@ -4925,6 +4925,17 @@
       "status": "core-contracted"
     },
     {
+      "route": "POST /model/protocol_probe",
+      "sources": [
+        "internal/gateway/models/mount.go"
+      ],
+      "contract": {
+        "domain": "models",
+        "operation": "detectDeploymentProtocols"
+      },
+      "status": "core-contracted"
+    },
+    {
       "route": "POST /model/unblock",
       "sources": [
         "catalog"

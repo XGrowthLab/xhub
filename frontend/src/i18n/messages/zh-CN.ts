@@ -1,4 +1,5 @@
 import { marketSync } from "./marketSync.zh-CN";
+import { protocolProbeZhCN } from "./protocolProbe.zh-CN";
 import { samlRefresh } from "./samlRefresh.zh-CN";
 import { budgetReconciliationZhCN } from "./budgetReconciliation.zh-CN";
 import { probesZhCN } from "./probes.zh-CN";
@@ -12,6 +13,7 @@ import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
  marketSync,
+  protocolProbe: protocolProbeZhCN,
   logsUX: {
     captureTitle: "记录我的请求与响应",
     captureDescription: "开启后记录个人请求与响应的正文，默认保留 {days} 天。平台管理员可按现有权限查看；错误信息可能包含上游回显。",
@@ -378,7 +380,7 @@ export const zhCN = {
     personalBillingHelp: "没有团队时，留空表示个人不限额；有团队时，留空共享团队额度。填写金额限制所有会话和密钥的个人累计消费，0 禁止消费。",
     rateAllocationError: "下级 RPM/TPM 固定分配合计超过上级限制，请减少分配或调整上级限制。",
     rates:
-      "RPM、TPM 按同一层级分配：下级固定分配合计不能超过上级。留空共享未分配容量，0 禁止调用。个人所有 Key 与会话汇总，再逐级汇总到团队和组织；固定分配的未用容量每个 UTC 自然分钟保留，TPM 按准入时预估 token 计数。",
+      "RPM、TPM 按同一层级设置：下级固定上限合计不能超过上级。留空共享上级当分钟剩余容量，0 禁止调用。个人所有 Key 与会话合并计数，再逐级计入团队和组织；TPM 按准入时预估的 Token 计数。",
     rateBlank: "共享上级剩余容量",
     editMember: "编辑成员",
     deleteMember: "删除成员",
@@ -387,18 +389,24 @@ export const zhCN = {
     singleTeamError: "每个人只能加入一个团队，请先退出原团队。",
     spend: "个人累计消费 (USD)",
     spendHelp: "所有个人 Key 和会话消费累计计入个人额度，不自动按月重置；退出团队后仍保留个人累计消费。",
-    title: "额度分配说明",
+    budgetHeading: "预算怎么计算",
+    rateHeading: "调用频率限制",
+    rateMeaning: "RPM 是每分钟请求数；TPM 是每分钟 Token 数。",
+    rateSharing: "留空共享上级当分钟剩余容量，0 禁止调用；下级固定上限总和不能超过上级。空闲的固定上限不预留容量。",
+    rateAccounting: "个人的所有密钥和会话合并计数，再计入团队和组织。计数按 UTC 自然分钟重置；TPM 按准入时预估的 Token 数计算。",
+    moreHeading: "团队变更与不限额",
+    title: "额度与限流说明",
     chain: "组织 → 团队 → 用户 → API Key · USD / RPM / TPM",
     organization: "组织固定额度用于分配给团队。例如组织额度 1,000，可分配 500＋300＋200；继续分配会被拒绝。",
     team: "员工固定额度与共享消费必须在团队额度内。团队管理员分配员工额度，组织管理员分配团队额度。",
     person: "所有密钥和控制台共享个人剩余额度。单 Key 上限不预占资金。",
-    key: "密钥预算是可选的单 Key 消费上限，不预占资金。留空与其他 Key、控制台共享个人剩余额度；0 只禁止此 Key 消费。实际消费仍计入团队和组织。",
+    key: "密钥预算是可选的消费上限，不会提前扣除或预留额度。留空时与其他密钥和控制台共享个人剩余额度；设为 0 时，这个密钥不能消费。消费同时计入团队和组织。",
     shared:
-      "留空表示共享上级可用额度，不能绕过上级限制；0 表示禁止消费。已消费金额与下级未消费的保留额度之和不得超过固定额度。",
+      "留空通常表示共享上级剩余额度；没有团队的用户留空表示不设置个人上限。0 表示禁止消费。已有消费和下级未使用的固定分配，合计不能超过上级固定额度。",
     singleTeam:
-      "每个人只能加入一个团队。换团队须先移除原成员关系，该用户原有全部个人密钥撤销，历史消费保留在原团队。",
-    business: "需要不限额时，请使用独立组织和团队，并将四层上限全部留空。所有账号都是普通用户，所有 Key 都属于用户。",
-    leaveTeamWarning: "移除此成员将撤销该用户的全部现有 Key。历史消费保留在原团队；退出后可重新创建 Key。",
+      "每个人只能加入一个团队。换团队须先移除原成员关系；个人密钥保留，后续调用按当前权限和额度校验，历史消费保留在原团队。",
+    business: "若要不受预算上限限制，相关层级均不能设置预算上限；其他权限和调用频率限制仍然生效。",
+    leaveTeamWarning: "移除此成员后，个人密钥仍保留，后续调用按当前权限和额度校验；历史消费保留在原团队。",
     blank: "共享上级额度",
     amount: "额度 ${amount}",
   },

@@ -17,6 +17,7 @@ Generated from OpenAPI; no production handler is replaced. See model-contract.md
 | `POST /health/test_connection` | Probe stored deployment | 200, 400, 401, 403, 404 |
 | `GET /price/deployments` | Compare deployed prices | 200, 401, 403, 500, 503 |
 | `POST /price/deployments/apply` | Confirm single or bulk price changes | 200, 400, 401, 403, 409, 500, 503 |
+| `POST /model/protocol_probe` | Detect protocols for a saved deployment | 200, 400, 401, 403, 404, 409, 503 |
 
 ### GET /v2/model/info
 
@@ -256,6 +257,34 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
 ```
 
 
+### POST /model/protocol_probe
+
+400: invalid probe configuration; 404: missing deployment; 409: busy or changed configuration; 503: storage unavailable.
+
+```json
+{
+  "required": true,
+  "content": {
+    "application/json": {
+      "schema": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
+```
+
+
 ## Schemas
 
 ### Parameters
@@ -351,6 +380,10 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean",
+      "description": "Detect saved connection changes; no periodic upstream calls"
     }
   },
   "required": [],
@@ -1235,6 +1268,12 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
     },
     "unavailable_reason": {
       "type": "string"
+    },
+    "auto_probe": {
+      "type": "boolean"
+    },
+    "protocol_probe": {
+      "$ref": "#/components/schemas/ProtocolProbeRecord"
     }
   },
   "required": [
@@ -1490,5 +1529,90 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
     }
   },
   "additionalProperties": true
+}
+```
+
+### ProtocolProbeResult
+
+```json
+{
+  "type": "object",
+  "required": [
+    "protocol",
+    "status",
+    "stage",
+    "checked_at"
+  ],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "enum": [
+        "openai-chat",
+        "openai-responses",
+        "anthropic-messages"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unverified",
+        "temporarily_failed",
+        "protocol_mismatch",
+        "http_error",
+        "response_too_large",
+        "configuration_error",
+        "inconclusive"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "configuration",
+        "reply",
+        "stream",
+        "tool_call",
+        "tool_result",
+        "complete"
+      ]
+    },
+    "http_status": {
+      "type": "integer"
+    },
+    "checked_at": {
+      "type": "string"
+    }
+  }
+}
+```
+
+### ProtocolProbeRecord
+
+```json
+{
+  "type": "object",
+  "required": [
+    "checked_at",
+    "results",
+    "verified"
+  ],
+  "properties": {
+    "checked_at": {
+      "type": "string"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/ProtocolProbeResult"
+      }
+    },
+    "verified": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    }
+  },
+  "additionalProperties": false
 }
 ```

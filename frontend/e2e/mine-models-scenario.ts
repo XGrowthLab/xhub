@@ -73,11 +73,13 @@ test("my models exposes prices, access, executable API examples and call guide",
     await expect(dialog.getByText("POST /v1/chat/completions", { exact: true })).toBeVisible();
     await dialog.getByRole("tab", { name: "API 接入" }).click();
     await expect(dialog.getByRole("link", { name: "查看 API 接口定义" })).toHaveCount(0);
-    await dialog.getByRole("combobox", { name: "选择调用接口" }).selectOption("/v1/responses");
+    await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
+    await page.getByRole("option", { name: /OpenAI Responses/ }).click();
     await expect(dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" })).toContainText(
       '"input": "Hello"',
     );
-    await dialog.getByRole("combobox", { name: "选择调用接口" }).selectOption("/v1/chat/completions");
+    await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
+    await page.getByRole("option", { name: /^OpenAI Chat\s*\/v1\/chat\/completions$/ }).click();
     await dialog.getByRole("button", { name: "复制调用示例", exact: true }).click();
     await expect(dialog.getByRole("status")).toHaveText("已复制");
     const sample = await dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" }).textContent();

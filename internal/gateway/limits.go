@@ -52,6 +52,16 @@ var (
 // 调用：gateway/wire.go
 // 测试：credential_catalog_test.go、regression/supplier_catalog_test.go。
 func (s *Server) withCredential(dep config.ModelEntry) (config.ModelEntry, error) {
+	return s.withCredentialLookup(dep, func(name string) (map[string]any, error) {
+		if s.Store == nil {
+			return nil, errCredentialUnavailable
+		}
+		return s.Store.GetKV("credentials", name)
+	})
+}
+
+// withCredentialLookup 共用原有凭据校验与水合规则；lookup 由单次调用或批量探测提供，返回校验后部署，不跨请求缓存凭据。
+func (s *Server) withCredentialLookup(dep config.ModelEntry, lookup func(string) (map[string]any, error)) (config.ModelEntry, error) {
 	name := dep.ParamString("litellm_credential_name", "")
 	var values map[string]any
 	catalogID, _ := dep.ModelInfo["catalog_id"].(string)
@@ -59,7 +69,7 @@ func (s *Server) withCredential(dep config.ModelEntry) (config.ModelEntry, error
 		if s.Store == nil {
 			return dep, errCredentialUnavailable
 		}
-		rec, err := s.Store.GetKV("credentials", name)
+		rec, err := lookup(name)
 		if err != nil {
 			util.Error("credential lookup failed name=%s err=%v", name, err)
 			return dep, errCredentialUnavailable
@@ -84,7 +94,7 @@ func (s *Server) withCredential(dep config.ModelEntry) (config.ModelEntry, error
 	}
 	out.ModelInfo["catalog_id"] = catalogID
 	out.LiteLLMParams = credentials.Hydrate(dep.LiteLLMParams, values)
-	return out, nil
+	return providerdeployment.ValidatedProbeView(dep, out), nil
 }
 
 // enforceIdentityLimits 为数据面校验主体状态、模型权限和预算。
@@ -498,4 +508,55 @@ func userPeriod(u *iam.User) time.Time {
 		return *u.BudgetPeriodStart
 	}
 	return time.Time{}
+}
+
+// probeConnections 为同一次目录读取或自动扫描按凭据名去重查询；参数部署快照，返回对应水合结果和逐项错误。
+// 缓存仅在本调用内存活，下一次读取仍观察凭据轮换，不扩大模型权限或暴露密钥。
+func (s *Server) probeConnections(list []config.ModelEntry) ([]config.ModelEntry, []error) {
+	type entry struct {
+		value map[string]any
+		err   error
+	}
+	cache := map[string]entry{}
+	lookup := func(name string) (map[string]any, error) {
+		if v, ok := cache[name]; ok {
+			return v.value, v.err
+		}
+		if s.Store == nil {
+			return nil, errCredentialUnavailable
+		}
+		v, err := s.Store.GetKV("credentials", name)
+		cache[name] = entry{v, err}
+		return v, err
+	}
+	out := make([]config.ModelEntry, len(list))
+	errs := make([]error, len(list))
+	for i, m := range list {
+		out[i], errs[i] = s.withCredentialLookup(m, lookup)
+	}
+	return out, errs
+}
+
+// ProtocolProbeViews 批量返回当前连接证明对应的原始展示目录；只复核有记录的条目，永不返回水合后的地址或密钥。
+// 参数为请求私有列表，返回副本；无证明的模型不访问凭据库，失败时清除额外能力。
+func (s *Server) ProtocolProbeViews(list []config.ModelEntry) []config.ModelEntry {
+	var selected []config.ModelEntry
+	var indices []int
+	for i, m := range list {
+		if providerdeployment.ProbeRecord(m) != nil {
+			selected = append(selected, m)
+			indices = append(indices, i)
+		}
+	}
+	resolved, errs := s.probeConnections(selected)
+	out := append([]config.ModelEntry(nil), list...)
+	for i, m := range selected {
+		view := providerdeployment.ValidatedProbeView(m, resolved[i])
+		copy := config.CloneModels([]config.ModelEntry{m})[0]
+		if errs[i] != nil || providerdeployment.ProbeRecord(view) == nil {
+			delete(copy.ModelInfo, "protocol_probe")
+		}
+		out[indices[i]] = copy
+	}
+	return out
 }

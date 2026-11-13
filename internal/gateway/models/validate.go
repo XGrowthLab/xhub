@@ -22,6 +22,11 @@ var logTraceOnceValidate sync.Once
 // 测试：admin_test.go。
 func validateDeployment(s Host, name string, params, info map[string]any) error {
 	logTraceOnceValidate.Do(func() { util.Trace("enter models.validateDeployment") })
+	if v, exists := info["auto_probe"]; exists {
+		if _, ok := v.(bool); !ok {
+			return fmt.Errorf("auto_probe must be boolean")
+		}
+	}
 	if _, exists := params["weight"]; exists {
 		return fmt.Errorf("deployment weight is obsolete; configure default weights in model management or customer overrides in route templates")
 	}

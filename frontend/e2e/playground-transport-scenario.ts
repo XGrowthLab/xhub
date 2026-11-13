@@ -15,7 +15,7 @@ test("Playground fetch chat/completions SSE", async ({ page }) => {
       await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
       await page
         .getByRole("option")
-        .filter({ hasText: protocol === "v1/messages" ? /\/v1\/messages$/ : /\/v1\/chat\/completions$/ })
+        .filter({ hasText: protocol === "v1/messages" ? /^Anthropic Messages\s*\/v1\/messages$/ : /^OpenAI Chat\s*\/v1\/chat\/completions$/ })
         .click();
       await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)")).filter({ visible: true }).fill("transport-check");
       const pending = page.waitForResponse(
@@ -65,7 +65,7 @@ test("Playground fetch v1/messages SSE", async ({ page }) => {
       await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
       await page
         .getByRole("option")
-        .filter({ hasText: protocol === "v1/messages" ? /\/v1\/messages$/ : /\/v1\/chat\/completions$/ })
+        .filter({ hasText: protocol === "v1/messages" ? /^Anthropic Messages\s*\/v1\/messages$/ : /^OpenAI Chat\s*\/v1\/chat\/completions$/ })
         .click();
       await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)")).filter({ visible: true }).fill("transport-check");
       const pending = page.waitForResponse(
@@ -115,7 +115,7 @@ test("Playground fetch chat/completions JSON", async ({ page }) => {
       await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
       await page
         .getByRole("option")
-        .filter({ hasText: protocol === "v1/messages" ? /\/v1\/messages$/ : /\/v1\/chat\/completions$/ })
+        .filter({ hasText: protocol === "v1/messages" ? /^Anthropic Messages\s*\/v1\/messages$/ : /^OpenAI Chat\s*\/v1\/chat\/completions$/ })
         .click();
       await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)")).filter({ visible: true }).fill("transport-check");
       const pending = page.waitForResponse(
@@ -165,7 +165,7 @@ test("Playground fetch v1/messages JSON", async ({ page }) => {
       await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
       await page
         .getByRole("option")
-        .filter({ hasText: protocol === "v1/messages" ? /\/v1\/messages$/ : /\/v1\/chat\/completions$/ })
+        .filter({ hasText: protocol === "v1/messages" ? /^Anthropic Messages\s*\/v1\/messages$/ : /^OpenAI Chat\s*\/v1\/chat\/completions$/ })
         .click();
       await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)")).filter({ visible: true }).fill("transport-check");
       const pending = page.waitForResponse(

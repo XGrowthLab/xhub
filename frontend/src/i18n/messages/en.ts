@@ -1,4 +1,5 @@
 import { marketSync } from "./marketSync.en";
+import { protocolProbeEn } from "./protocolProbe.en";
 import { samlRefresh } from "./samlRefresh.en";
 import { budgetReconciliationEn } from "./budgetReconciliation.en";
 import { probesEn } from "./probes.en";
@@ -11,6 +12,7 @@ import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
  marketSync,
+  protocolProbe: protocolProbeEn,
   logsUX: {
     captureTitle: "Record my requests and responses",
     captureDescription: "When enabled, personal request and response bodies are kept for {days} days by default. Platform administrators can view them under existing permissions; error messages may echo upstream content.",
@@ -378,7 +380,7 @@ export const en = {
     rateAllocationError:
       "Child RPM/TPM allocations exceed the parent limit. Reduce allocations or increase the parent limit.",
     rates:
-      "Allocate RPM and TPM through the full hierarchy: fixed child allocations must add up to at most the parent limit. Blank shares the unreserved capacity; zero blocks calls. All personal keys and sessions count together, then roll up to the team and organization. Unused fixed capacity is reserved each UTC minute. TPM uses the token estimate at admission.",
+      "Set RPM and TPM through the hierarchy: fixed child limits must add up to at most the parent limit. Blank shares the parent's remaining capacity in the current minute; zero blocks calls. Personal keys and sessions count together, then toward the team and organization. TPM uses the token estimate at admission.",
     rateBlank: "Share parent remaining capacity",
     editMember: "Edit member",
     deleteMember: "Delete member",
@@ -389,21 +391,27 @@ export const en = {
     spend: "Personal cumulative spend (USD)",
     spendHelp:
       "All personal keys and session usage count toward cumulative personal spending. It does not reset monthly and remains after leaving a team.",
-    title: "How quota allocation works",
+    budgetHeading: "How budgets work",
+    rateHeading: "Request rate limits",
+    rateMeaning: "RPM is requests per minute; TPM is tokens per minute.",
+    rateSharing: "Blank shares the parent's remaining capacity in the current minute; zero blocks calls. Fixed child limits cannot exceed the parent limit. Unused fixed limits do not reserve capacity.",
+    rateAccounting: "All personal keys and sessions count together, then toward the team and organization. Counters reset each UTC calendar minute; TPM uses the token estimate at admission.",
+    moreHeading: "Changing teams and unlimited budgets",
+    title: "Budgets and rate limits",
     chain: "Organization → Team → User → API Key · USD / RPM / TPM",
     organization:
       "A fixed organization budget reserves money for its teams. A budget of $1,000 can allocate $500 + $300 + $200; additional allocations are rejected.",
     team: "Fixed personal allocations and shared consumption must fit within the team budget. Team administrators allocate personal budgets; organization administrators allocate team budgets.",
     person:
       "All your keys share your personal budget. Key caps do not reserve funds; all keys and console calls share the remaining personal budget.",
-    key: "Key budgets are optional spending caps, not reserved funds. Blank shares your personal remaining budget with other keys and the console; 0 blocks only this key. Spending still counts toward team and organization limits.",
+    key: "A key budget is an optional spending cap; it does not reserve or deduct funds in advance. Leave it blank to share your remaining personal budget with other keys and console requests. Zero blocks spending on this key. Usage also counts toward team and organization limits.",
     shared:
-      "Blank means share the parent’s available pool; it does not bypass a parent limit. Zero blocks spending. Consumed money plus unused child allocations cannot exceed a fixed budget.",
+      "Blank usually shares the parent’s remaining budget. For a user without a team, blank means no personal cap. Zero blocks spending. Consumed spending plus unused fixed child allocations cannot exceed a fixed parent budget.",
     singleTeam:
-      "Each person belongs to one team. To change teams, remove the old membership first; all existing personal keys are revoked, and historical spending stays with the original team.",
+      "Each person belongs to one team. To change teams, remove the old membership first. Personal keys are retained; later requests are checked against current permissions and budgets. Historical spending stays with the original team.",
     business:
-      "For unrestricted usage, leave all four levels unlimited in a separate organization and team. Every account is a regular user and every key belongs to a user.",
-    leaveTeamWarning: "Removing this member revokes all their existing keys. Historical spend stays with the original team; new keys can be created after leaving.",
+      "To use a budget without a cap, no applicable level can have a budget limit. Permissions and request rate limits still apply.",
+    leaveTeamWarning: "Removing this member keeps their personal keys. Later requests are checked against current permissions and budgets; historical spending stays with the original team.",
     blank: "Shared parent budget",
     amount: "of ${amount}",
   },

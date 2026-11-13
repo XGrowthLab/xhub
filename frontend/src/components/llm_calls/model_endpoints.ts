@@ -29,6 +29,7 @@ export const endpointUIType = (endpoint?: ModelEndpoint): EndpointType | null =>
     ? (UI_ENDPOINTS[endpoint.path] ??
       (
         {
+          "openai-chat": EndpointType.CHAT,
           "openai-responses": EndpointType.RESPONSES,
           "anthropic-messages": EndpointType.ANTHROPIC_MESSAGES,
         } as Record<string, EndpointType>

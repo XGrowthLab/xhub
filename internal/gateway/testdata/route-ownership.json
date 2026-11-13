@@ -912,6 +912,7 @@
       "POST /model/builtin/refresh",
       "POST /model/disable",
       "POST /model/enable",
+      "POST /model/protocol_probe",
       "POST /price/deployments/apply",
       "POST /price/model",
       "POST /price/model/listing",

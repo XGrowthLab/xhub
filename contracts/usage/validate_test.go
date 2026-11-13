@@ -111,3 +111,32 @@ func TestUsageFilterContract(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionTotalsPrecision 验证大于 float32 精确范围的会话统计和费用在生成类型中无损往返。
+// 参数 t 管理纯内存测试；覆盖字段缺失、合法大整数及错误类型，无外部数据需要清理。
+func TestSessionTotalsPrecision(t *testing.T) {
+	raw := []byte(`{"session_total_tokens":16777217,"session_total_prompt_tokens":16777216,"session_total_completion_tokens":1,"session_total_spend":0.123456789}`)
+	var row LogRecord
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(got, &values); err != nil {
+		t.Fatal(err)
+	}
+	if values["session_total_tokens"] != float64(16777217) || values["session_total_prompt_tokens"] != float64(16777216) || values["session_total_completion_tokens"] != float64(1) || values["session_total_spend"] != 0.123456789 {
+		t.Fatalf("会话合计精度或字段丢失: %s", got)
+	}
+	for _, field := range []string{"session_total_tokens", "session_total_prompt_tokens", "session_total_completion_tokens", "session_total_spend"} {
+		if err := json.Unmarshal([]byte(`{"`+field+`":"invalid"}`), new(LogRecord)); err == nil {
+			t.Fatalf("字段 %s 接受非法类型", field)
+		}
+	}
+	if empty, err := json.Marshal(LogRecord{}); err != nil || strings.Contains(string(empty), `"session_total_tokens"`) {
+		t.Fatalf("可选字段缺失时不应生成数值: %s %v", empty, err)
+	}
+}

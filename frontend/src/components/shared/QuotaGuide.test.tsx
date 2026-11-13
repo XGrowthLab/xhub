@@ -23,9 +23,15 @@ describe("QuotaGuide", () => {
         const summary = screen.getByText(translate(locale, "quotaGuide.title"));
         expect(screen.getByText(translate(locale, "quotaGuide.chain"))).not.toBeVisible();
         await userEvent.click(summary);
-        for (const key of ["chain", scope, "shared", "singleTeam", "business", "rates"]) {
+        for (const key of ["chain", scope, "shared", "rateMeaning", "rateSharing", "rateAccounting"]) {
           expect(screen.getByText(translate(locale, "quotaGuide." + key))).toBeVisible();
         }
+        const more = screen.getByText(translate(locale, "quotaGuide.moreHeading"));
+        expect(screen.getByText(translate(locale, "quotaGuide.singleTeam"))).not.toBeVisible();
+        await userEvent.click(more);
+        expect(screen.getByText(translate(locale, "quotaGuide.singleTeam"))).toBeVisible();
+        expect(screen.getByText(translate(locale, "quotaGuide.business"))).toBeVisible();
+        await userEvent.click(more);
         await userEvent.click(summary);
         expect(screen.getByText(translate(locale, "quotaGuide.chain"))).not.toBeVisible();
       });
@@ -43,4 +49,15 @@ it("changes language while keeping the guide open", async () => {
   expect(screen.getByText(translate(locale, "quotaGuide.title"))).toBeVisible();
   expect(screen.getByText(translate(locale, "quotaGuide.key"))).toBeVisible();
   expect(screen.queryByText(translate("en", "quotaGuide.key"))).not.toBeInTheDocument();
+});
+
+/** 验证双语说明与真实限流和成员移除规则一致；仅检查文案，无网络或数据需要清理。 */
+it.each([
+  { language: "en", remaining: /remaining capacity/i, notReserved: /do not reserve/i, retained: /keys are retained/i, warning: /keeps their personal keys/i },
+  { language: "zh-CN", remaining: /剩余容量/, notReserved: /不预留容量/, retained: /个人密钥保留/, warning: /个人密钥仍保留/ },
+] as const)("$language explains shared rate capacity and retained personal keys", ({ language, remaining, notReserved, retained, warning }) => {
+  expect(translate(language, "quotaGuide.rateSharing")).toMatch(remaining);
+  expect(translate(language, "quotaGuide.rateSharing")).toMatch(notReserved);
+  expect(translate(language, "quotaGuide.singleTeam")).toMatch(retained);
+  expect(translate(language, "quotaGuide.leaveTeamWarning")).toMatch(warning);
 });
