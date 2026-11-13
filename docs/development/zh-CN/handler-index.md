@@ -109,6 +109,9 @@ x-litellm-call-id 关联调用与日志，x-litellm-response-cost 表示这次�
 | --- | --- | --- |
 | `GET /account/log-capture` | `LogCaptureSettings` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `PUT /account/log-capture` | `LogCaptureSettings` | [mount.go](../../../internal/gateway/identity/mount.go) |
+| `GET /notifications` | `NotificationsList` | [mount.go](../../../internal/gateway/identity/mount.go) |
+| `GET /notifications/unread` | `NotificationsUnread` | [mount.go](../../../internal/gateway/identity/mount.go) |
+| `POST /notifications/read` | `NotificationsRead` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `GET /budget/reservations` | `BudgetReservations` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `POST /budget/reservations/{reservation_id}/reconcile` | `BudgetReconcile` | [mount.go](../../../internal/gateway/identity/mount.go) |
 | `POST /user/new` | `UserNew` | [mount.go](../../../internal/gateway/identity/mount.go) |
