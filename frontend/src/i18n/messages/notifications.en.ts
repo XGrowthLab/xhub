@@ -1,0 +1,35 @@
+/** 消息中心英语文案；参数以翻译插值写入，用户输入不会被翻译。 */
+export const notifications = {
+  invalidData: "Notification data is invalid.",
+  title: "Notifications",
+  open: "Notifications",
+  unreadCount: "Notifications, {count} unread",
+  unreadUnavailable: "Notifications, unread count unavailable",
+  loading: "Loading notifications…",
+  loadFailed: "Could not load notifications.",
+  retry: "Try again",
+  empty: "You have no notifications.",
+  unknown: "This notification type is not supported yet.",
+  budgetTitle: "Personal budget usage",
+  zeroBudgetMessage: "Your personal budget limit was $0 when this notification was created.",
+  budgetMessage: "Your recorded spending reached {threshold}% of your personal budget.",
+  snapshot:
+    "At the time of this notification: recorded spending {spent}; budget {limit}; estimated balance {remaining}.",
+  balanceHelp:
+    "This is a recorded-spending snapshot. Pending charges and team or organization limits can reduce the amount you can actually use.",
+  samplingHelp:
+    "The system checks approximately once a minute and reports only the highest threshold reached at that time. Recorded amounts may lag, and changes between checks may not all trigger notifications.",
+  timeUnavailable: "Time unavailable",
+  createdAt: "Received {time}",
+  read: "Read",
+  unread: "Unread",
+  markRead: "Mark as read",
+  marking: "Marking…",
+  markFailed: "Could not mark this notification as read.",
+  usage: "View usage",
+  previous: "Previous",
+  next: "Next",
+  page: "Page {page}",
+  pageLimit:
+    "You have reached the oldest messages available in this list; earlier messages cannot currently be viewed here.",
+};

@@ -33,6 +33,13 @@ const removed = [
 ];
 
 describe("dashboardAppPath", () => {
+  /** 消息页独立于消息 API；/ui 别名进入页面，原始 API 仍由网关处理。 */
+  it("routes the notifications UI without shadowing the notifications API", () => {
+    expect(dashboardAppPath("/ui/message-center")).toBe("/message-center");
+    expect(dashboardAppPath("/ui/message-center/")).toBe("/message-center");
+    expect(dashboardAppPath("/notifications")).toBeNull();
+    expect(dashboardAppPath("/notifications/unread")).toBeNull();
+  });
   /** 目的：退役 MCP/Skills 管理入口不能作为 Next 页面；前置为真实路由解析器，根路径和 /ui 别名均交给网关，无持久化数据清理。 */
   it("leaves retired MCP and Skills surfaces to the gateway", () => {
     for (const path of ["/mcp-servers", "/skills"]) {

@@ -12,4 +12,59 @@ function isExpectedOptionalSettingsFailure({url, method, status, cacheControl, b
     && body?.error?.code === '501' && typeof body?.error?.message === 'string' && body.error.message.length > 0
     && isOptionalSettingsRead({url,method,status});
 }
-module.exports = { isExpectedOptionalSettingsFailure, isOptionalSettingsRead };
+/** 跟踪已经发出的可选读取，确保页面导航前先验证真实的 501 正文。
+ * bad 收集无法验证和契约不符的错误；begin/response/failed 对应浏览器网络事件，
+ * drain 等待当前及等待期间新增的请求。不改变网络响应或将未知错误视为成功。 */
+function createOptionalReadTracker(bad) {
+  const active = new Map();
+  const checks = [];
+  function begin(request) {
+    if (!isOptionalSettingsRead({url: request.url(), method: request.method(), status: 501}) || active.has(request)) return;
+    let resolve;
+    const check = new Promise(done => { resolve = done; });
+    active.set(request, {resolve, observed: false});
+    checks.push(check);
+  }
+  function finish(request) {
+    const item = active.get(request);
+    if (!item) return;
+    active.delete(request);
+    item.resolve();
+  }
+  function response(res) {
+    const request = res.request();
+    begin(request);
+    const item = active.get(request);
+    if (!item) return;
+    if (!isOptionalSettingsRead({url: res.url(), method: request.method(), status: res.status()})) {
+      finish(request);
+      return;
+    }
+    item.observed = true;
+    void (async () => {
+      const body = await res.json().catch(() => null);
+      if (!active.has(request)) return;
+      if (!isExpectedOptionalSettingsFailure({url: res.url(), method: request.method(), status: res.status(), cacheControl: res.headers()['cache-control'], body})) {
+        bad.push(`${res.status()} ${request.method()} ${res.url()}`);
+      }
+      finish(request);
+    })();
+  }
+  function failed(request) {
+    const item = active.get(request);
+    if (!item) return;
+    // 已收到 501 却未读到正文时不能判定为合法降级；未收到响应的取消不属于观察到的 5xx。
+    if (item.observed) bad.push(`unreadable 501 ${request.method()} ${request.url()}`);
+    finish(request);
+  }
+  async function drain() {
+    let checked = 0;
+    while (checked < checks.length) {
+      const batch = checks.slice(checked);
+      checked += batch.length;
+      await Promise.all(batch);
+    }
+  }
+  return {begin, response, failed, drain};
+}
+module.exports = { isExpectedOptionalSettingsFailure, isOptionalSettingsRead, createOptionalReadTracker };

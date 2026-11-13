@@ -14,6 +14,7 @@ import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useT } from "@/i18n";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
@@ -63,6 +64,7 @@ export function DashboardHeader() {
             <ToolbarSeparator />
           </>
         )}
+        <NotificationBell />
         <DocsLink />
         <BlogDropdown />
         <ToolbarSeparator />

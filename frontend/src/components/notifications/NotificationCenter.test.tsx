@@ -1,0 +1,181 @@
+/* @vitest-environment jsdom */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
+import { NotificationCenter, canLoadNextNotificationsPage } from "./NotificationCenter";
+import { NotificationBell } from "./NotificationBell";
+import { listNotifications, unreadNotifications } from "./api";
+
+const { auth, get, post } = vi.hoisted(() => ({ auth: { token: "a" as string | null }, get: vi.fn(), post: vi.fn() }));
+vi.mock("@/contexts/AuthContext", () => ({ useAuth: () => auth }));
+vi.mock("@/utils/jwtUtils", () => ({
+  checkTokenValidity: (token: string | null) => !!token,
+  decodeToken: (token: string) => ({ user_id: token, key: `session-${token}` }),
+}));
+vi.mock("@/components/networking", () => ({ apiClient: { get, post } }));
+const budget = {
+  id: "n1",
+  type: "budget_threshold",
+  created_at: "2026-11-13T10:00:00Z",
+  read: false,
+  data: { threshold: 80, spent: 400, limit: 500, remaining: 100 },
+};
+/** 用指定语言渲染独立组件；重置本地语言避免其他测试影响，DOM 由框架清理。 */
+function view(locale: "en" | "zh-CN", element: React.ReactNode) {
+  localStorage.removeItem(LOCALE_COOKIE);
+  document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`;
+  return render(<I18nProvider initialLocale={locale}>{element}</I18nProvider>);
+}
+beforeEach(() => {
+  auth.token = "a";
+  get.mockReset();
+  post.mockReset();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("personal notifications", () => {
+  /** 有限预算快照显示中文账面数，标已读只提交自己的消息 ID，顶栏随后刷新。 */
+  it("shows the budget snapshot and marks one message read", async () => {
+    let isRead = false;
+    get.mockImplementation((path: string) =>
+      path.endsWith("/unread")
+        ? Promise.resolve({ count: isRead ? 0 : 1 })
+        : Promise.resolve({ items: [{ ...budget, read: isRead }], total: 1 }),
+    );
+    post.mockImplementation(async () => {
+      isRead = true;
+      return {};
+    });
+    view(
+      "zh-CN",
+      <>
+        <NotificationBell />
+        <NotificationCenter />
+      </>,
+    );
+    expect(await screen.findByText("你的个人预算已记账消费达到 80%。")).toBeVisible();
+    expect(screen.getByText(/账面剩余/)).toHaveTextContent("$100");
+    expect(screen.getByText(/待结算费用/)).toBeVisible();
+    expect(screen.getByText(/系统约每分钟检查一次/)).toHaveTextContent("账面数可能有延迟");
+    expect(screen.getByRole("link", { name: "查看用量" })).toHaveAttribute("href", "/ui/usage");
+    expect(await screen.findByRole("link", { name: "消息中心，1 条未读" })).toHaveAttribute(
+      "href",
+      "/ui/message-center",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "标为已读" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/notifications/read", { accessToken: "session-a", body: { id: "n1" } }),
+    );
+    await waitFor(() =>
+      expect(get.mock.calls.filter(([path]) => path === "/notifications/unread").length).toBeGreaterThan(1),
+    );
+    expect(await screen.findByText("已读")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "标为已读" })).not.toBeInTheDocument();
+  });
+  /** 缺少剩余值按账面差计算；英文界面不回显未知类型的数据和不受信任的外部链接。 */
+  it("uses English and safely handles unknown types and missing balances", async () => {
+    get.mockResolvedValue({
+      items: [
+        { ...budget, data: { threshold: 95, spent: 475, limit: 500 } },
+        { ...budget, id: "n2", type: "unknown", data: { secret: "DO_NOT_SHOW", href: "https://invalid.example" } },
+      ],
+      total: 2,
+    });
+    view("en", <NotificationCenter />);
+    expect(await screen.findByText("Your recorded spending reached 95% of your personal budget.")).toBeVisible();
+    expect(screen.getByText(/estimated balance/)).toHaveTextContent("$25");
+    expect(screen.getByText(/checks approximately once a minute/)).toHaveTextContent("Recorded amounts may lag");
+    expect(screen.getByText("This notification type is not supported yet.")).toBeVisible();
+    expect(screen.queryByText("DO_NOT_SHOW")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "View usage" })).toHaveLength(1);
+  });
+  /** 零额度是有效阻断状态：展示额度为零，不能误称已消费百分之百。 */
+  it("explains a zero budget without implying spending", async () => {
+    get.mockResolvedValue({
+      items: [{ ...budget, data: { threshold: 100, spent: 0, limit: 0, remaining: 0 } }],
+      total: 1,
+    });
+    view("zh-CN", <NotificationCenter />);
+    expect(await screen.findByText("此消息产生时，你的个人预算上限为 $0。")).toBeVisible();
+    expect(screen.queryByText(/消费达到 100%/)).not.toBeInTheDocument();
+  });
+  /** 后台读写失败时提示错误，重试可恢复并且不能误显示已读或空列表。 */
+  it("reports load and mark errors", async () => {
+    get.mockRejectedValueOnce(new Error("failed")).mockResolvedValue({ items: [budget], total: 1 });
+    post.mockRejectedValue(new Error("failed"));
+    view("en", <NotificationCenter />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load notifications.");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Mark as read" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not mark this notification as read.");
+    expect(screen.getByText("Unread")).toBeVisible();
+  });
+  /** 换账号时旧响应晚到也不能覆盖当前用户；注销后不再展示旧消息。 */
+  it("isolates pending data across account switches and logout", async () => {
+    let resolveOld!: (value: unknown) => void;
+    const old = new Promise((resolve) => {
+      resolveOld = resolve;
+    });
+    get.mockImplementation((_path: string, options: { accessToken: string }) =>
+      options.accessToken === "session-a" ? old : Promise.resolve({ items: [], total: 0 }),
+    );
+    const rendered = view("en", <NotificationCenter />);
+    auth.token = "b";
+    rendered.rerender(
+      <I18nProvider initialLocale="en">
+        <NotificationCenter />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("You have no notifications.")).toBeVisible();
+    resolveOld({ items: [budget], total: 1 });
+    await waitFor(() => expect(screen.queryByText(/reached 80%/)).not.toBeInTheDocument());
+    auth.token = null;
+    rendered.rerender(
+      <I18nProvider initialLocale="en">
+        <NotificationCenter />
+      </I18nProvider>,
+    );
+    expect(screen.queryByText("You have no notifications.")).not.toBeInTheDocument();
+  });
+  /** 畸形页与未读数应报错而非显示零；不涉及真实凭据。 */
+  it("rejects malformed API results", async () => {
+    get.mockResolvedValueOnce({ items: null, total: 0 }).mockResolvedValueOnce({ count: -1 });
+    await expect(listNotifications("test", 0, 20)).rejects.toThrow();
+    await expect(unreadNotifications("test")).rejects.toThrow();
+  });
+  /** 未读数接口失败时显示未知状态，不能误提示没有未读消息；测试结束后由框架清理。 */
+  it("reports unavailable unread count instead of zero", async () => {
+    get.mockRejectedValue(new Error("offline"));
+    view("en", <NotificationBell />);
+    expect(await screen.findByRole("link", { name: "Notifications, unread count unavailable" })).toBeVisible();
+  });
+  /** 预算数据损坏时不展示未经验证的数值或用量链接，测试结束后由框架清理。 */
+  it("does not render invalid budget values", async () => {
+    get.mockResolvedValue({ items: [{ ...budget, data: { threshold: 80, spent: -10, limit: 500 } }], total: 1 });
+    view("en", <NotificationCenter />);
+    expect(await screen.findByText("This notification type is not supported yet.")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "View usage" })).not.toBeInTheDocument();
+  });
+  /** 服务器只接受偏移不超过 10000；验证边界、正常分页和总数结束，不创建外部数据。 */
+  it("honors the API offset cap when deciding whether to load the next page", () => {
+    expect(canLoadNextNotificationsPage(0, 21)).toBe(true);
+    expect(canLoadNextNotificationsPage(0, 20)).toBe(false);
+    expect(canLoadNextNotificationsPage(9980, 10021)).toBe(true);
+    expect(canLoadNextNotificationsPage(10000, 10021)).toBe(false);
+    expect(canLoadNextNotificationsPage(10000, 10020)).toBe(false);
+  });
+  /** 分页按钮应使用实际服务端的分页结果，并在最后一页禁用下一页；由测试框架清理。 */
+  it("loads the next page and stops at the end", async () => {
+    get.mockImplementation((_path: string, options: { query: { offset: number } }) =>
+      Promise.resolve({ items: [{ ...budget, id: `n${options.query.offset}` }], total: 21 }),
+    );
+    view("en", <NotificationCenter />);
+    await screen.findByText("Page 1");
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Page 2")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(get).toHaveBeenCalledWith("/notifications", expect.objectContaining({ query: { offset: 20, limit: 20 } }));
+  });
+});

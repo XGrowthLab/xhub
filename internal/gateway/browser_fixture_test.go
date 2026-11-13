@@ -310,6 +310,17 @@ func TestBrowserEnterpriseFixture(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/notifications/scan":
+			// 仅在已验证的隔离 E2E schema 调用生产扫描器，避免在浏览器测试中等待后台定时器。
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if err := db.ScanBudgetNotifications(r.Context()); err != nil {
+				http.Error(w, "notification scan failed", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		case "/saml/register":
 			if r.Method != http.MethodPost {
 				w.WriteHeader(http.StatusMethodNotAllowed)
