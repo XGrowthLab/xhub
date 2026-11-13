@@ -15,6 +15,11 @@ const marketKinds = ["added", "delisted", "restored", "price_changed", "price_in
 type MarketKind = (typeof marketKinds)[number];
 type MarketChange = { kind: MarketKind; model: string; previous: unknown; current: unknown };
 
+/** 返回来源报价的前后值；键仅用于查询翻译，缺失值交给展示函数处理。 */
+function marketPriceSides(change: MarketChange) {
+  return [["before", change.previous], ["after", change.current]] as const;
+}
+
 /** 从服务端事件提取可识别的模型变化；data 为个人消息数据，未知类型或畸形模型会被安全忽略。 */
 function marketChanges(data: Record<string, unknown>): MarketChange[] {
   if (!Array.isArray(data.changes)) return [];
@@ -34,7 +39,7 @@ function MarketChangeList({ items }: { items: MarketChange[] }) {
       {t(`notifications.marketKind.${change.kind}`)}: {change.model}
       {(change.kind === "price_changed" || change.kind === "price_information_changed") && <details className="mt-1 rounded-md bg-muted/40 p-2">
         <summary className="cursor-pointer text-primary">{t("notifications.marketPriceDetails")}</summary>
-        {([["before", change.previous], ["after", change.current]] as const).map(([side, value]) => {
+        {marketPriceSides(change).map(([side, value]) => {
           const price = priceText(value);
           return <div key={side} className="mt-2">
             <span>{t(`notifications.marketPrice.${side}`)}</span>
