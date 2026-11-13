@@ -251,6 +251,10 @@ func bindInitialMarketPrice(ctx context.Context, s Host, params, info map[string
 	}
 	row, ok := doc.Models[id]
 	if !ok {
+		// 人工维护的本地目录不属于市场快照，沿用已有计价目录的创建行为。
+		if _, exists := catalog.ModelRow(id); exists {
+			return nil
+		}
 		return errors.New("pricing model does not exist")
 	}
 	// 旧目录条目没有完整市场规则时，保留既有手工配置契约。

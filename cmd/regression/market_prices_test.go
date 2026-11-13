@@ -69,6 +69,10 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 		t.Fatalf("人工条目的来源与隐藏状态错误: %v", row)
 	}
 	h.ok("POST", "/price/model/listing", admin, map[string]any{"id": "manual-after-sync", "delisted": false})
+	// 来源快照形成以后新增的本地计价模型，仍能用于创建部署。
+	manualDeployment := h.ok("POST", "/model/new", admin, map[string]any{"model_name": "manual-catalog-test", "litellm_params": map[string]any{"model": "openai/manual-catalog-test", "api_base": h.credentialAPIBase(), "api_key": "sk-test"}, "model_info": map[string]any{"transport": "bypass_openai_chat", "endpoint_types": []string{"chat"}, "pricing_source": "catalog", "base_model": "manual-after-sync"}})
+	manualID := manualDeployment.json()["model_info"].(map[string]any)["id"].(string)
+	h.ok("POST", "/model/delete", admin, map[string]any{"id": manualID})
 	// 人工条目没有来源基线，不能用“恢复”删除；专用 schema 和目录快照在 cleanup 中回收。
 	if r := h.do("POST", "/price/model/reset", admin, map[string]any{"id": "manual-after-sync"}); r.status != 409 {
 		t.Fatal("人工条目被错误恢复为来源模型")
