@@ -21,6 +21,8 @@ export function watchGateway(page: Page) {
   // 从请求发出时就登记，避免断言结束后导航取消尚未收到响应的设置读取。
   page.on("request", (req) => { if (watchedUrl(req.url())) optional.begin(req); });
   page.on("requestfailed", (req) => optional.failed(req));
+  // 页面或子 frame 切换会取消对应旧请求；Chromium 某些取消路径不会派发 requestfailed。
+  page.on("framenavigated", (frame) => optional.navigation(frame));
   page.on("response", (res) => {
     const u = res.url();
     if (!watchedUrl(u)) return;
