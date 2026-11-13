@@ -7,7 +7,7 @@ import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./h
  * 用于隔离成功/失败分页数据，只操作页面控件，失败由断言抛出，数据由调用方清理。 */
 async function filterModel(page: Page, model: string): Promise<void> {
   await page.getByTestId("datatable-filters-trigger").click();
-  await page.getByPlaceholder(t("Enter public model or search tool…")).fill(model);
+  await page.getByRole("combobox", { name: t("Model"), exact: true }).fill(model);
   await page.getByTestId("filter-drawer-apply").click();
 }
 
@@ -71,6 +71,7 @@ test("日志分页完整流程：会话合并后翻页", async ({ page }) => {
         for (const row of [...first.data, ...last.data]) {
           expect(row.session_total_count).toBe(2);
           expect(row.session_total_tokens).toBeGreaterThan(0);
+          expect(row.session_total_prompt_tokens + row.session_total_completion_tokens).toBe(row.session_total_tokens);
           expect(row.session_total_spend).toBeGreaterThan(0);
         }
       }
@@ -97,6 +98,9 @@ test("日志分页完整流程：会话合并后翻页", async ({ page }) => {
       await expect(page.getByTestId("pagination-range")).toHaveText(paginationRange(1, total, total));
       await expect(page.getByTestId("pagination-first")).toBeDisabled();
       await expect(page.getByRole("row").filter({ hasText: model })).toHaveCount(total);
+      const sessionRow = first.data[0];
+      const sessionLine = page.getByRole("row").filter({ hasText: sessionRow.request_id });
+      await expect(sessionLine).toContainText(`${sessionRow.session_total_tokens}(${sessionRow.session_total_prompt_tokens}+${sessionRow.session_total_completion_tokens})`);
       await page.getByTestId("datatable-search").fill("pagination-missing-request");
       await expect(page.getByTestId("pagination-range")).toHaveText(t("consoleDirectory.pagination.empty"));
       await expect(page.getByTestId("pagination-next")).toBeDisabled();

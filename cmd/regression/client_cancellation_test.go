@@ -2,6 +2,7 @@ package regression
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,57 @@ import (
 
 	"github.com/sunqirui1987/xhub/internal/router"
 )
+
+// validateCancellationEvidence 验证真实断连日志中的分类和错误信封。
+// diagnostic 是已脱敏上游诊断，summary 是持久化错误摘要；返回错误供回归定位，不修改日志。
+func validateCancellationEvidence(diagnostic map[string]any, summary string, allowClientWrite bool) error {
+	failure, ok := diagnostic["failure"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("缺少中断诊断: %v", diagnostic)
+	}
+	// 真实断连可能先观察到写入失败；只在收到响应后的场景允许此更具体分类。
+	kind := failure["kind"]
+	validKind := kind == "request_canceled" || (allowClientWrite && kind == "client_write_error" && failure["phase"] == "client_write")
+	transport, _ := failure["transport_error"].(string)
+	if !validKind || failure["request_context_error"] != "context canceled" || failure["cancellation_source"] != "unknown" || strings.TrimSpace(transport) == "" {
+		return fmt.Errorf("取消证据缺失或擅自归因用户: %v", diagnostic)
+	}
+	var envelope struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+		UpstreamError json.RawMessage `json:"upstream_error"`
+	}
+	if strings.Contains(summary, "data:") || json.Unmarshal([]byte(summary), &envelope) != nil || envelope.Error.Type != failure["kind"] || string(envelope.UpstreamError) != "null" {
+		return fmt.Errorf("部分流被当成错误或虚构供应商错误: %s", summary)
+	}
+	return nil
+}
+
+// TestCancellationEvidenceValidation 验证两种断连事实及错误信封的正常和拒绝边界。
+// 纯内存构造诊断，覆盖未经观察的分类、上游错误和错误归因；参数 t 管理测试，无数据需要清理。
+func TestCancellationEvidenceValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, phase, ctx, source, transport, summary string
+		allow, valid                                       bool
+	}{
+		{"canceled", "request_canceled", "response_transfer", "context canceled", "unknown", "context canceled", `{"error":{"type":"request_canceled"},"upstream_error":null}`, false, true},
+		{"write failure", "client_write_error", "client_write", "context canceled", "unknown", "write failed", `{"error":{"type":"client_write_error"},"upstream_error":null}`, true, true},
+		{"before response", "client_write_error", "client_write", "context canceled", "unknown", "write failed", `{"error":{"type":"client_write_error"},"upstream_error":null}`, false, false},
+		{"wrong phase", "client_write_error", "upstream", "context canceled", "unknown", "write failed", `{"error":{"type":"client_write_error"},"upstream_error":null}`, true, false},
+		{"missing context", "client_write_error", "client_write", "", "unknown", "write failed", `{"error":{"type":"client_write_error"},"upstream_error":null}`, true, false},
+		{"attributed", "request_canceled", "response_transfer", "context canceled", "user", "context canceled", `{"error":{"type":"request_canceled"},"upstream_error":null}`, true, false},
+		{"fake upstream", "request_canceled", "response_transfer", "context canceled", "unknown", "context canceled", `{"error":{"type":"request_canceled"},"upstream_error":{"message":"invented"}}`, true, false},
+		{"wrong summary", "client_write_error", "client_write", "context canceled", "unknown", "write failed", `{"error":{"type":"request_canceled"},"upstream_error":null}`, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := map[string]any{"failure": map[string]any{"kind": tc.kind, "phase": tc.phase, "request_context_error": tc.ctx, "cancellation_source": tc.source, "transport_error": tc.transport}}
+			if err := validateCancellationEvidence(d, tc.summary, tc.allow); (err == nil) != tc.valid {
+				t.Fatalf("诊断校验结果错误: valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}
 
 // cancellationRows 读取指定模型的真实持久化用量行；用于取消/重试完成后的同步点，不将未入库当作零费用成功。
 func cancellationRows(t *testing.T, h *harness, admin, model string, want int) []map[string]any {
@@ -178,15 +230,13 @@ func TestClientCancellationDoesNotCoolDeployment(t *testing.T) {
 							cancelled++
 							detail := logDetail(t, h, a.session, stringField(row, "request_id"))
 							diagnostic := detail["metadata"].(map[string]any)["upstream_response"].(map[string]any)
-							failure, ok := diagnostic["failure"].(map[string]any)
-							if !ok || failure["kind"] != "request_canceled" || failure["request_context_error"] != "context canceled" || failure["cancellation_source"] != "unknown" || failure["transport_error"] == "" {
-								t.Fatalf("取消证据缺失或擅自归因用户: %v", diagnostic)
+							if err := validateCancellationEvidence(diagnostic, fmt.Sprint(detail["error"]), phase == "after_frame"); err != nil {
+								t.Fatal(err)
 							}
-							if strings.Contains(fmt.Sprint(detail["error"]), "data:") || !strings.Contains(fmt.Sprint(detail["error"]), `"upstream_error":null`) {
-								t.Fatalf("部分流被当成错误或虚构供应商错误: %v", detail["error"])
-							}
-							if !native && phase == "after_frame" {
+							failure := diagnostic["failure"].(map[string]any)
+							if !native && phase == "after_frame" && failure["kind"] == "request_canceled" {
 								// 正文现在独立存储，使用真实日志读取接口验证完整响应和到期规则。
+								// 客户端写失败时不能再写入合成终止事件，因此仅对实际生成取消事件的分支校验。
 								stored, err := h.db.GetRequestLog(t.Context(), stringField(row, "request_id"))
 								if err != nil {
 									t.Fatalf("取消后的真实流日志未保存: err=%v", err)

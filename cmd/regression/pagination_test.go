@@ -41,7 +41,7 @@ func TestLogsPaginationContract(t *testing.T) {
 				t.Fatalf("会话跨页重复: %s", id)
 			}
 			seen[id] = true
-			if firstFloat(row, "session_total_count") != 2 || firstFloat(row, "session_total_tokens") != 10 || firstFloat(row, "session_total_spend") != 0.2 {
+			if firstFloat(row, "session_total_count") != 2 || firstFloat(row, "session_total_tokens") != 10 || firstFloat(row, "session_total_prompt_tokens") != 6 || firstFloat(row, "session_total_completion_tokens") != 4 || firstFloat(row, "session_total_spend") != 0.2 {
 				t.Fatalf("会话完整汇总: %v", row)
 			}
 		}

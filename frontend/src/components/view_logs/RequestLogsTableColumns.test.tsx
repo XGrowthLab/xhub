@@ -128,6 +128,15 @@ describe("Tokens column", () => {
     expect(tokensCell).toHaveTextContent("10");
     expect(tokensCell).not.toHaveTextContent("session total");
   });
+
+  /** 前置旧服务只返回会话总数；验证不把缺失的输入、输出汇总伪装成零，自动清理 DOM。 */
+  it("omits the breakdown when an older backend only provides the session total", () => {
+    renderRows([logEntry({ ...sessionRow, session_total_tokens: 60 })]);
+    const tokensCell = screen.getByRole("cell", { name: /60.*session total/ });
+    expect(tokensCell).not.toHaveTextContent("(0+0)");
+    expect(tokensCell).not.toHaveTextContent("(7+3)");
+    expect(tokensCell).not.toHaveTextContent(/\(\d+\+\d+\)/);
+  });
 });
 
 describe("Type column", () => {

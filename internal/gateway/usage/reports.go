@@ -97,6 +97,8 @@ func LogsV2(s Host, w http.ResponseWriter, r *http.Request) {
 				row["session_llm_count"] = group.SessionCount
 				row["session_total_spend"] = group.SessionSpend
 				row["session_total_tokens"] = group.SessionTokens
+				row["session_total_prompt_tokens"] = group.SessionPromptTokens
+				row["session_total_completion_tokens"] = group.SessionCompletionTokens
 			}
 			rows = append(rows, row)
 		}

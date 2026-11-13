@@ -107,6 +107,7 @@ export function registerClientScenario(locale: Locale) {
       });
       expect(healthy.status(), await healthy.text()).toBe(200);
       expect((await healthy.json()).choices[0].message.content).toBe("HEALTHY_OK");
+      const observedKinds: string[] = [];
       for (const callID of calls) {
         expect(callID).toBeTruthy();
         await expect
@@ -114,11 +115,16 @@ export function registerClientScenario(locale: Locale) {
             const detail = await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers });
             if (!detail.ok()) return null;
             const row = await detail.json();
-            expect(JSON.parse(row.error)).toMatchObject({error:{type:"request_canceled"},upstream_error:null});
-            expect(row.metadata.upstream_response.failure).toMatchObject({kind:"request_canceled",cancellation_source:"unknown"});
-            return { status: row.status, spend: Number(row.spend) };
+            const failure = row.metadata.upstream_response.failure;
+            expect(["request_canceled", "client_write_error"]).toContain(failure.kind);
+            expect(failure).toMatchObject({request_context_error:"context canceled",cancellation_source:"unknown"});
+            if (failure.kind === "client_write_error") expect(failure.phase).toBe("client_write");
+            expect(JSON.parse(row.error)).toMatchObject({error:{type:failure.kind},upstream_error:null});
+            return { status: row.status, spend: Number(row.spend), kind: failure.kind };
           })
-          .toEqual({ status: "error", spend: 0 });
+          .toMatchObject({ status: "error", spend: 0 });
+        const recorded = await (await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers })).json();
+        observedKinds.push(recorded.metadata.upstream_response.failure.kind);
       }
       await stableGoto(page, "/logs");
       // 直接按已确认的失败请求查找；成功请求在独立 Redis 中可能尚未刷入，不作为进入错误页的前置条件。
@@ -128,7 +134,11 @@ export function registerClientScenario(locale: Locale) {
       await errorPanel.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(calls[0]);
       await errorPanel.getByRole("row").filter({hasText:calls[0]}).click();
       const diagnostic=page.getByRole("region",{name:tr("logDiagnostics.title")});
-      await expect(diagnostic).toContainText("request_canceled");
+      if (observedKinds[0] === "client_write_error") {
+        await expect(diagnostic).toContainText(tr("logDiagnostics.clientWriteError"));
+      } else {
+        await expect(diagnostic).toContainText("request_canceled");
+      }
       await expect(diagnostic).toContainText(tr("logDiagnostics.cancelUnknown"));
       await expect(diagnostic).toContainText(tr("logDiagnostics.noUpstreamError"));
       await page.keyboard.press("Escape");

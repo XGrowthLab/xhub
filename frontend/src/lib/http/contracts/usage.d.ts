@@ -304,7 +304,20 @@ export interface components {
             session_total_count?: number;
             session_llm_count?: number;
             session_spend?: number;
+            /** Format: double */
+            session_total_spend?: number;
+            /** Format: int64 */
             session_total_tokens?: number;
+            /**
+             * Format: int64
+             * @description 会话筛选范围内的输入 Token 合计 / Total input tokens in the filtered session
+             */
+            session_total_prompt_tokens?: number;
+            /**
+             * Format: int64
+             * @description 会话筛选范围内的输出 Token 合计 / Total output tokens in the filtered session
+             */
+            session_total_completion_tokens?: number;
             /**
              * @description 正文记录状态；历史日志可能缺少 / Body capture status; may be absent on older logs
              * @enum {string}
