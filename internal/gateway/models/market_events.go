@@ -13,6 +13,9 @@ import (
 // MarketEventNamespace 存放独立于站内信的待处理市场事件；后续投递方使用轮次 ID 去重。
 const MarketEventNamespace = "market_change_events"
 
+// marketEventTargetBytes 控制单条事件的通常大小；单条模型变化大于目标时完整保留，不裁剪报价。
+const marketEventTargetBytes = 256 << 10
+
 // MarketChange 表示一次来源目录的事实变化；价格仅为来源报价，不代表已部署模型的价格。
 type MarketChange struct {
 	Kind     string `json:"kind"`
@@ -129,6 +132,36 @@ func recordMarketChanges(ctx context.Context, tx *sql.Tx, id, stamp string, prio
 	if err != nil || len(changes) == 0 {
 		return err
 	}
-	event := MarketChangeEvent{ID: id, Time: stamp, Changes: changes}
-	return writeCatalogJSON(ctx, tx, MarketEventNamespace, id, event)
+	// 分片控制大量模型同时变化时的消息尺寸，稳定轮次加分片序号便于投递去重。
+	var chunks [][]MarketChange
+	var chunk []MarketChange
+	used := 256
+	for _, change := range changes {
+		raw, err := json.Marshal(change)
+		if err != nil {
+			return err
+		}
+		if len(chunk) > 0 && used+len(raw)+1 > marketEventTargetBytes {
+			chunks = append(chunks, chunk)
+			chunk = nil
+			used = 256
+		}
+		chunk = append(chunk, change)
+		used += len(raw) + 1
+	}
+	if len(chunk) > 0 {
+		chunks = append(chunks, chunk)
+	}
+	for index, items := range chunks {
+		key := fmt.Sprintf("%s:%d", id, index)
+		raw, err := json.Marshal(MarketChangeEvent{ID: key, Time: stamp, Changes: items})
+		if err != nil {
+			return err
+		}
+		// 事件一旦写入不得被同一键覆盖，消费方可安全地在事务外准备共享详情。
+		if _, err := tx.ExecContext(ctx, `INSERT INTO proxy_config(namespace,key,value_json) VALUES($1,$2,$3) ON CONFLICT(namespace,key) DO NOTHING`, MarketEventNamespace, key, string(raw)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

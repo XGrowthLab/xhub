@@ -78,6 +78,40 @@ func NotificationsUnread(g Gate, w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{"count": n})
 }
 
+// NotificationMarketDetail 分页返回当前平台管理员本人消息的原始市场事件；单页上限由身份库固定。
+// id 是消息 ID，offset 是字符偏移；重复或非法参数返回 400，撤权与跨用户统一 404。
+func NotificationMarketDetail(g Gate, w http.ResponseWriter, r *http.Request) {
+	p, ok := notificationUser(g, w, r)
+	if !ok {
+		return
+	}
+	values := r.URL.Query()
+	ids, offsets := values["id"], values["offset"]
+	if len(ids) != 1 || ids[0] == "" || len(ids[0]) > 128 || len(offsets) > 1 {
+		util.WriteError(w, 400, "invalid_request", "invalid notification detail query")
+		return
+	}
+	offset := 0
+	if len(offsets) == 1 {
+		var err error
+		offset, err = strconv.Atoi(offsets[0])
+		if err != nil || offset < 0 || offset > 1<<30 {
+			util.WriteError(w, 400, "invalid_request", "invalid notification detail query")
+			return
+		}
+	}
+	part, next, err := g.Identity().MarketNotificationDetail(r.Context(), p.UserID, ids[0], offset)
+	if err == iam.ErrNotFound {
+		util.WriteError(w, 404, "not_found", "notification not found")
+		return
+	}
+	if err != nil {
+		util.WriteError(w, 500, "internal", "notification detail unavailable")
+		return
+	}
+	util.WriteJSON(w, 200, map[string]any{"text": part, "next_offset": next})
+}
+
 // NotificationsRead 将会话自己的一条消息标记已读；重复调用幂等，越权与不存在均为 404。
 // JSON 只允许 id，限制请求大小；数据库错误返回 500，不修改其他用户的状态。
 func NotificationsRead(g Gate, w http.ResponseWriter, r *http.Request) {

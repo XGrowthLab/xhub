@@ -42,10 +42,19 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       await expect(page.getByText(`${tr("notifications.marketKind.price_changed")}: e2e-market-chat`).first()).toBeVisible();
       await expect(page.getByText(tr("notifications.marketPriceHelp")).first()).toBeVisible();
       await expect(page.getByRole("link", { name: tr("notifications.marketLink") }).first()).toHaveAttribute("href", "/ui/price-data");
-      const changedPrice = page.getByRole("listitem").filter({ hasText: `${tr("notifications.marketKind.price_changed")}: e2e-market-chat` }).first();
-      await changedPrice.getByText(tr("notifications.marketPriceDetails")).click();
-      await expect(changedPrice.getByText('"unit_price_usd": 2')).toBeVisible();
-      await expect(changedPrice.getByText('"unit_price_usd": 3')).toBeVisible();
+      const message = page.getByRole("listitem").filter({ hasText: `${tr("notifications.marketKind.added")}: ${newModel}`, has: page.getByRole("button", { name: tr("notifications.marketDetailsOpen") }) }).first();
+      const detailResponse = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith("/notifications/market-detail"));
+      await message.getByRole("button", { name: tr("notifications.marketDetailsOpen") }).click();
+      expect((await detailResponse).status()).toBe(200);
+      const detail = page.getByRole("region", { name: tr("notifications.marketDetailsOpen") });
+      await expect(detail).toContainText("current_price");
+      const next = detail.getByRole("button", { name: tr("notifications.next") });
+      await expect(next).toBeEnabled();
+      await next.click();
+      await expect(detail).toContainText(translate(locale, "notifications.page", { page: 2 }));
+      await expect(detail).toContainText("previous_price");
+      await detail.getByRole("button", { name: tr("notifications.previous") }).click();
+      await expect(detail).toContainText(translate(locale, "notifications.page", { page: 1 }));
       await login(page, email, password, locale);
       await expect(page.getByText(translate(locale, "nav.apiKeys")).first()).toBeVisible();
       const token = await sessionBearer(page);
@@ -53,6 +62,7 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       const list = await page.request.get(GATEWAY + "/notifications?limit=100", { headers: ordinary });
       expect((await list.json()).items.filter((item: { type: string }) => item.type === "market_update")).toHaveLength(0);
       expect((await page.request.post(GATEWAY + "/notifications/read", { headers: ordinary, data: { id: createdMessages[0].id } })).status()).toBe(404);
+      expect((await page.request.get(GATEWAY + "/notifications/market-detail?id=" + createdMessages[0].id + "&offset=0", { headers: ordinary })).status()).toBe(404);
     } finally {
       await setVariant(false);
       if (userID) expect((await page.request.post(GATEWAY + "/user/delete", { headers: admin, data: { user_id: userID } })).status()).toBe(200);

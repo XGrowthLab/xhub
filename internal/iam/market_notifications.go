@@ -25,7 +25,11 @@ func (db *DB) ScanMarketNotifications(ctx context.Context) error {
 	}
 	failures := 0
 	for _, item := range pending {
-		if err := db.deliverMarketEvent(ctx, item.ID); err != nil {
+		err := db.prepareMarketEvent(ctx, item.ID)
+		if err == nil {
+			err = db.deliverMarketEvent(ctx, item.ID)
+		}
+		if err != nil {
 			failures++
 			if ctx.Err() != nil {
 				break
@@ -43,25 +47,24 @@ func (db *DB) ScanMarketNotifications(ctx context.Context) error {
 	return nil
 }
 
-// deliverMarketEvent 锁定并验证一条待投递事件，id 来自服务端事件表，成功时原子生成所有消息并删除事件。
-// 当前没有活跃平台管理员、数据无效或数据库失败时回滚并返回错误，供调用方退避重试。
-func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
-	s := db.Engine.NewSession().Context(ctx)
-	defer s.Close()
-	if err := s.Begin(); err != nil {
+// prepareMarketEvent 在锁定用户之前验证并存储共享事件详情；id 来自内部发件箱。
+// 大事件写入不会持有管理员行锁，失败保留原事件供后续重试；无原事件时直接返回。
+func (db *DB) prepareMarketEvent(ctx context.Context, id string) error {
+	// 已准备的详情不可变；重试无需反复传输和写入可能很大的原始报价。
+	var prepared bool
+	if _, err := db.Engine.Context(ctx).SQL(`SELECT EXISTS(SELECT 1 FROM notification_market_events WHERE id=?)`, id).Get(&prepared); err != nil {
 		return err
 	}
-	defer s.Rollback()
-	if _, err := s.Exec(`SET LOCAL statement_timeout = '2s'`); err != nil {
-		return err
+	if prepared {
+		return nil
 	}
 	var raw string
-	found, err := s.SQL(`SELECT value_json FROM proxy_config WHERE namespace='market_change_events' AND key=? FOR UPDATE SKIP LOCKED`, id).Get(&raw)
+	found, err := db.Engine.Context(ctx).SQL(`SELECT value_json FROM proxy_config WHERE namespace='market_change_events' AND key=?`, id).Get(&raw)
 	if err != nil {
 		return err
 	}
 	if !found {
-		return s.Commit()
+		return nil
 	}
 	var event struct {
 		ID      string    `json:"id"`
@@ -71,11 +74,11 @@ func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
 			Model string `json:"model"`
 		} `json:"changes"`
 	}
-	if len(raw) > 8<<20 || json.Unmarshal([]byte(raw), &event) != nil || event.ID != id || event.Time.IsZero() || len(event.Changes) == 0 {
+	if json.Unmarshal([]byte(raw), &event) != nil || event.ID != id || event.Time.IsZero() || len(event.Changes) == 0 {
 		return fmt.Errorf("invalid market event")
 	}
 	for _, change := range event.Changes {
-		if change.Model == "" || len(change.Model) > 512 {
+		if change.Model == "" {
 			return fmt.Errorf("invalid market event model")
 		}
 		switch change.Kind {
@@ -83,6 +86,58 @@ func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
 		default:
 			return fmt.Errorf("invalid market event kind")
 		}
+	}
+	// 列表仅返回有界摘要，完整报价继续保存在共享表，按需分段读取。
+	summaryChanges := make([]map[string]string, 0, min(len(event.Changes), 20))
+	truncated := len(event.Changes) > 20
+	for _, change := range event.Changes {
+		if len(summaryChanges) == 20 {
+			break
+		}
+		name := []rune(change.Model)
+		if len(name) > 128 {
+			name = name[:128]
+			truncated = true
+		}
+		summaryChanges = append(summaryChanges, map[string]string{"kind": change.Kind, "model": string(name)})
+	}
+	summary, err := json.Marshal(map[string]any{"event_id": id, "changes": summaryChanges, "total_changes": len(event.Changes), "summary_truncated": truncated})
+	if err != nil {
+		return err
+	}
+	_, err = db.Engine.Context(ctx).Exec(`INSERT INTO notification_market_events(id,data,summary) VALUES(?,?::jsonb,?::jsonb) ON CONFLICT(id) DO NOTHING`, id, raw, string(summary))
+	return err
+}
+
+// deliverMarketEvent 锁定一条已准备的事件，id 来自服务端事件表，成功时原子生成所有消息并删除事件。
+// 当前没有活跃平台管理员或数据库失败时回滚并返回错误，供调用方退避重试。
+func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
+	// 为整个事务设置总期限，而非只限制单条 SQL；超时会回滚并释放用户锁。
+	ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	s := db.Engine.NewSession().Context(ctx)
+	defer s.Close()
+	if err := s.Begin(); err != nil {
+		return err
+	}
+	defer s.Rollback()
+	if _, err := s.Exec(`SET LOCAL statement_timeout = '500ms'`); err != nil {
+		return err
+	}
+	var locked string
+	found, err := s.SQL(`SELECT key FROM proxy_config WHERE namespace='market_change_events' AND key=? FOR UPDATE SKIP LOCKED`, id).Get(&locked)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return s.Commit()
+	}
+	var exists bool
+	if _, err := s.SQL(`SELECT EXISTS(SELECT 1 FROM notification_market_events WHERE id=?)`, id).Get(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("market event detail unavailable")
 	}
 	var expected int64
 	if _, err := s.SQL(`SELECT count(*) FROM users WHERE status='active' AND role='admin'`).Get(&expected); err != nil {
@@ -98,12 +153,19 @@ func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
 	if expected == 0 || int64(len(admins)) != expected {
 		return fmt.Errorf("platform administrator snapshot unavailable")
 	}
-	// 唯一键覆盖重启和重复扫描；只将来源事实写入站内信，不携带密钥或可执行链接。
+	// 每个变化事件的完整内容只准备一份；个人收件箱只存引用，避免人数乘以事件体积。
+	ids := make([]string, 0, len(admins))
 	for _, admin := range admins {
-		_, err = s.Exec(`INSERT INTO user_notifications(id,user_id,type,event_key,data) VALUES('market:' || md5(? || ':' || ?),?,'market_update','market:' || ?,?::jsonb) ON CONFLICT(user_id,event_key) DO NOTHING`, id, admin.ID, admin.ID, id, raw)
-		if err != nil {
-			return err
-		}
+		ids = append(ids, admin.ID)
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	// 单条批量 SQL 缩短锁定窗口；用户列表来自上面的已锁定快照，而非客户端。
+	_, err = s.Exec(`INSERT INTO user_notifications(id,user_id,type,event_key,data) SELECT 'market:' || md5(? || ':' || u.id),u.id,'market_update','market:' || ?,jsonb_build_object('event_id',?::text) FROM jsonb_array_elements_text(?::jsonb) AS u(id) ON CONFLICT(user_id,event_key) DO NOTHING`, id, id, id, string(encoded))
+	if err != nil {
+		return err
 	}
 	if _, err = s.Exec(`DELETE FROM proxy_config WHERE namespace='market_change_events' AND key=?`, id); err != nil {
 		return err
@@ -112,4 +174,28 @@ func (db *DB) deliverMarketEvent(ctx context.Context, id string) error {
 		return err
 	}
 	return s.Commit()
+}
+
+// MarketNotificationDetail 按字符分页读取当前管理员自己消息的共享原始详情，不接受事件 ID 或其他收件人。
+// userID 来自会话，id 为消息标识，offset 为字符偏移；每页最多 16384 个 Unicode 字符。
+// 不存在、跨账户、失效或撤权均返回 ErrNotFound；存储失败返回错误，供处理器区分。
+func (db *DB) MarketNotificationDetail(ctx context.Context, userID, id string, offset int) (string, *int, error) {
+	if userID == "" || id == "" || len(id) > 128 || offset < 0 || offset > 1<<30 {
+		return "", nil, ErrInvalid
+	}
+	const pageSize = 16384
+	var part string
+	found, err := db.Engine.Context(ctx).SQL(`SELECT substring(m.data::text FROM ?::integer FOR ?::integer) FROM user_notifications n JOIN notification_market_events m ON m.id=n.data->>'event_id' JOIN users u ON u.id=n.user_id WHERE n.id=? AND n.user_id=? AND n.type='market_update' AND u.status='active' AND u.role='admin'`, offset+1, pageSize+1, id, userID).Get(&part)
+	if err != nil {
+		return "", nil, err
+	}
+	if !found {
+		return "", nil, ErrNotFound
+	}
+	characters := []rune(part)
+	if len(characters) > pageSize {
+		next := offset + pageSize
+		return string(characters[:pageSize]), &next, nil
+	}
+	return part, nil, nil
 }

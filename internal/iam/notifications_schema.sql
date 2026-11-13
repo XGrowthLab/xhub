@@ -12,6 +12,15 @@ CREATE TABLE IF NOT EXISTS user_notifications (
 CREATE INDEX IF NOT EXISTS user_notifications_listing ON user_notifications (user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS user_notifications_unread ON user_notifications (user_id) WHERE read_at IS NULL;
 CREATE INDEX IF NOT EXISTS user_notifications_expiry ON user_notifications (created_at);
+-- 大型市场变化只保存一份详情；个人消息仅保存事件 ID，查询时按权限关联。
+CREATE TABLE IF NOT EXISTS notification_market_events (
+    id TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    summary JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE notification_market_events ADD COLUMN IF NOT EXISTS summary JSONB NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS notification_market_references ON user_notifications (type, ((data->>'event_id')));
 -- 租约在扫描事务之外持久化，避免扫描持锁期间额外占用连接池连接。
 CREATE TABLE IF NOT EXISTS notification_scan_lease (
     name TEXT PRIMARY KEY,

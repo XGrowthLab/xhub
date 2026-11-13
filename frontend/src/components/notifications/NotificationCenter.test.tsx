@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
 import { NotificationCenter, canLoadNextNotificationsPage } from "./NotificationCenter";
 import { NotificationBell } from "./NotificationBell";
@@ -42,7 +42,7 @@ describe("personal notifications", () => {
     ["en", "Model marketplace update", "Price changed: example-model", "View model marketplace"],
   ] as const)("renders market changes safely in %s", async (locale, title, change, link) => {
     get.mockResolvedValue({ items: [{ ...budget, type: "market_update", data: { changes: [
-      { kind: "price_changed", model: "example-model", previous_price: [{ usd: 1 }], current_price: [{ usd: 2 }], href: "https://invalid.example" },
+      { kind: "price_changed", model: "example-model", href: "https://invalid.example" },
       { kind: "unknown", model: "DO_NOT_SHOW" },
     ] } }], total: 1 });
     view(locale, <NotificationCenter />);
@@ -51,8 +51,44 @@ describe("personal notifications", () => {
     expect(screen.queryByText("DO_NOT_SHOW")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: link })).toHaveAttribute("href", "/ui/price-data");
     expect(document.querySelector('a[href="https://invalid.example"]')).toBeNull();
-    expect(screen.getByText(/"usd": 1/)).toBeInTheDocument();
-    expect(screen.getByText(/"usd": 2/)).toBeInTheDocument();
+    expect(get.mock.calls.some(([path]) => path === "/notifications/market-detail")).toBe(false);
+  });
+  /** 完整报价仅在点击后分段获取；分页、受限摘要、失败重试均有可见状态，不拼接保留所有页。 */
+  it("loads market details only on demand, one page at a time and retries failures", async () => {
+    let fail = true;
+    get.mockImplementation((path: string, options: { query: { offset: number } }) => {
+      if (path !== "/notifications/market-detail") return Promise.resolve({ items: [{ ...budget, type: "market_update", data: { changes: [{ kind: "price_changed", model: "example" }], total_changes: 3, summary_truncated: true } }], total: 1 });
+      if (fail) { fail = false; return Promise.reject(new Error("unauthorized")); }
+      return Promise.resolve(options.query.offset === 0 ? { text: '"previous_price": 1', next_offset: 19 } : { text: '"current_price": 2 <img src=x onerror=alert(1)>', next_offset: null });
+    });
+    view("en", <NotificationCenter />);
+    expect(await screen.findByText("This sync found 3 changes:")).toBeVisible();
+    expect(screen.getByText("Only some changes are shown here. View all details page by page.")).toBeVisible();
+    expect(get.mock.calls.some(([path]) => path === "/notifications/market-detail")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "View full changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load details");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText('"previous_price": 1')).toBeVisible();
+    const details = screen.getByRole("region", { name: "View full changes" });
+    fireEvent.click(within(details).getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/"current_price": 2/)).toBeVisible();
+    expect(details.querySelector("img")).toBeNull();
+    expect(screen.queryByText('"previous_price": 1')).not.toBeInTheDocument();
+    fireEvent.click(within(details).getByRole("button", { name: "Previous" }));
+    expect(await screen.findByText('"previous_price": 1')).toBeVisible();
+  });
+  /** 切换账户时旧详情响应被中止且不得再次展示，避免跨账号读取内存中的原始报价。 */
+  it("discards market detail responses after account change", async () => {
+    let finish!: (value: unknown) => void;
+    const delayed = new Promise((resolve) => { finish = resolve; });
+    get.mockImplementation((path: string, options: { accessToken: string }) => path === "/notifications/market-detail" ? delayed : Promise.resolve(options.accessToken === "session-a" ? { items: [{ ...budget, type: "market_update", data: { changes: [{ kind: "added", model: "m" }] } }], total: 1 } : { items: [], total: 0 }));
+    const rendered = view("en", <NotificationCenter />);
+    fireEvent.click(await screen.findByRole("button", { name: "View full changes" }));
+    auth.token = "b";
+    rendered.rerender(<I18nProvider initialLocale="en"><NotificationCenter /></I18nProvider>);
+    expect(await screen.findByText("You have no notifications.")).toBeVisible();
+    finish({ text: "OLD_PRIVATE_PRICE", next_offset: null });
+    await waitFor(() => expect(screen.queryByText("OLD_PRIVATE_PRICE")).not.toBeInTheDocument());
   });
   /** 过长的变化列表显示有限条目并提供剩余数量，空数据不得伪造已完成更新。 */
   it("limits market change previews and rejects malformed changes", async () => {

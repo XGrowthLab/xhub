@@ -232,6 +232,9 @@ class Handler(BaseHTTPRequestHandler):
                         "input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 3 if Handler.market_variant and model_id == "e2e-market-chat" else 2, "unit_price": 21 if Handler.market_variant and model_id == "e2e-market-chat" else 14},
                         "output": {"name": "文本输出", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 6, "unit_price": 42}}}],
                     "support_api_protocols": ["openai"]})
+                if Handler.market_variant and model_id == "e2e-market-chat":
+                    # 较长但有效的来源价格规则，用于验证详情跨页时不会一次性返回整个事件。
+                    rows[-1]["pricing_rules_v2"][0]["details_v2"]["input"]["e2e_padding"] = "x" * 20000
             self._json({"status": True, "data": rows})
             return
         if self._ark() or self._fal():

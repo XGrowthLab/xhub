@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
 import { uiHref } from "@/utils/uiHref";
-import { listNotifications, markNotificationRead, type NotificationEntry, type NotificationPage } from "./api";
+import { getMarketNotificationDetail, listNotifications, markNotificationRead, type NotificationEntry, type NotificationPage } from "./api";
 import { useNotificationSession } from "./session";
 
 const PAGE_SIZE = 20;
@@ -13,54 +13,69 @@ const MAX_OFFSET = 10000;
 const MARKET_ITEMS_LIMIT = 8;
 const marketKinds = ["added", "delisted", "restored", "price_changed", "price_information_changed"] as const;
 type MarketKind = (typeof marketKinds)[number];
-type MarketChange = { kind: MarketKind; model: string; previous: unknown; current: unknown };
-
-/** 返回来源报价的前后值；键仅用于查询翻译，缺失值交给展示函数处理。 */
-function marketPriceSides(change: MarketChange) {
-  return [["before", change.previous], ["after", change.current]] as const;
-}
+type MarketChange = { kind: MarketKind; model: string };
+type NotificationSession = { scope: symbol; accessToken: string; userId: string };
 
 /** 从服务端事件提取可识别的模型变化；data 为个人消息数据，未知类型或畸形模型会被安全忽略。 */
 function marketChanges(data: Record<string, unknown>): MarketChange[] {
   if (!Array.isArray(data.changes)) return [];
   return data.changes.flatMap((change: unknown) => {
     if (!change || typeof change !== "object" || Array.isArray(change)) return [];
-    const { kind, model, previous_price: previous, current_price: current } = change as Record<string, unknown>;
+    const { kind, model } = change as Record<string, unknown>;
     if (typeof kind !== "string" || !marketKinds.includes(kind as MarketKind) || typeof model !== "string" || !model.trim()) return [];
-    return [{ kind: kind as MarketKind, model, previous, current }];
+    return [{ kind: kind as MarketKind, model }];
   });
 }
 
-/** 按可信类型显示来源变化；items 是已验证事件项，报价以可折叠的只读原始规则提供。 */
+/** 按可信类型显示来源变化；items 是已验证事件摘要，不读取或呈现完整报价。 */
 function MarketChangeList({ items }: { items: MarketChange[] }) {
   const { t } = useI18n();
   return <ul className="space-y-1 text-sm text-muted-foreground">
     {items.map((change, index) => <li key={`${change.kind}-${change.model}-${index}`} className="break-all">
       {t(`notifications.marketKind.${change.kind}`)}: {change.model}
-      {(change.kind === "price_changed" || change.kind === "price_information_changed") && <details className="mt-1 rounded-md bg-muted/40 p-2">
-        <summary className="cursor-pointer text-primary">{t("notifications.marketPriceDetails")}</summary>
-        {marketPriceSides(change).map(([side, value]) => {
-          const price = priceText(value);
-          return <div key={side} className="mt-2">
-            <span>{t(`notifications.marketPrice.${side}`)}</span>
-            {price ? <><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all">{price.text}</pre>{price.truncated && <span>{t("notifications.marketPriceTruncated")}</span>}</> : <span> {t("notifications.marketPriceUnknown")}</span>}
-          </div>;
-        })}
-      </details>}
     </li>)}
   </ul>;
 }
 
-/** 对来源原始价格生成有限长度的只读文本；缺失返回空，防止超长内容影响消息列表。 */
-function priceText(value: unknown): { text: string; truncated: boolean } | null {
-  if (value == null) return null;
-  try {
-    const text = JSON.stringify(value, null, 2);
-    if (!text) return null;
-    return { text: text.slice(0, 4000), truncated: text.length > 4000 };
-  } catch {
-    return null;
-  }
+/** 按需分段显示消息所属的原始变化；id 为消息 ID，换会话和卸载时中断请求并隐藏旧内容。 */
+function MarketEventDetails({ id, session }: { id: string; session: NotificationSession }) {
+  const { t } = useI18n();
+  const controller = useRef<AbortController | null>(null);
+  const [state, setState] = useState<{
+    scope: symbol; text: string; offsets: number[]; index: number; next: number | null;
+    loading: boolean; error: boolean; retryOffset: number; retryIndex: number;
+  } | null>(null);
+  useEffect(() => () => controller.current?.abort(), [session.scope, id]);
+  const current = state?.scope === session.scope ? state : null;
+  /** 加载指定页，仅保留当前片段；状态绑定会话且较晚返回的旧请求不能覆盖新结果。 */
+  const load = async (offset: number, offsets: number[], index: number) => {
+    controller.current?.abort();
+    const active = new AbortController();
+    controller.current = active;
+    setState({ scope: session.scope, text: "", offsets, index, next: null, loading: true, error: false, retryOffset: offset, retryIndex: index });
+    try {
+      const result = await getMarketNotificationDetail(session.accessToken, id, offset, active.signal);
+      if (!active.signal.aborted) setState({ scope: session.scope, text: result.text, offsets, index, next: result.next_offset, loading: false, error: false, retryOffset: offset, retryIndex: index });
+    } catch {
+      if (!active.signal.aborted) setState({ scope: session.scope, text: "", offsets, index, next: null, loading: false, error: true, retryOffset: offset, retryIndex: index });
+    }
+  };
+  if (!current) return <Button variant="outline" size="sm" onClick={() => void load(0, [0], 0)}>{t("notifications.marketDetailsOpen")}</Button>;
+  return <section className="space-y-2 rounded-md bg-muted/40 p-3" aria-label={t("notifications.marketDetailsOpen")}>
+    <p className="text-sm text-muted-foreground">{t("notifications.marketDetailsHelp")}</p>
+    {current.loading && <p role="status">{t("notifications.marketDetailsLoading")}</p>}
+    {current.error && <div role="alert"><p>{t("notifications.marketDetailsFailed")}</p><Button variant="outline" size="sm" onClick={() => void load(current.retryOffset, current.offsets, current.retryIndex)}>{t("notifications.retry")}</Button></div>}
+    {!current.loading && !current.error && <>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{current.text}</pre>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" disabled={current.index === 0} onClick={() => void load(current.offsets[current.index - 1], current.offsets, current.index - 1)}>{t("notifications.previous")}</Button>
+        <span>{t("notifications.page", { page: current.index + 1 })}</span>
+        <Button variant="outline" size="sm" disabled={current.next === null} onClick={() => {
+          if (current.next !== null) void load(current.next, [...current.offsets.slice(0, current.index + 1), current.next], current.index + 1);
+        }}>{t("notifications.next")}</Button>
+      </div>
+    </>}
+  </section>;
 }
 
 /** 判断是否能请求下一页；offset 为当前起点、total 为服务端总数，兼顾接口最大偏移限制。 */
@@ -94,14 +109,18 @@ function NotificationRow({
   item,
   busy,
   onRead,
+  session,
 }: {
   item: NotificationEntry;
   busy: boolean;
   onRead: (id: string) => void;
+  session: NotificationSession;
 }) {
   const { t, locale } = useI18n();
   const snapshot = item.type === "budget_threshold" ? budgetSnapshot(item.data) : null;
   const changes = item.type === "market_update" ? marketChanges(item.data) : [];
+  const totalChanges = Number.isSafeInteger(item.data.total_changes) && Number(item.data.total_changes) >= changes.length ? Number(item.data.total_changes) : changes.length;
+  const market = item.type === "market_update" && Array.isArray(item.data.changes) && totalChanges > 0;
   const money = (value: number) =>
     new Intl.NumberFormat(locale, { style: "currency", currency: "USD", maximumFractionDigits: 12 }).format(value);
   const date = new Date(item.created_at);
@@ -113,7 +132,7 @@ function NotificationRow({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
           <div className="flex items-center gap-2">
-            <h2 className="font-semibold">{snapshot ? t("notifications.budgetTitle") : changes.length ? t("notifications.marketTitle") : t("notifications.unknown")}</h2>
+            <h2 className="font-semibold">{snapshot ? t("notifications.budgetTitle") : market ? t("notifications.marketTitle") : t("notifications.unknown")}</h2>
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs">
               {t(item.read ? "notifications.read" : "notifications.unread")}
             </span>
@@ -136,15 +155,17 @@ function NotificationRow({
               <p className="text-sm text-muted-foreground">{t("notifications.samplingHelp")}</p>
             </>
           )}
-          {changes.length > 0 && (
+          {market && (
             <>
-              <p>{t("notifications.marketSummary", { count: changes.length })}</p>
+              <p>{t("notifications.marketSummary", { count: totalChanges })}</p>
               <MarketChangeList items={changes.slice(0, MARKET_ITEMS_LIMIT)} />
               {changes.length > MARKET_ITEMS_LIMIT && <details className="text-sm text-muted-foreground">
                 <summary className="cursor-pointer text-primary">{t("notifications.marketMore", { count: changes.length - MARKET_ITEMS_LIMIT })}</summary>
                 <MarketChangeList items={changes.slice(MARKET_ITEMS_LIMIT)} />
               </details>}
               <p className="text-sm text-muted-foreground">{t("notifications.marketPriceHelp")}</p>
+              {item.data.summary_truncated === true && <p className="text-sm text-muted-foreground">{t("notifications.marketSummaryTruncated")}</p>}
+              <MarketEventDetails id={item.id} session={session} />
             </>
           )}
           <p className="text-xs text-muted-foreground">{t("notifications.createdAt", { time })}</p>
@@ -155,7 +176,7 @@ function NotificationRow({
               {t("notifications.usage")}
             </Link>
           )}
-          {changes.length > 0 && (
+          {market && (
             <Link href={uiHref("price-data")} className="rounded-md px-3 py-2 text-sm text-primary hover:underline">
               {t("notifications.marketLink")}
             </Link>
@@ -252,6 +273,7 @@ export function NotificationCenter() {
                   item={item}
                   busy={pending?.scope === session.scope && pending.id === item.id}
                   onRead={(id) => void read(id)}
+                  session={session}
                 />
               ))}
             </ul>

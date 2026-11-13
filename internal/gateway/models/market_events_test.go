@@ -2,9 +2,11 @@ package models
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sunqirui1987/xhub/internal/catalog"
@@ -35,6 +37,49 @@ func TestDiffMarketChanges(t *testing.T) {
 	}
 	if got[2].Previous == nil || got[2].Current == nil {
 		t.Fatal("价格变化缺少新旧来源报价")
+	}
+}
+
+// TestMarketEventChunksPreserveAllChanges 使用隔离 PostgreSQL 验证大批变化分片与超长模型 ID 完整保存。
+// 每个价格包含大于目标大小的规则，单条不能裁剪；专用 schema 由 openPriceStore 清理。
+func TestMarketEventChunksPreserveAllChanges(t *testing.T) {
+	h := &priceHost{store: openPriceStore(t), allow: true}
+	ctx := context.Background()
+	if _, err := h.store.DB.Exec(`INSERT INTO proxy_config(namespace,key,value_json) VALUES($1,'catalog','{}')`, marketSnapshotNS); err != nil {
+		t.Fatal(err)
+	}
+	prior := catalog.PriceDocument{Models: map[string]map[string]any{}}
+	current := catalog.PriceDocument{Models: map[string]map[string]any{}}
+	longID := strings.Repeat("m", 1024)
+	for _, id := range []string{longID, "model-b", "model-c"} {
+		prior.Models[id] = map[string]any{"market_catalog": true, "pricing_rules_v2": []any{map[string]any{"price": 1}}}
+		current.Models[id] = map[string]any{"market_catalog": true, "pricing_rules_v2": []any{map[string]any{"price": 2, "detail": strings.Repeat("x", 300<<10)}}}
+	}
+	if err := h.store.MarketTransaction(ctx, func(tx *sql.Tx) error {
+		return recordMarketChanges(ctx, tx, "chunk-run", "2026-11-13T00:00:00Z", prior, current)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := h.store.ListConfig(MarketEventNamespace)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("大事件未按模型分片: %d %v", len(events), err)
+	}
+	ids := map[string]bool{}
+	for _, raw := range events {
+		event := raw.(map[string]any)
+		changes := event["changes"].([]any)
+		if len(changes) != 1 {
+			t.Fatalf("分片内容不完整: %#v", event["id"])
+		}
+		change := changes[0].(map[string]any)
+		ids[change["model"].(string)] = true
+		price := change["current_price"].([]any)[0].(map[string]any)
+		if len(price["detail"].(string)) != 300<<10 {
+			t.Fatal("单条大报价被裁剪")
+		}
+	}
+	if len(ids) != 3 || !ids[longID] {
+		t.Fatal("分片丢失模型或超长 ID")
 	}
 }
 

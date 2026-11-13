@@ -210,7 +210,7 @@ func (db *DB) ListNotifications(ctx context.Context, userID string, limit, offse
 		return nil, 0, ErrInvalid
 	}
 	var rows []Notification
-	if err := db.Engine.Context(ctx).SQL(`SELECT n.id,n.type,n.created_at,(n.read_at IS NOT NULL) AS is_read,n.data::text AS data_raw FROM user_notifications n WHERE n.user_id=? AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin')) ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`, userID, limit, offset).Find(&rows); err != nil {
+	if err := db.Engine.Context(ctx).SQL(`SELECT n.id,n.type,n.created_at,(n.read_at IS NOT NULL) AS is_read,(CASE WHEN n.type='market_update' THEN m.summary ELSE n.data END)::text AS data_raw FROM user_notifications n LEFT JOIN notification_market_events m ON n.type='market_update' AND m.id=n.data->>'event_id' WHERE n.user_id=? AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin')) ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`, userID, limit, offset).Find(&rows); err != nil {
 		return nil, 0, err
 	}
 	for i := range rows {
@@ -266,5 +266,18 @@ func (db *DB) CleanExpiredNotifications(ctx context.Context, cutoff time.Time, l
 		return ErrInvalid
 	}
 	_, err := db.Engine.Context(ctx).Exec(`DELETE FROM user_notifications WHERE id IN (SELECT id FROM user_notifications WHERE created_at < ? ORDER BY created_at LIMIT ?)`, cutoff.UTC(), limit)
+	if err != nil {
+		return err
+	}
+	// 消息过期或用户删除后才移除共享内容；按引用判断，避免影响仍可读取的消息。
+	var hasConfig bool
+	if _, err = db.Engine.Context(ctx).SQL(`SELECT to_regclass('proxy_config') IS NOT NULL`).Get(&hasConfig); err != nil {
+		return err
+	}
+	if hasConfig {
+		_, err = db.Engine.Context(ctx).Exec(`DELETE FROM notification_market_events WHERE id IN (SELECT m.id FROM notification_market_events m WHERE NOT EXISTS (SELECT 1 FROM user_notifications n WHERE n.type='market_update' AND n.data->>'event_id'=m.id) AND NOT EXISTS (SELECT 1 FROM proxy_config p WHERE p.namespace='market_change_events' AND p.key=m.id) LIMIT ?)`, limit)
+	} else {
+		_, err = db.Engine.Context(ctx).Exec(`DELETE FROM notification_market_events WHERE id IN (SELECT m.id FROM notification_market_events m WHERE NOT EXISTS (SELECT 1 FROM user_notifications n WHERE n.type='market_update' AND n.data->>'event_id'=m.id) LIMIT ?)`, limit)
+	}
 	return err
 }
