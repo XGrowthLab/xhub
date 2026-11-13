@@ -448,7 +448,9 @@ export interface components {
             window: string;
             source_key: string;
             label?: string;
+            /** Format: double */
             usd: number;
+            /** Format: double */
             unit_size: number;
             fallback?: boolean;
         } & {

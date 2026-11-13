@@ -1333,10 +1333,12 @@
     },
     "usd": {
       "type": "number",
-      "minimum": 0
+      "minimum": 0,
+      "format": "double"
     },
     "unit_size": {
-      "type": "number"
+      "type": "number",
+      "format": "double"
     },
     "fallback": {
       "type": "boolean"

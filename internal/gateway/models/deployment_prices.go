@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
@@ -83,7 +84,8 @@ func pricePreview(dep config.ModelEntry, doc catalog.PriceDocument) deploymentPr
 		}
 	}
 	p.Changed = p.Reason == "" && !samePrices(p.Current, p.Proposed)
-	p.Version = priceVersion(dep, p.Current, p.Proposed, p.Reason)
+	// 版本只包含影响价格决策的非敏感字段；不把 API Key 等凭据送入可见摘要。
+	p.Version = priceVersion(p.ID, p.Name, p.Base, p.Manual, dep.ParamString("model", ""), dep.ParamString("custom_llm_provider", ""), dep.ParamString("litellm_credential_name", ""), dep.ModelInfo["transport"], dep.ModelInfo["endpoint_types"], p.Current, p.Proposed, p.Reason)
 	return p
 }
 
@@ -138,6 +140,7 @@ func DeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 }
 
 var errPriceConflict = errors.New("price or deployment changed; reload preview")
+var errMarketRead = errors.New("market catalog unavailable")
 
 // ApplyDeploymentPrices 在管理员确认后原子应用选定价格；body 仅接受 ID 和预览版本，绝不信任客户端金额。
 // 输入宿主和 HTTP 请求，返回更新数量；任何冲突/不可用条目使整批回滚，权限预算和其他部署字段不变。
@@ -167,18 +170,27 @@ func ApplyDeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 503, "unavailable", "model store unavailable")
 		return
 	}
-	s.LockModels()
-	defer s.UnlockModels()
+	// 先等待市场事务锁，再拿模型锁，避免慢来源阻塞推理；保留模型锁直到事务提交和内存更新。
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	locked := false
+	defer func() {
+		if locked {
+			s.UnlockModels()
+		}
+	}()
 	changed := map[string]config.ModelEntry{}
-	err := s.RecordStore().MarketTransaction(r.Context(), func(tx *sql.Tx) error {
-		doc, err := marketDocument(r.Context(), tx)
+	err := s.RecordStore().MarketTransaction(ctx, func(tx *sql.Tx) error {
+		s.LockModels()
+		locked = true
+		doc, err := marketDocument(ctx, tx)
 		if err != nil {
 			return err
 		}
 		sort.Slice(body.Items, func(i, j int) bool { return body.Items[i].ID < body.Items[j].ID })
 		for _, item := range body.Items {
 			var name, paramsRaw, infoRaw string
-			err = tx.QueryRowContext(r.Context(), `SELECT model_name,litellm_params_json,model_info_json FROM proxy_models WHERE id=$1 FOR UPDATE`, item.ID).Scan(&name, &paramsRaw, &infoRaw)
+			err = tx.QueryRowContext(ctx, `SELECT model_name,litellm_params_json,model_info_json FROM proxy_models WHERE id=$1 FOR UPDATE`, item.ID).Scan(&name, &paramsRaw, &infoRaw)
 			if errors.Is(err, sql.ErrNoRows) {
 				return errPriceConflict
 			}
@@ -213,7 +225,7 @@ func ApplyDeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 			dep.ModelInfo["market_price_revision"] = priceVersion(preview.Proposed)
 			params, _ := json.Marshal(dep.LiteLLMParams)
 			info, _ := json.Marshal(dep.ModelInfo)
-			if _, err = tx.ExecContext(r.Context(), `UPDATE proxy_models SET litellm_params_json=$1, model_info_json=$2,updated_at=$3 WHERE id=$4`, string(params), string(info), time.Now().UTC().Format(time.RFC3339), item.ID); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE proxy_models SET litellm_params_json=$1, model_info_json=$2,updated_at=$3 WHERE id=$4`, string(params), string(info), time.Now().UTC().Format(time.RFC3339), item.ID); err != nil {
 				return err
 			}
 			changed[item.ID] = dep
@@ -247,7 +259,7 @@ func bindInitialMarketPrice(ctx context.Context, s Host, params, info map[string
 	}
 	doc, err := readMarket(ctx, s)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errMarketRead, err)
 	}
 	row, ok := doc.Models[id]
 	if !ok {
@@ -259,7 +271,10 @@ func bindInitialMarketPrice(ctx context.Context, s Host, params, info map[string
 	}
 	// 旧目录条目没有完整市场规则时，保留既有手工配置契约。
 	if row["pricing_rules_v2"] == nil {
-		return nil
+		if _, exists := catalog.ModelRow(id); exists {
+			return nil
+		}
+		return errors.New("market pricing requires manual configuration")
 	}
 	rates, reason := catalog.MarketRates(row)
 	if reason != "" {

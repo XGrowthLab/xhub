@@ -19,11 +19,11 @@ New supported catalog-priced deployments capture the latest market rates. Existi
 Existing administrator session permissions apply; ordinary users and virtual keys cannot apply prices.
 
 - `GET /price/catalog`: source metadata, delisting, local overrides and complete `pricing_rules_v2`.
-- `POST /reload/model_cost_map`: sync market data now.
+- `POST /reload/model_cost_map`: sync market data now; source failure returns 502.
 - `GET /schedule/model_cost_map_reload/status`: schedule, last attempt, last success and error status.
-- `POST /schedule/model_cost_map_reload?hours=24` or `DELETE /schedule/model_cost_map_reload`: save or disable scheduling.
-- `GET /price/deployments`: current/proposed rates, differences, unsupported reason and version.
-- `POST /price/deployments/apply`: confirm 1–500 deployments. Invalid input returns 400, unauthorized access 401/403, conflicts 409 and storage failures 500.
+- `POST /schedule/model_cost_map_reload?hours=24` or `DELETE /schedule/model_cost_map_reload`: save or disable scheduling; the interval must be 1–168 hours.
+- `GET /price/deployments`: current/proposed rates, differences, unsupported reason and version; unavailable storage returns 503.
+- `POST /price/deployments/apply`: confirm 1–500 deployments. Invalid input returns 400, unauthorized access 401/403, conflicts, missing or ineligible deployments 409, storage failures 500 and unavailable storage 503.
 
 ~~~json
 {"items":[{"id":"deployment-id","version":"preview-version"}]}
@@ -40,7 +40,7 @@ Existing administrator session permissions apply; ordinary users and virtual key
 | Confirmed deployment rates | `proxy_models.litellm_params_json.rates` |
 | Schedule and sync status | `model_cost_map/reload` |
 
-No existing tables are migrated or deleted. The first successful sync freezes the existing baseline; future syncs do not replace it. Local models, providers and visibility settings are retained. The default source is `https://api.modelink.ai/v1/market/models`; `XHUB_PRICE_FEED_URL` can select a mirror. A transaction lock serializes syncing, schedule changes and price confirmation.
+No existing tables are migrated or deleted. The first successful sync freezes the existing baseline; future syncs do not replace it. Local models, providers and visibility settings are retained. The default source is `https://api.modelink.ai/v1/market/models`; `XHUB_PRICE_FEED_URL` can select a mirror. Sync fetches run outside database transactions. Short transactions use unique attempt identifiers to discard stale results; schedule changes and price confirmation do not wait for the upstream request. Price confirmation waits at most five seconds for the transaction lock without holding the inference model lock.
 
 Disable scheduling before rolling back to an older binary, which may automatically replace the accepted billing baseline. Confirmed rates use the existing `rates` format. This change adds no inbox and changes no authorization, budget rules or coverage threshold.
 

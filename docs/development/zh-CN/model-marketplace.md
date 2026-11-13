@@ -19,11 +19,11 @@
 均使用现有管理员会话权限；普通用户或虚拟密钥不能调价。
 
 - `GET /price/catalog`：完整来源资料、下架标记、本地人工覆盖；`pricing_rules_v2` 保留来源完整规则。
-- `POST /reload/model_cost_map`：立即同步资料。
+- `POST /reload/model_cost_map`：立即同步资料；来源失败返回 502。
 - `GET /schedule/model_cost_map_reload/status`：计划、上次尝试/成功时间和失败状态。
-- `POST /schedule/model_cost_map_reload?hours=24` / `DELETE /schedule/model_cost_map_reload`：保存/关闭计划。
-- `GET /price/deployments`：当前价、候选、是否改变、不可应用原因和版本。
-- `POST /price/deployments/apply`：确认单个或一批，最多 500 个；无效输入 400、越权 401/403、版本冲突 409、存储失败 500。
+- `POST /schedule/model_cost_map_reload?hours=24` / `DELETE /schedule/model_cost_map_reload`：保存/关闭计划；间隔为 1–168 小时。
+- `GET /price/deployments`：当前价、候选、是否改变、不可应用原因和版本；存储不可用返回 503。
+- `POST /price/deployments/apply`：确认单个或一批，最多 500 个；无效输入 400、越权 401/403、版本冲突、部署不存在或不可应用均为 409，存储失败 500，存储不可用 503。
 
 ~~~json
 {"items":[{"id":"deployment-id","version":"preview-version"}]}
@@ -40,7 +40,7 @@
 | 已确认部署费率 | `proxy_models.litellm_params_json.rates` |
 | 同步计划和状态 | `model_cost_map/reload` |
 
-不迁移或删除旧表。首次成功同步固化旧基线，之后不再自动覆盖；已有人工目录、供应商和隐藏状态保留。默认源为 `https://api.modelink.ai/v1/market/models`，可用 `XHUB_PRICE_FEED_URL` 指定镜像。数据库事务锁串行同步、取消计划和调价，防止慢来源覆盖新结果。
+不迁移或删除旧表。首次成功同步固化旧基线，之后不再自动覆盖；已有人工目录、供应商和隐藏状态保留。默认源为 `https://api.modelink.ai/v1/market/models`，可用 `XHUB_PRICE_FEED_URL` 指定镜像。同步在事务外请求上游；短事务按唯一轮次核验结果，防止慢来源覆盖新结果，计划变更和调价不必等待上游响应。调价等待事务锁最多五秒，期间不占推理模型锁。
 
 回滚到旧程序之前应关闭同步计划：旧程序仍可能自动替换旧计费基线。已确认部署费率采用已有 `rates` 格式，账单仍保留原快照。本次不增加站内信、不更改权限、预算或覆盖率门禁。
 

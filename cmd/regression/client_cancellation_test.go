@@ -179,7 +179,9 @@ func TestClientCancellationDoesNotCoolDeployment(t *testing.T) {
 							detail := logDetail(t, h, a.session, stringField(row, "request_id"))
 							diagnostic := detail["metadata"].(map[string]any)["upstream_response"].(map[string]any)
 							failure, ok := diagnostic["failure"].(map[string]any)
-							if !ok || failure["kind"] != "request_canceled" || failure["request_context_error"] != "context canceled" || failure["cancellation_source"] != "unknown" || failure["transport_error"] == "" {
+							// 断连可先被读取路径或写客户端路径观察到；后者必须明确处于写出阶段且上下文已取消。
+							validKind := failure["kind"] == "request_canceled" || (phase == "after_frame" && failure["kind"] == "client_write_error" && failure["phase"] == "client_write")
+							if !ok || !validKind || failure["request_context_error"] != "context canceled" || failure["cancellation_source"] != "unknown" || failure["transport_error"] == "" {
 								t.Fatalf("取消证据缺失或擅自归因用户: %v", diagnostic)
 							}
 							if strings.Contains(fmt.Sprint(detail["error"]), "data:") || !strings.Contains(fmt.Sprint(detail["error"]), `"upstream_error":null`) {

@@ -102,15 +102,55 @@ func refreshLocalCatalog(ctx context.Context, s Host) (int, error) {
 	return refreshCatalog(ctx, s, false)
 }
 
-// refreshCatalog 在数据库锁内复核到期时间、抓取来源并保存市场快照和同步状态。
-// scheduled 为真时跳过其他实例已完成的轮次；失败保留目录并记录可见错误，一小时后重试。
+// refreshCatalog 在事务外抓取来源，再在短事务内复核计划和新旧顺序并保存快照。
+// scheduled 为真时跳过已取消或其他实例已完成的轮次；失败保留目录，一小时后重试。
 func refreshCatalog(ctx context.Context, s Host, scheduled bool) (int, error) {
 	if s.RecordStore() == nil {
 		return 0, fmt.Errorf("local catalog store unavailable")
 	}
-	var count int
-	var fetchErr error
+	// 事务内登记唯一轮次，比机器本地时间更可靠；较晚启动的同步取代在途旧轮次。
+	attemptID := util.CallID()
+	reserved := false
 	err := s.RecordStore().MarketTransaction(ctx, func(tx *sql.Tx) error {
+		if scheduled {
+			plan, err := readCostReload(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if !plan.Scheduled || plan.NextRun == nil {
+				return nil
+			}
+			due, err := time.Parse(time.RFC3339, *plan.NextRun)
+			if err != nil || time.Now().Before(due) {
+				return nil
+			}
+		}
+		reserved = true
+		return writeCatalogJSON(ctx, tx, marketSnapshotNS, "active_attempt", map[string]string{"id": attemptID})
+	})
+	if err != nil || !reserved {
+		return 0, err
+	}
+	// 外部 I/O 不占事务连接或市场锁；提交时重新核对，旧的慢响应不能覆盖新结果。
+	fetchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	doc, fetchErr := catalog.FetchMarket(fetchCtx, priceFeedURL())
+	cancel()
+	var count int
+	err = s.RecordStore().MarketTransaction(ctx, func(tx *sql.Tx) error {
+		var attemptRaw string
+		if err := tx.QueryRowContext(ctx, `SELECT value_json FROM proxy_config WHERE namespace=$1 AND key='active_attempt'`, marketSnapshotNS).Scan(&attemptRaw); err != nil {
+			return err
+		}
+		var current struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(attemptRaw), &current); err != nil {
+			return err
+		}
+		if current.ID != attemptID {
+			fetchErr = nil // 较新的轮次已开始，不能用旧响应覆盖它。
+			return nil
+		}
 		plan, err := readCostReload(ctx, tx)
 		if err != nil {
 			return err
@@ -124,12 +164,7 @@ func refreshCatalog(ctx context.Context, s Host, scheduled bool) (int, error) {
 				return nil
 			}
 		}
-		// 在数据库锁内拉取，避免较慢的旧响应覆盖新快照；超时由调用方限制。
-		var doc catalog.PriceDocument
-		fetchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		doc, fetchErr = catalog.FetchMarket(fetchCtx, priceFeedURL())
-		cancel()
-		stamp := time.Now().UTC().Format(time.RFC3339)
+		stamp := time.Now().UTC().Format(time.RFC3339Nano)
 		plan.LastAttempt = &stamp
 		if fetchErr != nil {
 			plan.LastError = "market_fetch_failed"

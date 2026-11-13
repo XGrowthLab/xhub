@@ -2,6 +2,7 @@
 package models
 
 import (
+	"errors"
 	"maps"
 	"net/http"
 	"strings"
@@ -99,7 +100,7 @@ func New(s Host, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bindInitialMarketPrice(r.Context(), s, params, info); err != nil {
-		util.WriteError(w, 400, "invalid_request", err.Error())
+		writeMarketPriceError(w, err)
 		return
 	}
 	if err := validateDeployment(s, name, params, info); err != nil {
@@ -173,6 +174,7 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 	m.LiteLLMParams = maps.Clone(m.LiteLLMParams)
 
 	m.ModelInfo = maps.Clone(m.ModelInfo)
+	previousSource, previousBase := str(m.ModelInfo["pricing_source"]), str(m.ModelInfo["base_model"])
 	if v := str(body["model_name"]); v != "" {
 		m.ModelName = v
 	}
@@ -180,9 +182,14 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 		if m.LiteLLMParams == nil {
 			m.LiteLLMParams = map[string]any{}
 		}
+		if rates, provided := params["rates"]; provided && rates != nil {
+			// 显式替换费率后不再沿用旧市场确认标记。
+			delete(m.ModelInfo, "market_price_revision")
+			delete(m.ModelInfo, "market_price_confirmed_at")
+		}
 		for k, v := range params {
 			// 目录模式表单会省略费率；已有确认快照不得因编辑说明等字段退回旧目录。
-			if k == "rates" && v == nil && m.ModelInfo["market_price_revision"] != nil {
+			if k == "rates" && v == nil && m.ModelInfo["market_price_revision"] != nil && previousSource != "manual" {
 				incoming, _ := body["model_info"].(map[string]any)
 				if (incoming["pricing_source"] == nil || incoming["pricing_source"] == "catalog") && (incoming["base_model"] == nil || incoming["base_model"] == m.ModelInfo["base_model"]) {
 					continue
@@ -200,6 +207,25 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 		}
 		for k, v := range info {
 			m.ModelInfo[k] = v
+		}
+	}
+	newSource, newBase := str(m.ModelInfo["pricing_source"]), str(m.ModelInfo["base_model"])
+	if newSource == "manual" || newSource != previousSource || newBase != previousBase {
+		delete(m.ModelInfo, "market_price_revision")
+		delete(m.ModelInfo, "market_price_confirmed_at")
+	}
+	if newSource == "catalog" && (newSource != previousSource || newBase != previousBase) {
+		// 切换计价来源或基准时不能保留旧模型或手工费率；重新绑定可完整计费的目录快照。
+		if m.LiteLLMParams == nil {
+			m.LiteLLMParams = map[string]any{}
+		}
+		delete(m.LiteLLMParams, "rates")
+		for _, field := range rateFields {
+			delete(m.LiteLLMParams, field)
+		}
+		if err := bindInitialMarketPrice(r.Context(), s, m.LiteLLMParams, m.ModelInfo); err != nil {
+			writeMarketPriceError(w, err)
+			return
 		}
 	}
 	if disabled, ok := body["disabled"].(bool); ok {
@@ -245,6 +271,15 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 	}
 	*s.ModelTable() = directory
 	util.WriteJSON(w, 200, Public(m))
+}
+
+// writeMarketPriceError 将市场读取故障与无效配置区分；管理接口调用，不向客户端泄露数据库细节。
+func writeMarketPriceError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errMarketRead) {
+		util.WriteError(w, 500, "internal", "market catalog unavailable")
+		return
+	}
+	util.WriteError(w, 400, "invalid_request", err.Error())
 }
 
 // Delete 删除数据库部署，并在同一事务中移除默认权重、历史路由组和客户模板里的悬空部署引用。

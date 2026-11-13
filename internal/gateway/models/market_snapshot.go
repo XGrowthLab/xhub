@@ -20,7 +20,14 @@ type catalogReader interface {
 // marketDocument 读取独立市场快照；没有快照时返回已接受的目录，供离线首次启动使用。
 // ctx 控制读取，db 为数据库或事务；错误向调用方传播，不把读取失败伪装成空市场。
 func marketDocument(ctx context.Context, db catalogReader) (catalog.PriceDocument, error) {
-	doc := catalog.PriceDocument{Version: 1, Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt(), Models: catalog.CostMap(), Providers: catalog.Providers()}
+	// 首次同步只用来源基线，不能把管理员手工价格或新增模型固化成来源数据。
+	baseline := make(map[string]map[string]any)
+	for id := range catalog.CostMap() {
+		if row, ok := catalog.BaselineModel(id); ok {
+			baseline[id] = row
+		}
+	}
+	doc := catalog.PriceDocument{Version: 1, Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt(), Models: baseline, Providers: catalog.Providers()}
 	if db == nil {
 		return doc, nil
 	}

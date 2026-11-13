@@ -75,7 +75,8 @@ func TestLocalCatalogRefreshPersistence(t *testing.T) {
 		t.Fatal("失败源未返回错误")
 	}
 	after, _ := h.store.ListConfig(marketSnapshotNS)
-	if !reflect.DeepEqual(saved, after) {
+	// 失败会更新同步轮次，但不得改变已发布的市场目录。
+	if !reflect.DeepEqual(saved["catalog"], after["catalog"]) {
 		t.Fatal("失败源污染快照")
 	}
 }

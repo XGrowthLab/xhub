@@ -114,6 +114,16 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 	if got := parseFloatOrZero(call("market-first").header("x-litellm-response-cost")); got != newCost {
 		t.Fatalf("编辑清除了已确认价格: %v -> %v", newCost, got)
 	}
+	// 在同一基准模型上从目录切为手工价，再切回目录；不能误沿用手工费率。
+	h.ok("POST", "/model/update", admin, map[string]any{"id": ids[0], "litellm_params": map[string]any{"rates": []catalog.Rate{{Measure: "token", UnitSize: 1, Side: "input", Variant: "uncached", Window: "all", USD: .00002}, {Measure: "token", UnitSize: 1, Side: "output", Window: "all", USD: .00003}}}, "model_info": map[string]any{"pricing_source": "manual", "base_model": base}})
+	manualCost := parseFloatOrZero(call("market-first").header("x-litellm-response-cost"))
+	if manualCost <= newCost {
+		t.Fatalf("手工价格未生效: %v", manualCost)
+	}
+	h.ok("POST", "/model/update", admin, map[string]any{"id": ids[0], "litellm_params": map[string]any{"rates": nil, "input_cost_per_token": nil, "output_cost_per_token": nil}, "model_info": map[string]any{"pricing_source": "catalog", "base_model": base}})
+	if got := parseFloatOrZero(call("market-first").header("x-litellm-response-cost")); got == manualCost || got == 0 {
+		t.Fatalf("切回目录价仍按手工价或未定价: %v", got)
+	}
 	if newCost <= oldCost {
 		t.Fatalf("确认调价未改变实际计费: %v -> %v", oldCost, newCost)
 	}
@@ -154,6 +164,11 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 	}
 	if got := parseFloatOrZero(call("market-first").header("x-litellm-response-cost")); got <= newCost {
 		t.Fatal("来源下架影响已部署计费")
+	}
+	// 新来源模型只在市场快照中；编辑基准后必须绑定可计费快照而不是返回零费率。
+	h.ok("POST", "/model/update", admin, map[string]any{"id": ids[0], "litellm_params": map[string]any{"rates": nil}, "model_info": map[string]any{"pricing_source": "catalog", "base_model": "replacement-model"}})
+	if got := parseFloatOrZero(call("market-first").header("x-litellm-response-cost")); got <= 0 {
+		t.Fatal("切换市场专有模型后未绑定可计费价格")
 	}
 	for _, p := range preview() {
 		if p["base_model"] == base && p["reason"] != "delisted" {

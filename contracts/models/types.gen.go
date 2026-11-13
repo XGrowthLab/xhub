@@ -169,8 +169,8 @@ type DeploymentPriceRate struct {
 	Measure              string                 `json:"measure"`
 	Side                 string                 `json:"side"`
 	SourceKey            string                 `json:"source_key"`
-	UnitSize             float32                `json:"unit_size"`
-	Usd                  float32                `json:"usd"`
+	UnitSize             float64                `json:"unit_size"`
+	Usd                  float64                `json:"usd"`
 	Variant              *string                `json:"variant,omitempty"`
 	Window               string                 `json:"window"`
 	AdditionalProperties map[string]interface{} `json:"-"`
