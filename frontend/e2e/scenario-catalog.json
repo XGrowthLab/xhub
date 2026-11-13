@@ -3571,14 +3571,14 @@
   {
     "id": "REG-notifications-en",
     "file": "e2e/scenarios/regression/notifications-en.test.ts",
-    "title": "personal budget notifications and user isolation en",
+    "title": "personal budget notifications are private en",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "REG-notifications-zh-CN",
     "file": "e2e/scenarios/regression/notifications-zh-CN.test.ts",
-    "title": "personal budget notifications and user isolation zh-CN",
+    "title": "personal budget notifications are private zh-CN",
     "kind": "implemented",
     "environment": "default offline"
   }

@@ -1,6 +1,33 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const Reporter = require('./checklist-reporter.cjs');
+/** 目的：校验预算消息双语场景实际注册标题与清单一致；Playwright 只列出测试、不启动服务，
+ * 前置本地测试依赖，验证真实注册、失败不算通过及错误标题被拒绝，不产生测试数据。 */
+test('personal budget notification registration matches the actual Playwright tests', () => {
+  const {spawnSync} = require('node:child_process');
+  const path = require('node:path');
+  const {evaluateScenarios} = require('./scenario-coverage.cjs');
+  const catalog = require('./scenario-catalog.json');
+  const root = path.resolve(__dirname, '..');
+  const files = ['en', 'zh-CN'].map(locale => `e2e/scenarios/regression/notifications-${locale}.test.ts`);
+  const run = spawnSync(process.execPath,
+    [path.join(root, 'node_modules/@playwright/test/cli.js'), 'test', '--list', '--reporter=json', ...files],
+    {cwd: root, encoding: 'utf8', timeout: 30000, maxBuffer: 2 * 1024 * 1024});
+  assert.equal(run.status, 0, `无法列出预算消息测试：${run.stderr || run.error || ''}`);
+  const listed = JSON.parse(run.stdout);
+  const results = listed.suites.flatMap(suite => suite.specs.map(spec => ({
+    file: `e2e/${suite.file}`, title: spec.title, status: 'passed',
+  })));
+  assert.equal(results.length, 2, '双语预算消息场景必须各注册一次');
+  assert.deepEqual(new Set(results.map(row => row.file)), new Set(files));
+  let report = evaluateScenarios(catalog, results);
+  assert.deepEqual(report.unregistered, []);
+  assert.equal(report.passed, 2);
+  report = evaluateScenarios(catalog, [{...results[0], status: 'failed'}, results[1]]);
+  assert.equal(report.passed, 1, '失败场景不能算通过');
+  report = evaluateScenarios(catalog, [{...results[0], title: results[0].title + '-wrong'}]);
+  assert.equal(report.unregistered.length, 1, '标题不一致不能被视为已登记');
+});
 /** 目的：个人正文记录的双语与普通用户场景各有独立清单入口；验证文件、标题和数量，只读无需清理。 */
 test('个人正文记录场景全部登记且文件存在', () => {
   const fs = require('node:fs');
