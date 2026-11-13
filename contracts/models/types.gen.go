@@ -39,6 +39,16 @@ const (
 	DeletedDeploymentDeletedTrue DeletedDeploymentDeleted = true
 )
 
+// Defines values for DeploymentPricePreviewReason.
+const (
+	ConfigModel        DeploymentPricePreviewReason = "config_model"
+	Delisted           DeploymentPricePreviewReason = "delisted"
+	Empty              DeploymentPricePreviewReason = ""
+	IncompletePricing  DeploymentPricePreviewReason = "incomplete_pricing"
+	Unmapped           DeploymentPricePreviewReason = "unmapped"
+	UnsupportedPricing DeploymentPricePreviewReason = "unsupported_pricing"
+)
+
 // Defines values for ProtocolProbeResultProtocol.
 const (
 	AnthropicMessages ProtocolProbeResultProtocol = "anthropic-messages"
@@ -155,6 +165,63 @@ type DeploymentList struct {
 	Size        int             `json:"size"`
 	TotalCount  int             `json:"total_count"`
 	TotalPages  int             `json:"total_pages"`
+}
+
+// DeploymentPriceList defines model for DeploymentPriceList.
+type DeploymentPriceList struct {
+	Deployments          []DeploymentPricePreview `json:"deployments"`
+	GeneratedAt          string                   `json:"generated_at"`
+	AdditionalProperties map[string]interface{}   `json:"-"`
+}
+
+// DeploymentPricePreview defines model for DeploymentPricePreview.
+type DeploymentPricePreview struct {
+	BaseModel            string                       `json:"base_model"`
+	Changed              bool                         `json:"changed"`
+	Current              *[]DeploymentPriceRate       `json:"current"`
+	Id                   string                       `json:"id"`
+	Manual               bool                         `json:"manual"`
+	Name                 string                       `json:"name"`
+	Proposed             *[]DeploymentPriceRate       `json:"proposed"`
+	Reason               DeploymentPricePreviewReason `json:"reason"`
+	Version              string                       `json:"version"`
+	AdditionalProperties map[string]interface{}       `json:"-"`
+}
+
+// DeploymentPricePreviewReason defines model for DeploymentPricePreview.Reason.
+type DeploymentPricePreviewReason string
+
+// DeploymentPriceRate defines model for DeploymentPriceRate.
+type DeploymentPriceRate struct {
+	Fallback             *bool                  `json:"fallback,omitempty"`
+	Label                *string                `json:"label,omitempty"`
+	Measure              string                 `json:"measure"`
+	Side                 string                 `json:"side"`
+	SourceKey            string                 `json:"source_key"`
+	UnitSize             float64                `json:"unit_size"`
+	Usd                  float64                `json:"usd"`
+	Variant              *string                `json:"variant,omitempty"`
+	Window               string                 `json:"window"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// DeploymentPriceResult defines model for DeploymentPriceResult.
+type DeploymentPriceResult struct {
+	Updated              int                    `json:"updated"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// DeploymentPriceSelection defines model for DeploymentPriceSelection.
+type DeploymentPriceSelection struct {
+	Items                []DeploymentPriceSelection_Items_Item `json:"items"`
+	AdditionalProperties map[string]interface{}                `json:"-"`
+}
+
+// DeploymentPriceSelection_Items_Item defines model for DeploymentPriceSelection.items.Item.
+type DeploymentPriceSelection_Items_Item struct {
+	Id                   string                 `json:"id"`
+	Version              string                 `json:"version"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // DeploymentRow defines model for DeploymentRow.
@@ -389,6 +456,9 @@ type UpdateDeploymentJSONRequestBody = UpdateDeployment
 // PatchDeploymentJSONRequestBody defines body for PatchDeployment for application/json ContentType.
 type PatchDeploymentJSONRequestBody = UpdateDeployment
 
+// ApplyDeploymentPricesJSONRequestBody defines body for ApplyDeploymentPrices for application/json ContentType.
+type ApplyDeploymentPricesJSONRequestBody = DeploymentPriceSelection
+
 // Getter for additional properties for DetectDeploymentProtocolsJSONBody. Returns the specified
 // element and whether it was found
 func (a DetectDeploymentProtocolsJSONBody) Get(fieldName string) (value interface{}, found bool) {
@@ -444,6 +514,642 @@ func (a DetectDeploymentProtocolsJSONBody) MarshalJSON() ([]byte, error) {
 	object["id"], err = json.Marshal(a.Id)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceList. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceList) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceList
+func (a *DeploymentPriceList) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceList to handle AdditionalProperties
+func (a *DeploymentPriceList) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["deployments"]; found {
+		err = json.Unmarshal(raw, &a.Deployments)
+		if err != nil {
+			return fmt.Errorf("error reading 'deployments': %w", err)
+		}
+		delete(object, "deployments")
+	}
+
+	if raw, found := object["generated_at"]; found {
+		err = json.Unmarshal(raw, &a.GeneratedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'generated_at': %w", err)
+		}
+		delete(object, "generated_at")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceList to handle AdditionalProperties
+func (a DeploymentPriceList) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["deployments"], err = json.Marshal(a.Deployments)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'deployments': %w", err)
+	}
+
+	object["generated_at"], err = json.Marshal(a.GeneratedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'generated_at': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPricePreview. Returns the specified
+// element and whether it was found
+func (a DeploymentPricePreview) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPricePreview
+func (a *DeploymentPricePreview) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPricePreview to handle AdditionalProperties
+func (a *DeploymentPricePreview) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["base_model"]; found {
+		err = json.Unmarshal(raw, &a.BaseModel)
+		if err != nil {
+			return fmt.Errorf("error reading 'base_model': %w", err)
+		}
+		delete(object, "base_model")
+	}
+
+	if raw, found := object["changed"]; found {
+		err = json.Unmarshal(raw, &a.Changed)
+		if err != nil {
+			return fmt.Errorf("error reading 'changed': %w", err)
+		}
+		delete(object, "changed")
+	}
+
+	if raw, found := object["current"]; found {
+		err = json.Unmarshal(raw, &a.Current)
+		if err != nil {
+			return fmt.Errorf("error reading 'current': %w", err)
+		}
+		delete(object, "current")
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["manual"]; found {
+		err = json.Unmarshal(raw, &a.Manual)
+		if err != nil {
+			return fmt.Errorf("error reading 'manual': %w", err)
+		}
+		delete(object, "manual")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if raw, found := object["proposed"]; found {
+		err = json.Unmarshal(raw, &a.Proposed)
+		if err != nil {
+			return fmt.Errorf("error reading 'proposed': %w", err)
+		}
+		delete(object, "proposed")
+	}
+
+	if raw, found := object["reason"]; found {
+		err = json.Unmarshal(raw, &a.Reason)
+		if err != nil {
+			return fmt.Errorf("error reading 'reason': %w", err)
+		}
+		delete(object, "reason")
+	}
+
+	if raw, found := object["version"]; found {
+		err = json.Unmarshal(raw, &a.Version)
+		if err != nil {
+			return fmt.Errorf("error reading 'version': %w", err)
+		}
+		delete(object, "version")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPricePreview to handle AdditionalProperties
+func (a DeploymentPricePreview) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["base_model"], err = json.Marshal(a.BaseModel)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'base_model': %w", err)
+	}
+
+	object["changed"], err = json.Marshal(a.Changed)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'changed': %w", err)
+	}
+
+	object["current"], err = json.Marshal(a.Current)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'current': %w", err)
+	}
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["manual"], err = json.Marshal(a.Manual)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'manual': %w", err)
+	}
+
+	object["name"], err = json.Marshal(a.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	object["proposed"], err = json.Marshal(a.Proposed)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'proposed': %w", err)
+	}
+
+	object["reason"], err = json.Marshal(a.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'reason': %w", err)
+	}
+
+	object["version"], err = json.Marshal(a.Version)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'version': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceRate. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceRate) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceRate
+func (a *DeploymentPriceRate) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceRate to handle AdditionalProperties
+func (a *DeploymentPriceRate) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["fallback"]; found {
+		err = json.Unmarshal(raw, &a.Fallback)
+		if err != nil {
+			return fmt.Errorf("error reading 'fallback': %w", err)
+		}
+		delete(object, "fallback")
+	}
+
+	if raw, found := object["label"]; found {
+		err = json.Unmarshal(raw, &a.Label)
+		if err != nil {
+			return fmt.Errorf("error reading 'label': %w", err)
+		}
+		delete(object, "label")
+	}
+
+	if raw, found := object["measure"]; found {
+		err = json.Unmarshal(raw, &a.Measure)
+		if err != nil {
+			return fmt.Errorf("error reading 'measure': %w", err)
+		}
+		delete(object, "measure")
+	}
+
+	if raw, found := object["side"]; found {
+		err = json.Unmarshal(raw, &a.Side)
+		if err != nil {
+			return fmt.Errorf("error reading 'side': %w", err)
+		}
+		delete(object, "side")
+	}
+
+	if raw, found := object["source_key"]; found {
+		err = json.Unmarshal(raw, &a.SourceKey)
+		if err != nil {
+			return fmt.Errorf("error reading 'source_key': %w", err)
+		}
+		delete(object, "source_key")
+	}
+
+	if raw, found := object["unit_size"]; found {
+		err = json.Unmarshal(raw, &a.UnitSize)
+		if err != nil {
+			return fmt.Errorf("error reading 'unit_size': %w", err)
+		}
+		delete(object, "unit_size")
+	}
+
+	if raw, found := object["usd"]; found {
+		err = json.Unmarshal(raw, &a.Usd)
+		if err != nil {
+			return fmt.Errorf("error reading 'usd': %w", err)
+		}
+		delete(object, "usd")
+	}
+
+	if raw, found := object["variant"]; found {
+		err = json.Unmarshal(raw, &a.Variant)
+		if err != nil {
+			return fmt.Errorf("error reading 'variant': %w", err)
+		}
+		delete(object, "variant")
+	}
+
+	if raw, found := object["window"]; found {
+		err = json.Unmarshal(raw, &a.Window)
+		if err != nil {
+			return fmt.Errorf("error reading 'window': %w", err)
+		}
+		delete(object, "window")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceRate to handle AdditionalProperties
+func (a DeploymentPriceRate) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Fallback != nil {
+		object["fallback"], err = json.Marshal(a.Fallback)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'fallback': %w", err)
+		}
+	}
+
+	if a.Label != nil {
+		object["label"], err = json.Marshal(a.Label)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'label': %w", err)
+		}
+	}
+
+	object["measure"], err = json.Marshal(a.Measure)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'measure': %w", err)
+	}
+
+	object["side"], err = json.Marshal(a.Side)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'side': %w", err)
+	}
+
+	object["source_key"], err = json.Marshal(a.SourceKey)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source_key': %w", err)
+	}
+
+	object["unit_size"], err = json.Marshal(a.UnitSize)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'unit_size': %w", err)
+	}
+
+	object["usd"], err = json.Marshal(a.Usd)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'usd': %w", err)
+	}
+
+	if a.Variant != nil {
+		object["variant"], err = json.Marshal(a.Variant)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'variant': %w", err)
+		}
+	}
+
+	object["window"], err = json.Marshal(a.Window)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'window': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceResult. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceResult) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceResult
+func (a *DeploymentPriceResult) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceResult to handle AdditionalProperties
+func (a *DeploymentPriceResult) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["updated"]; found {
+		err = json.Unmarshal(raw, &a.Updated)
+		if err != nil {
+			return fmt.Errorf("error reading 'updated': %w", err)
+		}
+		delete(object, "updated")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceResult to handle AdditionalProperties
+func (a DeploymentPriceResult) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["updated"], err = json.Marshal(a.Updated)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'updated': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceSelection. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceSelection) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceSelection
+func (a *DeploymentPriceSelection) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceSelection to handle AdditionalProperties
+func (a *DeploymentPriceSelection) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["items"]; found {
+		err = json.Unmarshal(raw, &a.Items)
+		if err != nil {
+			return fmt.Errorf("error reading 'items': %w", err)
+		}
+		delete(object, "items")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceSelection to handle AdditionalProperties
+func (a DeploymentPriceSelection) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["items"], err = json.Marshal(a.Items)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'items': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceSelection_Items_Item. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceSelection_Items_Item) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceSelection_Items_Item
+func (a *DeploymentPriceSelection_Items_Item) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceSelection_Items_Item to handle AdditionalProperties
+func (a *DeploymentPriceSelection_Items_Item) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["version"]; found {
+		err = json.Unmarshal(raw, &a.Version)
+		if err != nil {
+			return fmt.Errorf("error reading 'version': %w", err)
+		}
+		delete(object, "version")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceSelection_Items_Item to handle AdditionalProperties
+func (a DeploymentPriceSelection_Items_Item) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["version"], err = json.Marshal(a.Version)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'version': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

@@ -1,4 +1,5 @@
 "use client";
+import { useT } from "@/i18n";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -16,48 +17,48 @@ export function LocalModelList({
   onDetail: (row: PriceCatalogRow) => void;
   onListing: (row: PriceCatalogRow, delisted: boolean) => void;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const visible = rows.filter(
     (row) =>
       [row.id, row.displayName, row.provider].join(" ").toLowerCase().includes(query.trim().toLowerCase()) &&
-      (status === "all" || (status === "down" ? !!row.raw.delisted : !row.raw.delisted)),
+      (status === "all" ||
+        (status === "down"
+          ? !!row.raw.delisted || !!row.raw.feed_unavailable
+          : !row.raw.delisted && !row.raw.feed_unavailable)),
   );
   return (
-    <section aria-label="本地模型列表" className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        本地保存模型资料与完整价格。下架只隐藏广场展示，保留记录与已配置的调用接口；同步后保留上下架设置。
-      </p>
+    <section aria-label={t("marketSync.local")} className="space-y-4">
+      <p className="text-sm text-muted-foreground">{t("marketSync.archiveHelp")}</p>
       <div className="flex gap-3">
         <Input
-          aria-label="搜索本地模型"
-          placeholder="搜索名称、ID 或供应商"
+          aria-label={t("marketSync.searchLocal")}
+          placeholder={t("marketSync.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         <select
           className="rounded border bg-background px-3"
-          aria-label="本地模型状态"
+          aria-label={t("marketSync.localStatus")}
           value={status}
           onChange={(e) => setStatus(e.target.value)}
         >
-          <option value="all">全部</option>
-          <option value="up">未下架</option>
-          <option value="down">已下架</option>
+          <option value="all">{t("marketSync.all")}</option>
+          <option value="up">{t("marketSync.up")}</option>
+          <option value="down">{t("marketSync.down")}</option>
         </select>
       </div>
-      <p role="status">
-        本地共 {rows.length} 个模型，当前匹配 {visible.length} 个
-      </p>
+      <p role="status">{t("marketSync.localCount", { total: rows.length, count: visible.length })}</p>
       <div className="overflow-x-auto rounded-xl border">
         <table className="w-full text-left text-sm">
-          <caption className="sr-only">本地模型档案</caption>
+          <caption className="sr-only">{t("marketSync.localCaption")}</caption>
           <thead>
             <tr className="border-b bg-muted/40">
-              <th className="p-3">模型</th>
-              <th className="p-3">供应商</th>
-              <th className="p-3">状态</th>
-              <th className="p-3">操作</th>
+              <th className="p-3">{t("marketSync.model")}</th>
+              <th className="p-3">{t("marketSync.provider")}</th>
+              <th className="p-3">{t("marketSync.state")}</th>
+              <th className="p-3">{t("marketSync.action")}</th>
             </tr>
           </thead>
           <tbody>
@@ -65,8 +66,10 @@ export function LocalModelList({
               const unavailable =
                 row.raw.private === true ||
                 marketRetired(row) ||
-                row.raw.feed_unavailable === true ||
-                row.raw.market_catalog !== true;
+                row.raw.feed_unavailable === true;
+              let state = t("marketSync.up");
+              if (row.raw.feed_unavailable) state = t("marketSync.sourceDown");
+              else if (row.raw.delisted) state = t("marketSync.down");
               return (
                 <tr key={row.id} className="border-b last:border-0" data-testid={"local-model-" + row.id}>
                   <td className="p-3">
@@ -75,27 +78,21 @@ export function LocalModelList({
                     </button>
                     <code className="block text-xs text-muted-foreground">{row.id}</code>
                   </td>
-                  <td className="p-3">{String(row.raw.issuer || row.provider || "自定义")}</td>
+                  <td className="p-3">{String(row.raw.issuer || row.provider || t("marketSync.custom"))}</td>
                   <td className="p-3">
-                    {row.raw.delisted ? "已下架" : "未下架"}
-                    {row.raw.private === true
-                      ? " · 非公开"
-                      : marketRetired(row)
-                        ? " · 已退役"
-                        : row.raw.feed_unavailable
-                          ? " · 上游已撤回"
-                          : row.raw.market_catalog !== true
-                            ? " · 本地自定义"
-                            : ""}
+                    {state}
+                    {row.raw.private === true && <span> · {t("marketSync.private")}</span>}
+                    {marketRetired(row) && <span> · {t("marketSync.retired")}</span>}
+                    {row.raw.market_catalog !== true && <span> · {t("marketSync.custom")}</span>}
                   </td>
                   <td className="p-3">
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!!row.raw.delisted && unavailable}
+                      disabled={row.raw.feed_unavailable === true || (!!row.raw.delisted && unavailable)}
                       onClick={() => onListing(row, !row.raw.delisted)}
                     >
-                      {row.raw.delisted ? "上架" : "下架"}
+                      {t(row.raw.delisted ? "marketSync.list" : "marketSync.delist")}
                     </Button>
                   </td>
                 </tr>
@@ -104,7 +101,7 @@ export function LocalModelList({
           </tbody>
         </table>
       </div>
-      {!visible.length && <p>没有匹配的本地模型。</p>}
+      {!visible.length && <p>{t("marketSync.noMatches")}</p>}
     </section>
   );
 }

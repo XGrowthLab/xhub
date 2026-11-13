@@ -2095,6 +2095,17 @@
       "status": "peripheral-unmigrated"
     },
     {
+      "route": "GET /price/deployments",
+      "sources": [
+        "internal/gateway/models/mount.go"
+      ],
+      "contract": {
+        "domain": "models",
+        "operation": "previewDeploymentPrices"
+      },
+      "status": "core-contracted"
+    },
+    {
       "route": "GET /project/info",
       "sources": [
         "internal/gateway/identity/mount.go"
@@ -5241,6 +5252,17 @@
       ],
       "contract": null,
       "status": "peripheral-unmigrated"
+    },
+    {
+      "route": "POST /price/deployments/apply",
+      "sources": [
+        "internal/gateway/models/mount.go"
+      ],
+      "contract": {
+        "domain": "models",
+        "operation": "applyDeploymentPrices"
+      },
+      "status": "core-contracted"
     },
     {
       "route": "POST /price/model",

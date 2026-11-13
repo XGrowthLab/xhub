@@ -20,6 +20,10 @@ func TestModelContractRequests(t *testing.T) {
 		valid      bool
 	}{
 		{"/model/new", `{"model_name":"m","litellm_params":{"model":"up","extension":true},"model_info":{"transport":"openai_chat","endpoint_types":["chat"]}}`, true},
+		{"/price/deployments/apply", `{"items":[{"id":"d","version":"v"}]}`, true},
+		{"/price/deployments/apply", `{"items":[]}`, false},
+		{"/price/deployments/apply", `{"items":[{"id":"d"}]}`, false},
+		{"/price/deployments/apply", `{"items":[{"id":"","version":"v"}]}`, false},
 		{"/model/protocol_probe", `{"id":"m"}`, true},
 		{"/model/protocol_probe", `{}`, false},
 		{"/model/protocol_probe", `{"id":42}`, false},
@@ -95,6 +99,9 @@ func TestModelContractResponseRoundtrip(t *testing.T) {
 		raw string
 		dst any
 	}{
+		{`{"deployments":[{"id":"d","name":"test","base_model":"model","manual":false,"current":[{"measure":"token","side":"input","window":"all","source_key":"input","usd":0.000002,"unit_size":1000000,"variant":"uncached","label":"input","fallback":false,"extension":"keep"}],"proposed":null,"changed":false,"reason":"","version":"v","extension":true}],"generated_at":"2026-01-01","extension":"keep"}`, new(DeploymentPriceList)},
+		{`{"items":[{"id":"d","version":"v","extension":"keep"}],"extension":"keep"}`, new(DeploymentPriceSelection)},
+		{`{"updated":2,"extension":"keep"}`, new(DeploymentPriceResult)},
 		{`{"model_name":"m","litellm_params":{"model":"up","input_cost_per_token":0.000000123456789,"extension":null},"model_info":{"id":"d","disabled":false,"db_model":true,"endpoint_types":["chat","responses"],"vendor_extension":{"big":9007199254740993}}}`, new(Deployment)},
 		{`{"status":"error","healthy":false,"error":"protocol_mismatch","message":"Failed","model":"m","mode":"chat","result":{"error":"Failed"}}`, new(ConnectionFailure)},
 		{`{"status":"success","healthy":true,"error":null,"model":"m","mode":"chat"}`, new(ConnectionSuccess)},
@@ -119,6 +126,31 @@ func TestModelContractResponseRoundtrip(t *testing.T) {
 		}
 		if !reflect.DeepEqual(a, b) {
 			t.Fatalf("生成响应丢字段/精度: %s -> %s", tc.raw, out)
+		}
+	}
+}
+
+// TestPriceContractRejectsMalformedFields 验证生成客户端拒绝错误类型，避免调价预览被解析成错误的费用或版本。
+// 输入为独立内存 JSON，覆盖价格、部署和选择字段的失败路径；测试不访问外部服务或产生持久数据。
+func TestPriceContractRejectsMalformedFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target func() any
+		fields map[string]string
+	}{
+		{"list", func() any { return new(DeploymentPriceList) }, map[string]string{"deployments": `"bad"`, "generated_at": `7`}},
+		{"preview", func() any { return new(DeploymentPricePreview) }, map[string]string{"base_model": `7`, "changed": `"bad"`, "current": `"bad"`, "id": `7`, "manual": `"bad"`, "name": `7`, "proposed": `"bad"`, "reason": `7`, "version": `7`}},
+		{"rate", func() any { return new(DeploymentPriceRate) }, map[string]string{"fallback": `"bad"`, "label": `7`, "measure": `7`, "side": `7`, "source_key": `7`, "unit_size": `"bad"`, "usd": `"bad"`, "variant": `7`, "window": `7`}},
+		{"result", func() any { return new(DeploymentPriceResult) }, map[string]string{"updated": `"bad"`}},
+		{"selection", func() any { return new(DeploymentPriceSelection) }, map[string]string{"items": `"bad"`}},
+		{"selection-item", func() any { return new(DeploymentPriceSelection_Items_Item) }, map[string]string{"id": `7`, "version": `7`}},
+	} {
+		for field, value := range tc.fields {
+			t.Run(tc.name+"/"+field, func(t *testing.T) {
+				if err := json.Unmarshal([]byte(`{"`+field+`":`+value+`}`), tc.target()); err == nil {
+					t.Fatalf("%s 字段接受了错误类型", field)
+				}
+			})
 		}
 	}
 }

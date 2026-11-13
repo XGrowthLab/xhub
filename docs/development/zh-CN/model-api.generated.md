@@ -15,6 +15,8 @@
 | `POST /model/disable` | 停用部署 | 200, 400, 401, 403, 500 |
 | `POST /model/enable` | 启用部署 | 200, 400, 401, 403, 500 |
 | `POST /health/test_connection` | 探测保存的部署 | 200, 400, 401, 403, 404 |
+| `GET /price/deployments` | 核对部署价格 | 200, 401, 403, 500, 503 |
+| `POST /price/deployments/apply` | 确认单个或批量调价 | 200, 400, 401, 403, 409, 500, 503 |
 | `POST /model/protocol_probe` | 探测已保存部署协议 | 200, 400, 401, 403, 404, 409, 503 |
 
 ### GET /v2/model/info
@@ -225,6 +227,29 @@
     "application/json": {
       "schema": {
         "$ref": "#/components/schemas/ConnectionRequest"
+      }
+    }
+  }
+}
+```
+
+
+### GET /price/deployments
+
+仅管理员；返回当前计费价、来源候选和版本。复杂或下架来源不可快捷应用
+
+
+### POST /price/deployments/apply
+
+仅管理员；提交唯一部署ID和预览版本。后台重读价格，任一冲突整批回滚409；不重算历史账单
+
+```json
+{
+  "required": true,
+  "content": {
+    "application/json": {
+      "schema": {
+        "$ref": "#/components/schemas/DeploymentPriceSelection"
       }
     }
   }
@@ -1310,6 +1335,200 @@
       ]
     }
   ]
+}
+```
+
+### DeploymentPriceRate
+
+```json
+{
+  "type": "object",
+  "required": [
+    "measure",
+    "side",
+    "window",
+    "source_key",
+    "usd",
+    "unit_size"
+  ],
+  "properties": {
+    "measure": {
+      "type": "string"
+    },
+    "side": {
+      "type": "string"
+    },
+    "variant": {
+      "type": "string"
+    },
+    "window": {
+      "type": "string"
+    },
+    "source_key": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "usd": {
+      "type": "number",
+      "minimum": 0,
+      "format": "double"
+    },
+    "unit_size": {
+      "type": "number",
+      "format": "double"
+    },
+    "fallback": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPricePreview
+
+```json
+{
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "base_model",
+    "manual",
+    "current",
+    "proposed",
+    "changed",
+    "reason",
+    "version"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "base_model": {
+      "type": "string"
+    },
+    "manual": {
+      "type": "boolean"
+    },
+    "current": {
+      "type": "array",
+      "nullable": true,
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceRate"
+      }
+    },
+    "proposed": {
+      "type": "array",
+      "nullable": true,
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceRate"
+      }
+    },
+    "changed": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "",
+        "unmapped",
+        "delisted",
+        "config_model",
+        "unsupported_pricing",
+        "incomplete_pricing"
+      ]
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceList
+
+```json
+{
+  "type": "object",
+  "required": [
+    "deployments",
+    "generated_at"
+  ],
+  "properties": {
+    "deployments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPricePreview"
+      }
+    },
+    "generated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceSelection
+
+```json
+{
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
+```
+
+### DeploymentPriceResult
+
+```json
+{
+  "type": "object",
+  "required": [
+    "updated"
+  ],
+  "properties": {
+    "updated": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    }
+  },
+  "additionalProperties": true
 }
 ```
 

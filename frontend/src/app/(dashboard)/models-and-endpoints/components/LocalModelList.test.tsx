@@ -1,3 +1,4 @@
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { LocalModelList } from "./LocalModelList";
@@ -12,7 +13,8 @@ it("本地列表保留记录并允许上下架", () => {
   });
   const listing = vi.fn(),
     detail = vi.fn();
-  render(<LocalModelList rows={rows} onDetail={detail} onListing={listing} />);
+  localStorage.removeItem(LOCALE_COOKIE); document.cookie=`${LOCALE_COOKIE}=;path=/;max-age=0`;
+  render(<I18nProvider initialLocale="zh-CN"><LocalModelList rows={rows} onDetail={detail} onListing={listing} /></I18nProvider>);
   expect(screen.getByRole("status")).toHaveTextContent("本地共 2 个模型");
   expect(screen.getByRole("button", { name: "上架" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "下架" }));
@@ -21,4 +23,24 @@ it("本地列表保留记录并允许上下架", () => {
   expect(detail).toHaveBeenCalledWith(rows[0]);
   fireEvent.change(screen.getByRole("textbox", { name: "搜索本地模型" }), { target: { value: "missing" } });
   expect(screen.getByText("没有匹配的本地模型。")).toBeVisible();
+});
+
+/** 来源下架的历史资料可搜索，不能通过上架按钮消除来源状态；英文文案完整，渲染后自动清理。 */
+it("preserves delisted source records in English",()=>{
+ localStorage.removeItem(LOCALE_COOKIE);document.cookie=`${LOCALE_COOKIE}=;path=/;max-age=0`;
+ const rows=priceCatalogRows({models:[{id:"removed",market_catalog:true,feed_unavailable:true},{id:"active",market_catalog:true}]});
+ render(<I18nProvider initialLocale="en"><LocalModelList rows={rows} onDetail={vi.fn()} onListing={vi.fn()} /></I18nProvider>);
+ fireEvent.change(screen.getByRole("combobox",{name:"Local model status"}),{target:{value:"down"}});
+ expect(screen.getByRole("status")).toHaveTextContent("1 of 2 archived models match");
+ expect(screen.getByText("Delisted at source")).toBeVisible();expect(screen.getByRole("button",{name:"Delist"})).toBeDisabled();
+});
+
+/** 自定义模型隐藏后仍可上架；独立渲染并在测试后自动清理 DOM。 */
+it("allows relisting a custom model", () => {
+  localStorage.removeItem(LOCALE_COOKIE); document.cookie=`${LOCALE_COOKIE}=;path=/;max-age=0`;
+  const rows = priceCatalogRows({models:[{id:"custom",delisted:true}]});
+  const onListing = vi.fn();
+  render(<I18nProvider initialLocale="zh-CN"><LocalModelList rows={rows} onDetail={vi.fn()} onListing={onListing} /></I18nProvider>);
+  fireEvent.click(screen.getByRole("button",{name:"上架"}));
+  expect(onListing).toHaveBeenCalledWith(rows[0], false);
 });

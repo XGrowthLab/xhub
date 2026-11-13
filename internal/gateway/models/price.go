@@ -86,7 +86,7 @@ func LoadPriceOverrides(s Host) {
 	if st == nil {
 		return
 	}
-	// 启动先恢复本地市场快照，再叠加手工价格；离线重启仍可浏览。
+	// 启动恢复已接受计费基线，再叠加手工价格；独立市场快照不能自动调价。
 	if saved, err := st.ListConfig(priceSnapshotNS); err == nil {
 		if raw, ok := saved["catalog"]; ok {
 			bytes, _ := json.Marshal(raw)
@@ -140,17 +140,24 @@ func LoadPriceOverrides(s Host) {
 	}
 }
 
-// PriceList returns the live price catalog for the console: every model with the
-// flag saying whether it came from the embedded file, and every supplier.
-// 参数 s（Host）：能读框架记录的宿主；w（http.ResponseWriter）：响应写到这；r（*http.Request）：入站请求。
-// 返回：无。状态码和正文写进调用方的响应。
-// 调用：gateway/models/mount.go
-// 测试：无直接单测
+// PriceList 返回管理员模型广场资料、独立下架状态和本地价格覆盖；参数为宿主及 HTTP 上下文。
+// 每日市场快照不写回计费目录，人工新增项始终保留；数据库读取失败返回 500。
+// 调用：GET /price/catalog；真实来源刷新、人工编辑和下架流程由 regression/E2E 覆盖。
 func PriceList(s Host, w http.ResponseWriter, r *http.Request) {
 	if s.RequireManage(w, r) == nil {
 		return
 	}
-	rows := catalog.CostMap()
+	doc, err := readMarket(r.Context(), s)
+	if err != nil {
+		util.WriteError(w, 500, "internal", "market catalog unavailable")
+		return
+	}
+	rows := doc.Models
+	for id, row := range catalog.CostMap() {
+		if _, ok := rows[id]; !ok {
+			rows[id] = row
+		}
+	}
 	overrides := storedKeys(s, priceModelNS)
 	listings := map[string]any{}
 	if s.RecordStore() != nil {
@@ -162,6 +169,17 @@ func PriceList(s Host, w http.ResponseWriter, r *http.Request) {
 		for k, v := range row {
 			entry[k] = v
 		}
+		// 人工价格仍供编辑器读取；完整市场规则保持来源数据，快捷调价直接读独立快照。
+		if overrides[id] {
+			if local, ok := catalog.ModelRow(id); ok {
+				for _, key := range append(append([]string{}, rateFields...), "rates") {
+					delete(entry, key)
+					if value, exists := local[key]; exists {
+						entry[key] = value
+					}
+				}
+			}
+		}
 		entry["id"] = id
 		entry["baseline"] = catalog.IsBaseline(id)
 		entry["overridden"] = overrides[id]
@@ -172,11 +190,24 @@ func PriceList(s Host, w http.ResponseWriter, r *http.Request) {
 		return str(models[i]["id"]) < str(models[j]["id"])
 	})
 
-	providers := catalog.Providers()
 	providerOverrides := storedKeys(s, priceProviderNS)
-	out := make([]map[string]any, 0, len(providers))
-	for _, p := range providers {
+	byProvider := map[string]map[string]any{}
+	for _, p := range doc.Providers {
+		byProvider[str(p["litellm_provider"])] = p
+	}
+	for _, p := range catalog.Providers() {
 		slug := str(p["litellm_provider"])
+		if _, exists := byProvider[slug]; !exists || providerOverrides[slug] {
+			byProvider[slug] = p
+		}
+	}
+	removedProviders := storedKeys(s, priceRemovedProviderNS)
+	out := make([]map[string]any, 0, len(byProvider))
+	for _, p := range byProvider {
+		slug := str(p["litellm_provider"])
+		if removedProviders[slug] {
+			continue
+		}
 		entry := make(map[string]any, len(p)+2)
 		for k, v := range p {
 			entry[k] = v
@@ -192,9 +223,9 @@ func PriceList(s Host, w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{
 		"models":       models,
 		"providers":    out,
-		"source":       catalog.PriceSource(),
-		"generated_at": catalog.PriceGeneratedAt(),
-		"loaded_at":    catalog.LoadedAt(),
+		"source":       doc.Source,
+		"generated_at": doc.GeneratedAt,
+		"loaded_at":    marketLoadedAt(s),
 		"count":        len(models),
 	})
 }
@@ -257,9 +288,17 @@ func SetPriceListing(s Host, w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 400, "invalid_request", "id and boolean delisted are required")
 		return
 	}
-	if _, ok := catalog.ModelRow(id); !ok {
-		util.WriteError(w, 404, "not_found", "model is not in the local catalog")
+	doc, err := readMarket(r.Context(), s)
+	if err != nil {
+		util.WriteError(w, 500, "internal", "market catalog unavailable")
 		return
+	}
+	if _, ok := doc.Models[id]; !ok {
+		// 首次同步后新增的人工目录不在来源快照中，仍应允许管理员隐藏或恢复。
+		if _, local := catalog.ModelRow(id); !local {
+			util.WriteError(w, 404, "not_found", "model is not in the local catalog")
+			return
+		}
 	}
 	if s.RecordStore() == nil {
 		util.WriteError(w, 500, "internal", "local catalog store unavailable")

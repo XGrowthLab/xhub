@@ -8,13 +8,14 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-// 协议名称是公开的技术标识，在中英文界面保持一致。
-const PROTOCOL_NAMES: Record<string, string> = { "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages" };
-
 type ProbeRecord = {
   checked_at?: string;
   verified?: Record<string, boolean>;
   results?: { protocol: string; status: string; stage: string; http_status?: number }[];
+};
+// 协议名称是固定标识，不随界面语言改变；未知协议保留服务器返回的原始名称。
+const protocolNames: Record<string, string> = {
+  "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages",
 };
 /** ProtocolProbePanel 提供管理员自动探测开关、保存后手动验证和固定诊断结果。
  * id/token 指向已保存部署与管理会话，automatic/onChange 接入编辑表单；没有 ID 时不能向任意草稿地址发请求。
@@ -87,7 +88,7 @@ export function ProtocolProbePanel({
         {(data?.record?.results ?? []).map((result) => (
           <div key={result.protocol} className="min-w-0 rounded-lg border bg-background p-3 text-xs">
             <p className="font-medium">
-              {PROTOCOL_NAMES[result.protocol] ?? result.protocol}
+              {protocolNames[result.protocol] ?? result.protocol}
             </p>
             <p
               className={`mt-2 ${result.status === "verified" ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}

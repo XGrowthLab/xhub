@@ -37,14 +37,16 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
       <button
         className="flex items-start gap-3 text-left"
         onClick={() => onDetail?.(row)}
-        aria-label={"查看 " + (row.displayName || row.id) + " 详情"}
+        aria-label={t("marketSync.detailLabel", { name: row.displayName || row.id })}
       >
         <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-600">
           <Boxes className="size-5" />
         </span>
         <span className="min-w-0">
           <h3 className="text-lg font-semibold">{row.displayName || row.id}</h3>
-          <span className="text-xs text-muted-foreground">{String(row.raw.issuer || row.provider || "自定义")}</span>
+          <span className="text-xs text-muted-foreground">
+            {String(row.raw.issuer || row.provider || t("marketSync.custom"))}
+          </span>
         </span>
       </button>
       <p className="mt-3 break-all text-xs text-muted-foreground">{row.id}</p>
@@ -59,13 +61,16 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
               {tag}
             </span>
           ))}
-        {row.overridden && <span className="rounded border px-2 py-1">已编辑</span>}
-        {row.raw.private === true && <span>非公开</span>}
-        {marketRetired(row) && <span>已退役</span>}
+        {row.raw.feed_unavailable === true && (
+          <span className="rounded bg-muted px-2 py-1">{t("marketSync.sourceDown")}</span>
+        )}
+        {row.overridden && <span className="rounded border px-2 py-1">{t("marketSync.edited")}</span>}
+        {row.raw.private === true && <span>{t("marketSync.private")}</span>}
+        {marketRetired(row) && <span>{t("marketSync.retired")}</span>}
       </div>
       <div className="mb-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
-        {row.maxInput && <span>上下文 {row.maxInput.toLocaleString()}</span>}
-        {row.maxOutput && <span>最大输出 {row.maxOutput.toLocaleString()}</span>}
+        {row.maxInput && <span>{t("marketSync.contextValue", { value: row.maxInput.toLocaleString() })}</span>}
+        {row.maxOutput && <span>{t("marketSync.outputValue", { value: row.maxOutput.toLocaleString() })}</span>}
       </div>
       <dl className="mt-auto space-y-2 border-t pt-4">
         {prices.slice(0, 2).map((price) => (
@@ -76,26 +81,27 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
             </dd>
           </div>
         ))}
-        {!prices.length && <p className="text-sm text-muted-foreground">价格未提供</p>}
+        {!prices.length && <p className="text-sm text-muted-foreground">{t("marketSync.noPrice")}</p>}
       </dl>
       <button
         className="mt-3 text-left text-xs text-muted-foreground hover:text-foreground"
         onClick={() => onDetail?.(row)}
       >
-        查看完整价格与接入文档{prices.length > 2 ? "（另有 " + (prices.length - 2) + " 项）" : ""}
+        {t("marketSync.fullPrices")}
+        {prices.length > 2 ? t("marketSync.extraItems", { count: prices.length - 2 }) : ""}
       </button>
       <div className="mt-4 space-y-1 border-t pt-3 text-xs text-muted-foreground">
         <p>
-          输入：
+          {t("marketSync.side.input")}:
           {marketModalities(row, "input")
-            .map((m) => MODALITY_NAMES[m] || m)
-            .join("、") || "未声明"}
+            .map((m) => (MODALITY_NAMES[m] ? t("marketSync.modality." + m) : m))
+            .join("、") || t("marketSync.notDeclared")}
         </p>
         <p>
-          输出：
+          {t("marketSync.side.output")}:
           {marketModalities(row, "output")
-            .map((m) => MODALITY_NAMES[m] || m)
-            .join("、") || "未声明"}
+            .map((m) => (MODALITY_NAMES[m] ? t("marketSync.modality." + m) : m))
+            .join("、") || t("marketSync.notDeclared")}
         </p>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
@@ -106,7 +112,7 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
           {t("priceCatalog.deployModel")}
         </Link>
         {onEdit && <button onClick={() => onEdit(row)}>{t("Edit")}</button>}
-        {onDelete && <button onClick={() => onDelete(row)}>下架</button>}
+        {onDelete && <button onClick={() => onDelete(row)}>{t("marketSync.delist")}</button>}
         {onReset && row.overridden && <button onClick={() => onReset(row)}>{t("priceData.resetModel")}</button>}
       </div>
     </article>
@@ -118,6 +124,7 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
 export function MarketPriceCatalog(props: PriceCatalogProps) {
   const t = useT();
   const rows = props.rows ?? [];
+  const [showDown, setShowDown] = useState(false);
   const [query, setQuery] = useState("");
   const [providerSearch, setProviderSearch] = useState("");
   const [provider, setProvider] = useState("");
@@ -130,13 +137,21 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
   const [limit, setLimit] = useState(60);
   const market = rows.filter((row) => row.raw.market_catalog === true);
   const active = market.filter(marketSale);
-  const pool = active;
-  const suppliers = [...new Set(pool.map((row) => String(row.raw.issuer || row.provider || "自定义")))].sort();
+  const pool = showDown
+    ? market.filter(
+        (row) =>
+          row.raw.private !== true &&
+          (row.raw.feed_unavailable === true || row.raw.delisted === true || marketRetired(row)),
+      )
+    : active;
+  const suppliers = [
+    ...new Set(pool.map((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")))),
+  ].sort();
   const features = [...new Set(pool.flatMap(marketFeatures))];
   const visible = pool
     .filter(
       (row) =>
-        (!provider || String(row.raw.issuer || row.provider || "自定义") === provider) &&
+        (!provider || String(row.raw.issuer || row.provider || t("marketSync.custom")) === provider) &&
         (!input || marketModalities(row, "input").includes(input)) &&
         (!output || marketModalities(row, "output").includes(output)) &&
         (!capability || marketCapability(row, capability)) &&
@@ -144,16 +159,16 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
         (!context || (row.maxInput ?? 0) >= context) &&
         [row.id, row.displayName, row.raw.description].join(" ").toLowerCase().includes(query.trim().toLowerCase()),
     )
-    .sort((a, b) =>
-      sort === "rank"
-        ? Number(b.raw.rank || 0) - Number(a.raw.rank || 0) || a.id.localeCompare(b.id)
-        : sort === "name"
-          ? a.id.localeCompare(b.id)
-          : (a[sort as "input" | "output"] ?? Infinity) - (b[sort as "input" | "output"] ?? Infinity),
-    );
+    // 排序仅改变展示顺序；价格缺失排末尾，不当作免费。
+    .sort((a, b) => {
+      if (sort === "rank") return Number(b.raw.rank || 0) - Number(a.raw.rank || 0) || a.id.localeCompare(b.id);
+      if (sort === "name") return a.id.localeCompare(b.id);
+      return (a[sort as "input" | "output"] ?? Infinity) - (b[sort as "input" | "output"] ?? Infinity);
+    });
   /** 清空本地筛选；参数无、返回无，供清空按钮调用，不修改目录和后台数据。 */
   function reset() {
     setQuery("");
+    setShowDown(false);
     setProvider("");
     setInput("");
     setOutput("");
@@ -165,11 +180,22 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
   return (
     <section aria-label={t("Price catalog")} className="space-y-5">
       <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showDown}
+            onChange={(e) => {
+              setShowDown(e.target.checked);
+              setLimit(60);
+            }}
+          />
+          {t("marketSync.down")}
+        </label>
         <Search className="size-4 text-muted-foreground" />
         <Input
           aria-label={t("Search")}
           className="min-w-48 flex-1"
-          placeholder="搜索模型名称、ID 或描述"
+          placeholder={t("marketSync.searchModels")}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -182,10 +208,10 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
           onChange={(e) => setSort(e.target.value)}
           className="rounded border bg-background p-2 text-sm"
         >
-          <option value="rank">推荐排序</option>
-          <option value="name">名称</option>
-          <option value="input">输入价格</option>
-          <option value="output">输出价格</option>
+          <option value="rank">{t("marketSync.rank")}</option>
+          <option value="name">{t("marketSync.name")}</option>
+          <option value="input">{t("marketSync.inputPrice")}</option>
+          <option value="output">{t("marketSync.outputPrice")}</option>
         </select>
         {props.onAdd && (
           <Button data-testid="price-add-model" onClick={props.onAdd}>
@@ -194,17 +220,19 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
         )}
       </div>
       <div className="grid items-start gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-        <aside aria-label="筛选模型" className="space-y-6 rounded-xl border bg-card p-5">
+        <aside aria-label={t("marketSync.filterModels")} className="space-y-6 rounded-xl border bg-card p-5">
           <h2 className="flex items-center gap-2 font-semibold">
             <Filter className="size-4" />
-            筛选模型
+            {t("marketSync.filterModels")}
           </h2>
 
           {(["input", "output"] as const).map((side) => (
             <fieldset key={side} className="border-t pt-5">
-              <legend className="text-sm text-muted-foreground">{side === "input" ? "输入模态" : "输出模态"}</legend>
+              <legend className="text-sm text-muted-foreground">
+                {t(side === "input" ? "marketSync.inputModalities" : "marketSync.outputModalities")}
+              </legend>
               <div className="mt-3 flex flex-wrap gap-2">
-                {Object.entries(MODALITY_NAMES).map(([value, label]) => (
+                {Object.keys(MODALITY_NAMES).map((value) => (
                   <button
                     key={value}
                     aria-pressed={(side === "input" ? input : output) === value}
@@ -215,7 +243,7 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
                         : setOutput(output === value ? "" : value)
                     }
                   >
-                    {label}{" "}
+                    {t("marketSync.modality." + value)}{" "}
                     <span className="text-muted-foreground">
                       {pool.filter((row) => marketModalities(row, side).includes(value)).length}
                     </span>
@@ -225,31 +253,31 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
             </fieldset>
           ))}
           <label className="block space-y-3 border-t pt-5 text-sm text-muted-foreground">
-            上下文长度
+            {t("marketSync.context")}
             <select
-              aria-label="上下文长度"
+              aria-label={t("marketSync.context")}
               className="w-full rounded border bg-background p-2"
               value={context}
               onChange={(e) => setContext(Number(e.target.value))}
             >
               {[0, 32000, 128000, 256000, 1000000].map((n) => (
                 <option value={n} key={n}>
-                  {n ? n.toLocaleString() + "+" : "不限"}
+                  {n ? n.toLocaleString() + "+" : t("marketSync.unlimited")}
                 </option>
               ))}
             </select>
           </label>
           <fieldset className="border-t pt-5">
-            <legend className="text-sm text-muted-foreground">模型能力</legend>
+            <legend className="text-sm text-muted-foreground">{t("marketSync.capabilities")}</legend>
             <div className="mt-3 space-y-2">
-              {Object.entries(CAPABILITIES).map(([key, label]) => (
+              {Object.keys(CAPABILITIES).map((key) => (
                 <button
                   key={key}
                   aria-pressed={capability === key}
                   className="flex w-full justify-between rounded-lg border p-2.5 text-sm aria-pressed:border-cyan-500"
                   onClick={() => setCapability(capability === key ? "" : key)}
                 >
-                  {label}
+                  {t("marketSync.capability." + key)}
                   <span className="text-muted-foreground">
                     {pool.filter((row) => marketCapability(row, key)).length}
                   </span>
@@ -258,16 +286,18 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
             </div>
           </fieldset>
           <div className="space-y-3 border-t pt-5">
-            <h3 className="text-sm text-muted-foreground">供应商</h3>
+            <h3 className="text-sm text-muted-foreground">{t("marketSync.provider")}</h3>
             <Input
-              aria-label="搜索供应商"
-              placeholder="搜索供应商"
+              aria-label={t("marketSync.searchSuppliers")}
+              placeholder={t("marketSync.searchSuppliers")}
               value={providerSearch}
               onChange={(e) => setProviderSearch(e.target.value)}
             />
             <p className="text-xs text-muted-foreground">
-              共 {suppliers.length} 个供应商，当前匹配{" "}
-              {suppliers.filter((p) => p.toLowerCase().includes(providerSearch.toLowerCase())).length} 个
+              {t("marketSync.suppliersCount", {
+                total: suppliers.length,
+                count: suppliers.filter((p) => p.toLowerCase().includes(providerSearch.toLowerCase())).length,
+              })}
             </p>
             <div className="max-h-64 space-y-2 overflow-y-auto">
               {suppliers
@@ -281,14 +311,17 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
                   >
                     {p}
                     <span className="text-muted-foreground">
-                      {pool.filter((row) => String(row.raw.issuer || row.provider || "自定义") === p).length}
+                      {
+                        pool.filter((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")) === p)
+                          .length
+                      }
                     </span>
                   </button>
                 ))}
             </div>
           </div>
           <fieldset className="border-t pt-5">
-            <legend className="text-sm text-muted-foreground">特性标签</legend>
+            <legend className="text-sm text-muted-foreground">{t("marketSync.features")}</legend>
             <div className="mt-3 flex flex-wrap gap-2">
               {features.map((tag) => (
                 <button
@@ -311,7 +344,7 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
         </aside>
         <div className="min-w-0">
           <p role="status" className="mb-5 text-sm text-muted-foreground">
-            {t("priceCatalog.results", { count: visible.length, total: active.length })}
+            {t("priceCatalog.results", { count: visible.length, total: pool.length })}
           </p>
           {props.isLoading && <p role="status">{t("priceCatalog.loading")}</p>}
           {props.isError && (

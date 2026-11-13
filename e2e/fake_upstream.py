@@ -224,8 +224,8 @@ class Handler(BaseHTTPRequestHandler):
                         "function_calling": {"supported": output == "text"}},
                     "model_constraints": {"context_length": 128000},
                     "pricing_rules_v2": [{"input_range": [0, 128000], "details_v2": {
-                        "text_input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 2, "unit_price": 14},
-                        "text_output": {"name": "文本输出", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 6, "unit_price": 42}}}],
+                        "input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 2, "unit_price": 14},
+                        "output": {"name": "文本输出", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 6, "unit_price": 42}}}],
                     "support_api_protocols": ["openai"]})
             self._json({"status": True, "data": rows})
             return
