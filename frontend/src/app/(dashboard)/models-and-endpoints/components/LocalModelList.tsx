@@ -66,8 +66,7 @@ export function LocalModelList({
               const unavailable =
                 row.raw.private === true ||
                 marketRetired(row) ||
-                row.raw.feed_unavailable === true ||
-                row.raw.market_catalog !== true;
+                row.raw.feed_unavailable === true;
               let state = t("marketSync.up");
               if (row.raw.feed_unavailable) state = t("marketSync.sourceDown");
               else if (row.raw.delisted) state = t("marketSync.down");

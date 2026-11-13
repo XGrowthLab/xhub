@@ -5,6 +5,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useT } from "@/i18n/I18nProvider";
 import type { ProbeForm, ProbeKind } from "./probeForm";
 
+// 供应商品牌和协议标识保持原样，不随界面翻译。
+const SEARCH_PROVIDERS = [{ id: "tavily", name: "Tavily" }, { id: "perplexity", name: "Perplexity" }, { id: "serper", name: "Serper" }];
+
 /** 表单字段参数；change 仅改变内存草稿，disabled 在真实请求进行中防止错配配置。 */
 interface ProbeFieldsProps {
   kind: ProbeKind;
@@ -35,8 +38,8 @@ export function ProbeFields({ kind, form, change, disabled }: ProbeFieldsProps) 
       </> : <>
         <label className="block space-y-1"><span>{t("probes.provider")}</span>
           <select className="h-9 w-full rounded border bg-background px-3" value={form.provider} onChange={(e) => change("provider", e.target.value)}>
-            {!["tavily", "perplexity", "serper"].includes(form.provider) ? <option value={form.provider}>{form.provider}</option> : null}
-            <option value="tavily">Tavily</option><option value="perplexity">Perplexity</option><option value="serper">Serper</option>
+            {!SEARCH_PROVIDERS.some((provider) => provider.id === form.provider) ? <option value={form.provider}>{form.provider}</option> : null}
+            {SEARCH_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
           </select>
         </label>
         <label className="block space-y-1"><span>{t("probes.apiBase")}</span>

@@ -73,7 +73,7 @@ export default function BulkCreateUsersButton({ accessToken, teams, onUsersCreat
       for (const row of rows) {
         try {
           const response = await userCreateCall(accessToken, null, { ...row.user });
-          if (!response?.user_id) throw new Error("invalid create response");
+          if (!response?.user_id) throw new Error(t("errors.invalidCreateResponse"));
           row.user_id = response.user_id;
           row.status = "success";
         } catch {

@@ -32,8 +32,10 @@ func marketDocument(ctx context.Context, db catalogReader) (catalog.PriceDocumen
 	if err != nil {
 		return doc, err
 	}
-	err = json.Unmarshal([]byte(raw), &doc)
-	return doc, err
+	// 必须解码到全新对象：向预填 map/slice 解码会混入旧模型并改写共享供应商数据。
+	var stored catalog.PriceDocument
+	err = json.Unmarshal([]byte(raw), &stored)
+	return stored, err
 }
 
 // readMarket 供管理端读取市场资料，参数为请求上下文和宿主；返回完整快照或存储错误，无计费副作用。

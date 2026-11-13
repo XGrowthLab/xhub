@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
 import moment from "moment";
+
+// 日志时间格式是 Moment 协议格式，不随界面翻译。
+const LOG_TIME_FORMAT = "YYYY-MM-DD HH:mm:ss.SSS Z";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -677,10 +680,10 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             </DescriptionItem>
 
             <DescriptionItem label={t("Start Time")}>
-              {moment(logEntry.startTime).format("YYYY-MM-DD HH:mm:ss.SSS Z")}
+              {moment(logEntry.startTime).format(LOG_TIME_FORMAT)}
             </DescriptionItem>
             <DescriptionItem label={t("End Time")}>
-              {moment(logEntry.endTime).format("YYYY-MM-DD HH:mm:ss.SSS Z")}
+              {moment(logEntry.endTime).format(LOG_TIME_FORMAT)}
             </DescriptionItem>
           </DescriptionList>
         </CardContent>

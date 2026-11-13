@@ -1,3 +1,4 @@
+import { t } from "@/i18n/runtime";
 import moment from "moment";
 import { keepPreviousData, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstack/react-table";
@@ -82,7 +83,7 @@ export const formatLogsWindow = (
 ): LogsWindow => {
   const duration = moment.duration(presetInterval.value, presetInterval.unit as moment.unitOfTime.DurationConstructor).asMilliseconds();
   if (!isCustomDate && (!Number.isFinite(duration) || duration <= 0)) {
-    throw new RangeError("Log preset duration must be positive and finite");
+    throw new RangeError(t("errors.invalidLogDuration"));
   }
   return {
     start_date: (isCustomDate ? moment(startTime) : moment(presetEndMs - duration)).utc().format("YYYY-MM-DD HH:mm:ss"),

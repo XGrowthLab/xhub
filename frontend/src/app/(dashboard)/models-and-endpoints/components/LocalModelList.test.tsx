@@ -34,3 +34,13 @@ it("preserves delisted source records in English",()=>{
  expect(screen.getByRole("status")).toHaveTextContent("1 of 2 archived models match");
  expect(screen.getByText("Delisted at source")).toBeVisible();expect(screen.getByRole("button",{name:"Delist"})).toBeDisabled();
 });
+
+/** 自定义模型隐藏后仍可上架；独立渲染并在测试后自动清理 DOM。 */
+it("allows relisting a custom model", () => {
+  localStorage.removeItem(LOCALE_COOKIE); document.cookie=`${LOCALE_COOKIE}=;path=/;max-age=0`;
+  const rows = priceCatalogRows({models:[{id:"custom",delisted:true}]});
+  const onListing = vi.fn();
+  render(<I18nProvider initialLocale="zh-CN"><LocalModelList rows={rows} onDetail={vi.fn()} onListing={onListing} /></I18nProvider>);
+  fireEvent.click(screen.getByRole("button",{name:"上架"}));
+  expect(onListing).toHaveBeenCalledWith(rows[0], false);
+});

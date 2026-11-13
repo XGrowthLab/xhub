@@ -84,6 +84,21 @@ func TestMarketDailyPlanAndRestart(t *testing.T) {
 	if _, err := refreshCatalog(ctx, h, true); err != nil {
 		t.Fatal(err)
 	}
+	// 快照读取不得混入内置目录，也不得改写全局供应商切片。
+	var original string
+	if err := h.st.DB.QueryRow(`SELECT value_json FROM proxy_config WHERE namespace=$1 AND key='catalog'`, marketSnapshotNS).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.DB.Exec(`UPDATE proxy_config SET value_json=$1 WHERE namespace=$2 AND key='catalog'`, `{"models":{"only-new":{}},"providers":[]}`, marketSnapshotNS); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := readMarket(ctx, h)
+	if err != nil || len(stored.Models) != 1 || stored.Models["only-new"] == nil {
+		t.Fatalf("市场快照混入本地模型: %d, %v", len(stored.Models), err)
+	}
+	if _, err := h.st.DB.Exec(`UPDATE proxy_config SET value_json=$1 WHERE namespace=$2 AND key='catalog'`, original, marketSnapshotNS); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := refreshCatalog(ctx, h, true); err != nil {
 		t.Fatal(err)
 	}
