@@ -1896,6 +1896,22 @@
       "status": "peripheral-unmigrated"
     },
     {
+      "route": "GET /notifications",
+      "sources": [
+        "internal/gateway/identity/mount.go"
+      ],
+      "contract": null,
+      "status": "peripheral-unmigrated"
+    },
+    {
+      "route": "GET /notifications/unread",
+      "sources": [
+        "internal/gateway/identity/mount.go"
+      ],
+      "contract": null,
+      "status": "peripheral-unmigrated"
+    },
+    {
       "route": "GET /onboarding/get_token",
       "sources": [
         "catalog"
@@ -4972,6 +4988,14 @@
       "route": "POST /moderations",
       "sources": [
         "catalog"
+      ],
+      "contract": null,
+      "status": "peripheral-unmigrated"
+    },
+    {
+      "route": "POST /notifications/read",
+      "sources": [
+        "internal/gateway/identity/mount.go"
       ],
       "contract": null,
       "status": "peripheral-unmigrated"
