@@ -16,6 +16,13 @@ func (s *Server) notificationMaintenanceLoop(ctx context.Context) {
 			util.Error("notification budget scan failed: %v", err)
 		}
 		cancelScan()
+		if s.Store != nil {
+			market, cancelMarket := context.WithTimeout(ctx, 20*time.Second)
+			if err := s.IAM.ScanMarketNotifications(market); err != nil {
+				util.Error("market notification scan failed: %v", err)
+			}
+			cancelMarket()
+		}
 		cleanup, cancelCleanup := context.WithTimeout(ctx, 20*time.Second)
 		defer cancelCleanup()
 		if err := s.IAM.CleanExpiredNotifications(cleanup, time.Now().UTC().AddDate(0, 0, -90), 1000); err != nil {

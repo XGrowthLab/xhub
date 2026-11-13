@@ -36,6 +36,35 @@ afterEach(() => {
 });
 
 describe("personal notifications", () => {
+  /** 两种语言均清晰展示已知模型变化和固定广场链接；未知项与外部地址不能注入链接。 */
+  it.each([
+    ["zh-CN", "模型广场更新", "价格变化: example-model", "查看模型广场"],
+    ["en", "Model marketplace update", "Price changed: example-model", "View model marketplace"],
+  ] as const)("renders market changes safely in %s", async (locale, title, change, link) => {
+    get.mockResolvedValue({ items: [{ ...budget, type: "market_update", data: { changes: [
+      { kind: "price_changed", model: "example-model", previous_price: [{ usd: 1 }], current_price: [{ usd: 2 }], href: "https://invalid.example" },
+      { kind: "unknown", model: "DO_NOT_SHOW" },
+    ] } }], total: 1 });
+    view(locale, <NotificationCenter />);
+    expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByText(change)).toBeVisible();
+    expect(screen.queryByText("DO_NOT_SHOW")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: link })).toHaveAttribute("href", "/ui/price-data");
+    expect(document.querySelector('a[href="https://invalid.example"]')).toBeNull();
+    expect(screen.getByText(/"usd": 1/)).toBeInTheDocument();
+    expect(screen.getByText(/"usd": 2/)).toBeInTheDocument();
+  });
+  /** 过长的变化列表显示有限条目并提供剩余数量，空数据不得伪造已完成更新。 */
+  it("limits market change previews and rejects malformed changes", async () => {
+    get.mockResolvedValue({ items: [
+      { ...budget, type: "market_update", data: { changes: Array.from({ length: 10 }, (_, i) => ({ kind: "added", model: `model-${i}` })) } },
+      { ...budget, id: "n2", type: "market_update", data: { changes: [{ kind: "added", model: "" }] } },
+    ], total: 2 });
+    view("zh-CN", <NotificationCenter />);
+    fireEvent.click(await screen.findByText("展开其余 2 项变化"));
+    expect(screen.getByText("新上架: model-8")).toBeVisible();
+    expect(screen.getByText("此类消息暂不支持展示。")).toBeVisible();
+  });
   /** 有限预算快照显示中文账面数，标已读只提交自己的消息 ID，顶栏随后刷新。 */
   it("shows the budget snapshot and marks one message read", async () => {
     let isRead = false;

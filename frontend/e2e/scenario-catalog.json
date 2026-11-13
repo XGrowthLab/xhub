@@ -3569,6 +3569,20 @@
     "environment": "default offline"
   },
   {
+    "id": "REG-market-notifications-en",
+    "file": "e2e/scenarios/regression/market-notifications-en.test.ts",
+    "title": "market notifications are admin only en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-market-notifications-zh-CN",
+    "file": "e2e/scenarios/regression/market-notifications-zh-CN.test.ts",
+    "title": "market notifications are admin only zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
     "id": "REG-notifications-en",
     "file": "e2e/scenarios/regression/notifications-en.test.ts",
     "title": "personal budget notifications and user isolation en",

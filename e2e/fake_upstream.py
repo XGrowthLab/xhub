@@ -138,6 +138,8 @@ def continuation_usage(req: dict) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     request_count = 0
+    market_variant = False
+    market_new_model = "e2e-market-new-model"
     ark_tasks: dict[str, dict] = {}
     fal_tasks: dict[str, dict] = {}
 
@@ -211,12 +213,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") == "/v1/market/models":
             # 确定性市场数据覆盖公开、私有、退役、多模态与完整价格，测试进程结束回收。
             rows = []
-            for model_id, private, retired, output in [
+            models = [
                 ("e2e-market-chat", False, "", "text"),
                 ("e2e-market-video", False, "", "video"),
                 ("e2e-market-private", True, "", "text"),
                 ("e2e-market-retired", False, "2020-01-01T00:00:00Z", "text"),
-            ]:
+            ]
+            if Handler.market_variant:
+                models.append((Handler.market_new_model, False, "", "text"))
+            for model_id, private, retired, output in models:
                 rows.append({"id": model_id, "name": model_id, "private": private,
                     "features": ["工具调用" if output == "text" else "视频生成"], "hot_tags": ["热门"],
                     "retirement_at": retired, "issuer": {"name": "OpenAI" if output == "text" else "ByteDance"},
@@ -224,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
                         "function_calling": {"supported": output == "text"}},
                     "model_constraints": {"context_length": 128000},
                     "pricing_rules_v2": [{"input_range": [0, 128000], "details_v2": {
-                        "input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 2, "unit_price": 14},
+                        "input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 3 if Handler.market_variant and model_id == "e2e-market-chat" else 2, "unit_price": 21 if Handler.market_variant and model_id == "e2e-market-chat" else 14},
                         "output": {"name": "文本输出", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 6, "unit_price": 42}}}],
                     "support_api_protocols": ["openai"]})
             self._json({"status": True, "data": rows})
@@ -260,6 +265,15 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(raw.decode() or "{}")
         except (json.JSONDecodeError, UnicodeDecodeError):
             req = {}
+        if self.path == "/e2e/market-variant":
+            # 仅测试进程内切换来源版本；复原原始目录以避免污染其他场景。
+            if not isinstance(req.get("enabled"), bool):
+                self.send_error(400)
+                return
+            Handler.market_variant = req["enabled"]
+            Handler.market_new_model = req.get("model") or "e2e-market-new-model"
+            self._json({"ok": True})
+            return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":
             valid = req.get("model") == "count-upstream" and isinstance(req.get("messages"), list) and self.headers.get("x-api-key") == "sk-fake"

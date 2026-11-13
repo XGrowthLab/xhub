@@ -28,3 +28,9 @@ CREATE TABLE IF NOT EXISTS notification_budget_state (
     last_checked_at TIMESTAMPTZ
 );
 ALTER TABLE notification_budget_state ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+-- 失败事件冷却后重试，避免单条坏事件阻塞其余事件；投递成功后删除。
+CREATE TABLE IF NOT EXISTS notification_market_retry (
+    event_id TEXT PRIMARY KEY,
+    next_attempt TIMESTAMPTZ NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 1
+);

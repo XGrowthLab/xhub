@@ -203,13 +203,14 @@ func (db *DB) scanBudgetNotification(ctx context.Context, userID string) error {
 }
 
 // ListNotifications 返回账户私有消息和总数；userID 来自认证会话，limit/offset 已由处理器限制。
-// 所有过滤在 SQL 中执行；存储或非法 JSON 出错时返回错误，不返回其他用户数据。
+// 所有过滤在 SQL 中执行；市场消息还实时检查当前平台管理员身份，撤权后立即不可见。
+// 存储或非法 JSON 出错时返回错误，不返回其他用户数据。
 func (db *DB) ListNotifications(ctx context.Context, userID string, limit, offset int) ([]Notification, int64, error) {
 	if userID == "" || limit < 1 || limit > 100 || offset < 0 || offset > 10000 {
 		return nil, 0, ErrInvalid
 	}
 	var rows []Notification
-	if err := db.Engine.Context(ctx).SQL(`SELECT id,type,created_at,(read_at IS NOT NULL) AS is_read,data::text AS data_raw FROM user_notifications WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, userID, limit, offset).Find(&rows); err != nil {
+	if err := db.Engine.Context(ctx).SQL(`SELECT n.id,n.type,n.created_at,(n.read_at IS NOT NULL) AS is_read,n.data::text AS data_raw FROM user_notifications n WHERE n.user_id=? AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin')) ORDER BY n.created_at DESC,n.id DESC LIMIT ? OFFSET ?`, userID, limit, offset).Find(&rows); err != nil {
 		return nil, 0, err
 	}
 	for i := range rows {
@@ -219,7 +220,7 @@ func (db *DB) ListNotifications(ctx context.Context, userID string, limit, offse
 		rows[i].Data = json.RawMessage(rows[i].DataRaw)
 	}
 	var count int64
-	_, err := db.Engine.Context(ctx).SQL(`SELECT count(*) FROM user_notifications WHERE user_id=?`, userID).Get(&count)
+	_, err := db.Engine.Context(ctx).SQL(`SELECT count(*) FROM user_notifications n WHERE n.user_id=? AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin'))`, userID).Get(&count)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -229,22 +230,22 @@ func (db *DB) ListNotifications(ctx context.Context, userID string, limit, offse
 	return rows, count, nil
 }
 
-// UnreadNotifications 返回当前用户未读数量；userID 必须为当前会话，查询失败不会伪装成零。
+// UnreadNotifications 返回当前用户可见消息的未读数量；userID 必须为当前会话，撤权后不计入市场消息，查询失败不会伪装成零。
 func (db *DB) UnreadNotifications(ctx context.Context, userID string) (int64, error) {
 	if userID == "" {
 		return 0, ErrInvalid
 	}
 	var count int64
-	_, err := db.Engine.Context(ctx).SQL(`SELECT count(*) FROM user_notifications WHERE user_id=? AND read_at IS NULL`, userID).Get(&count)
+	_, err := db.Engine.Context(ctx).SQL(`SELECT count(*) FROM user_notifications n WHERE n.user_id=? AND n.read_at IS NULL AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin'))`, userID).Get(&count)
 	return count, err
 }
 
-// ReadNotification 只将当前用户的一条消息标为已读；重复操作幂等，未找到与越权统一 ErrNotFound。
+// ReadNotification 只将当前用户可见的一条消息标为已读；市场消息实时检查平台管理员资格，重复操作幂等，未找到与越权统一 ErrNotFound。
 func (db *DB) ReadNotification(ctx context.Context, userID, id string) error {
 	if userID == "" || id == "" || len(id) > 128 {
 		return ErrInvalid
 	}
-	result, err := db.Engine.Context(ctx).Exec(`UPDATE user_notifications SET read_at=COALESCE(read_at,now()) WHERE user_id=? AND id=?`, userID, id)
+	result, err := db.Engine.Context(ctx).Exec(`UPDATE user_notifications n SET read_at=COALESCE(n.read_at,now()) WHERE n.user_id=? AND n.id=? AND (n.type <> 'market_update' OR EXISTS (SELECT 1 FROM users u WHERE u.id=n.user_id AND u.status='active' AND u.role='admin'))`, userID, id)
 	if err != nil {
 		return err
 	}

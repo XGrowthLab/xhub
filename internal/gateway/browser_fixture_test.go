@@ -310,6 +310,17 @@ func TestBrowserEnterpriseFixture(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/notifications/market-scan":
+			// 仅在隔离测试 schema 触发生产事件投递，避免浏览器等待定时任务。
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if err := db.ScanMarketNotifications(r.Context()); err != nil {
+				http.Error(w, "market notification scan failed", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		case "/notifications/scan":
 			// 仅在已验证的隔离 E2E schema 调用生产扫描器，避免在浏览器测试中等待后台定时器。
 			if r.Method != http.MethodPost {
