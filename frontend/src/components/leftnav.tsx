@@ -223,6 +223,7 @@ const itemLabel = (item: MenuItem, t: TFunction) => (
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string, t: TFunction = tRuntime): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
+  if (route === "message-center") return { section: null, title: t("notifications.title") };
   for (const group of menuGroups) {
     for (const item of group.items) {
       const section = t(group.groupLabel);

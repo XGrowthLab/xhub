@@ -3567,5 +3567,19 @@
     "title": "upstream protocol detection zh-CN",
     "kind": "implemented",
     "environment": "default offline"
+  },
+  {
+    "id": "REG-notifications-en",
+    "file": "e2e/scenarios/regression/notifications-en.test.ts",
+    "title": "personal budget notifications and user isolation en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-notifications-zh-CN",
+    "file": "e2e/scenarios/regression/notifications-zh-CN.test.ts",
+    "title": "personal budget notifications and user isolation zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
   }
 ]

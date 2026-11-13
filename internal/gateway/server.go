@@ -205,6 +205,8 @@ func (s *Server) serveListener(ln net.Listener) error {
 		go func() { defer flush.Done(); s.idempotencyCleanupLoop(ctx) }()
 		flush.Add(1)
 		go func() { defer flush.Done(); s.logCaptureCleanupLoop(ctx) }()
+		flush.Add(1)
+		go func() { defer flush.Done(); s.notificationMaintenanceLoop(ctx) }()
 	}
 	flush.Add(1)
 	go func() { defer flush.Done(); s.protocolProbeLoop(ctx) }()

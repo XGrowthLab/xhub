@@ -1,3 +1,4 @@
+import { notifications } from "./notifications.zh-CN";
 import { protocolProbeZhCN } from "./protocolProbe.zh-CN";
 import { samlRefresh } from "./samlRefresh.zh-CN";
 import { budgetReconciliationZhCN } from "./budgetReconciliation.zh-CN";
@@ -11,6 +12,7 @@ import { routeTemplatesZhCN } from "./routeTemplates.zh-CN";
 import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
+  notifications,
   protocolProbe: protocolProbeZhCN,
   logsUX: {
     captureTitle: "记录我的请求与响应",
