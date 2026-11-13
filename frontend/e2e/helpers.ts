@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { translate, type Locale } from "../src/i18n/translate";
-import { isExpectedOptionalSettingsFailure, isOptionalSettingsRead } from "./optional-settings-response.cjs";
+import { createOptionalReadTracker, isOptionalSettingsRead } from "./optional-settings-response.cjs";
 import { requirePageSuccess } from "./assertions";
 
 export const t = (key: string) => translate("zh-CN", key);
@@ -14,36 +14,32 @@ export const MASTER = process.env.E2E_MASTER_KEY || "sk-e2e-master";
  * page为浏览器页面；返回异步assertOk，调用方必须等待全部响应校验，不跳过错误或放宽超时。 */
 export function watchGateway(page: Page) {
   const bad: string[] = [];
-  const checks: Promise<void>[] = [];
+  const optional = createOptionalReadTracker(bad);
+  /** 同源和直连网关才属于本次页面检查；跳过浏览器资源及其他外部请求。 */
+  const watchedUrl = (u: string) => !u.includes("/_next/")
+    && (u.startsWith(GATEWAY) || u.startsWith((page.url().startsWith("http") ? new URL(page.url()).origin : "about:blank")));
+  // 从请求发出时就登记，避免断言结束后导航取消尚未收到响应的设置读取。
+  page.on("request", (req) => { if (watchedUrl(req.url())) optional.begin(req); });
+  page.on("requestfailed", (req) => optional.failed(req));
   page.on("response", (res) => {
     const u = res.url();
-    if (u.includes("/_next/")) return;
-    if (!u.startsWith(GATEWAY) && !u.startsWith((page.url().startsWith("http") ? new URL(page.url()).origin : "about:blank"))) return;
+    if (!watchedUrl(u)) return;
     if (res.status() >= 500) {
       if (!isOptionalSettingsRead({ url: u, method: res.request().method(), status: res.status() })) {
         bad.push(`${res.status()} ${res.request().method()} ${u}`);
+        optional.response(res);
         return;
       }
-      checks.push((async () => {
-        const body = await res.json().catch(() => null);
-        if (!isExpectedOptionalSettingsFailure({ url: u, method: res.request().method(), status: res.status(), cacheControl: res.headers()["cache-control"], body })) {
-          bad.push(`${res.status()} ${res.request().method()} ${u}`);
-        }
-      })());
     }
+    optional.response(res);
   });
   page.on("pageerror", (err) => {
     bad.push(`pageerror ${err.message}`);
   });
   return {
     async assertOk() {
-      // 等待期间可能收到新响应，循环到已登记的检查全部完成再断言。
-      let checked = 0;
-      while (checked < checks.length) {
-        const batch = checks.slice(checked);
-        checked += batch.length;
-        await Promise.all(batch);
-      }
+      // 等待已经发出的可选读取及其正文，避免导航中断读取后一直等待。
+      await optional.drain();
       expect(bad, bad.join("\n")).toEqual([]);
     },
   };
