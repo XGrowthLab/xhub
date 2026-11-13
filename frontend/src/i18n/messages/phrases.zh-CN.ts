@@ -1,4 +1,10 @@
 export const zhPhrases: Record<string, string> = {
+  "Author": "作者",
+  "Added": "添加时间",
+  "errors.invalidCreateResponse": "创建用户的响应无效",
+  "errors.skillDirectoryRequest": "读取 Skill 目录失败（HTTP {status}）",
+  "errors.invalidSkillDirectory": "Skill 目录响应无效",
+  "errors.invalidLogDuration": "日志预设时间范围必须为有效的正数",
   "cachePrice.warningTitle": "缓存价格不完整",
   "cachePrice.missing": "缺少价格：{fields}。若上游返回这些 Token，本次请求将无法完整计费。请填写供应商费率，仅在明确免费时填 0。",
   "cachePrice.blankHelp": "留空表示未设置，不会默认使用输入价格。上游报告缓存用量但缺少对应费率时，账单将标为未定价。",

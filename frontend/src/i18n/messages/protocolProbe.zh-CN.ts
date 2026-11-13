@@ -1,4 +1,5 @@
 export const protocolProbeZhCN = {
+  httpStatus: " · HTTP {status}",
   inconclusive: "未能确定 · 达到测试输出上限",
   loadFailed: "探测状态加载失败，请稍后重试。",
   configurationFailed: "请先保存对话模型，并检查供应商地址和凭据。",

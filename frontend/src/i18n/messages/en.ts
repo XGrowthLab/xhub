@@ -1,3 +1,4 @@
+import { marketSync } from "./marketSync.en";
 import { protocolProbeEn } from "./protocolProbe.en";
 import { samlRefresh } from "./samlRefresh.en";
 import { budgetReconciliationEn } from "./budgetReconciliation.en";
@@ -10,6 +11,7 @@ import { routeTemplatesEn } from "./routeTemplates.en";
 import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
+ marketSync,
   protocolProbe: protocolProbeEn,
   logsUX: {
     captureTitle: "Record my requests and responses",

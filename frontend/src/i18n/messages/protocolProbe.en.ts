@@ -1,4 +1,5 @@
 export const protocolProbeEn = {
+  httpStatus: " · HTTP {status}",
   inconclusive: "Inconclusive · test output limit reached",
   loadFailed: "Detection status could not be loaded. Try again later.",
   configurationFailed: "Save a dialogue model with a valid provider connection before testing.",

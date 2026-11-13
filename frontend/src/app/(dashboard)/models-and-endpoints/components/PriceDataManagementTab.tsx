@@ -1,5 +1,6 @@
 "use client";
 
+import { DeploymentPriceUpdates } from "./DeploymentPriceUpdates";
 import { useMemo, useState } from "react";
 import { Settings2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -48,6 +49,7 @@ const PriceDataManagementTab = () => {
     setManagementOpen(false);
     setDiscoveryError(false);
     try {
+      await queryClient.invalidateQueries({ queryKey: ["deploymentPrices"] });
       const refreshed = await refetch();
       if (refreshed.isError || !refreshed.data) throw new Error("价格目录读取失败");
       if (!accessToken) throw new Error("未登录");
@@ -95,9 +97,9 @@ const PriceDataManagementTab = () => {
     if (!accessToken) return;
     try {
       await apiClient.post("/price/model/listing", { accessToken, body: { id: row.id, delisted } });
-      await afterWrite(delisted ? "模型已下架，本地记录已保留" : "模型已上架");
+      await afterWrite(t(delisted ? "marketSync.delistedSaved" : "marketSync.listedSaved"));
     } catch {
-      toast.error("上下架保存失败，请重试");
+      toast.error(t("marketSync.listingFailed"));
     }
   }
 
@@ -119,10 +121,10 @@ const PriceDataManagementTab = () => {
             </p>
             <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl lg:text-5xl">{t("priceCatalog.title")}</h1>
             <p className="mt-4 text-sm leading-7 text-muted-foreground sm:text-base">
-              在售公开模型的价格与能力来自 Modelink 市场目录。点击模型查看完整价格及内部接入文档。
+              {t("marketSync.marketDescription")}
             </p>
             <p className="mt-3 break-all text-xs text-muted-foreground">
-              价格来源：{data?.source || "https://api.modelink.ai/v1/market/models"}
+              {t("marketSync.source", { url: data?.source || "https://api.modelink.ai/v1/market/models" })}
             </p>
             {data?.generated_at && (
               <p className="mt-3 text-xs text-muted-foreground">
@@ -158,9 +160,13 @@ const PriceDataManagementTab = () => {
 
         <Tabs defaultValue="market">
           <TabsList className="mb-6">
-            <TabsTrigger value="market">模型广场</TabsTrigger>
-            <TabsTrigger value="local">本地模型列表</TabsTrigger>
+            <TabsTrigger value="market">{t("marketSync.market")}</TabsTrigger>
+            <TabsTrigger value="local">{t("marketSync.local")}</TabsTrigger>
+            <TabsTrigger value="prices">{t("marketSync.prices")}</TabsTrigger>
           </TabsList>
+          <TabsContent value="prices">
+            <DeploymentPriceUpdates accessToken={accessToken} />
+          </TabsContent>
           <TabsContent value="market">
             <MarketPriceCatalog
               rows={rows}
@@ -203,19 +209,19 @@ const PriceDataManagementTab = () => {
         >
           <DialogContent className="max-h-[80dvh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
-              <DialogTitle>是否添加价格表中的模型？</DialogTitle>
-              <DialogDescription>选择模型后配置供应商和调用方式，确认保存后才会成为可调用模型。</DialogDescription>
+              <DialogTitle>{t("marketSync.missingTitle")}</DialogTitle>
+              <DialogDescription>{t("marketSync.missingHelp")}</DialogDescription>
             </DialogHeader>
             {discoveryError ? (
               <p role="alert">
-                待添加模型读取失败。
+                {t("marketSync.missingFailed")}
                 <Button variant="outline" onClick={() => void discoverMissingModels()}>
-                  重试
+                  {t("marketSync.retry")}
                 </Button>
               </p>
             ) : (
               <>
-                <p role="status">发现 {missingModels?.length ?? 0} 个尚未部署的在售公开模型。</p>
+                <p role="status">{t("marketSync.missingCount", { count: missingModels?.length ?? 0 })}</p>
                 <ul className="max-h-96 space-y-2 overflow-y-auto">
                   {missingModels?.map((row) => (
                     <li key={row.id} className="flex items-center justify-between gap-3 rounded border p-3">
@@ -227,7 +233,7 @@ const PriceDataManagementTab = () => {
                         className="shrink-0 text-sm text-cyan-700 underline"
                         href={"/models-and-endpoints?catalog=" + encodeURIComponent(row.id)}
                       >
-                        添加此模型
+                        {t("marketSync.addModel")}
                       </Link>
                     </li>
                   ))}
@@ -235,7 +241,7 @@ const PriceDataManagementTab = () => {
               </>
             )}
             <Button variant="outline" onClick={() => setMissingModels(null)}>
-              暂不添加
+              {t("marketSync.notNow")}
             </Button>
           </DialogContent>
         </Dialog>

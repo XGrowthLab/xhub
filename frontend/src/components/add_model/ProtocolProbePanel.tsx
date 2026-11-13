@@ -13,6 +13,10 @@ type ProbeRecord = {
   verified?: Record<string, boolean>;
   results?: { protocol: string; status: string; stage: string; http_status?: number }[];
 };
+// 协议名称是固定标识，不随界面语言改变；未知协议保留服务器返回的原始名称。
+const protocolNames: Record<string, string> = {
+  "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages",
+};
 /** ProtocolProbePanel 提供管理员自动探测开关、保存后手动验证和固定诊断结果。
  * id/token 指向已保存部署与管理会话，automatic/onChange 接入编辑表单；没有 ID 时不能向任意草稿地址发请求。
  * 自动状态读取仅访问网关，不主动触发上游；手动请求失败清楚提示，双语文案不展示上游正文或密钥。 */
@@ -84,9 +88,7 @@ export function ProtocolProbePanel({
         {(data?.record?.results ?? []).map((result) => (
           <div key={result.protocol} className="min-w-0 rounded-lg border bg-background p-3 text-xs">
             <p className="font-medium">
-              {{ "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages" }[
-                result.protocol
-              ] ?? result.protocol}
+              {protocolNames[result.protocol] ?? result.protocol}
             </p>
             <p
               className={`mt-2 ${result.status === "verified" ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
@@ -95,7 +97,7 @@ export function ProtocolProbePanel({
             </p>
             <p className="mt-1 text-muted-foreground">
               {t("protocolProbe." + result.stage)}
-              {result.http_status ? ` · HTTP ${result.http_status}` : ""}
+              {result.http_status ? t("protocolProbe.httpStatus", { status: result.http_status }) : ""}
             </p>
             {result.status !== "verified" && data?.record?.verified?.[result.protocol] && (
               <p className="mt-2">{t("protocolProbe.retained")}</p>

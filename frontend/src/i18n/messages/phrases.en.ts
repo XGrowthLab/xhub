@@ -1,4 +1,10 @@
 export const enPhrases: Record<string, string> = {
+  "Author": "Author",
+  "Added": "Added",
+  "errors.invalidCreateResponse": "Invalid create response",
+  "errors.skillDirectoryRequest": "Skill directory request failed (HTTP {status})",
+  "errors.invalidSkillDirectory": "Invalid Skill directory response",
+  "errors.invalidLogDuration": "Log preset duration must be positive and finite",
   "cachePrice.warningTitle": "Incomplete cache pricing",
   "cachePrice.missing": "Missing prices: {fields}. If the upstream reports these tokens, the request cannot be fully priced. Enter the supplier rate; use 0 only when explicitly free.",
   "cachePrice.blankHelp": "Blank means unset, not the input price. Reported cache usage without a matching rate remains unpriced.",

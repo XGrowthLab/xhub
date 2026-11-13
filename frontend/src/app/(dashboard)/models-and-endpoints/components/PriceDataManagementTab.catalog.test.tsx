@@ -69,8 +69,8 @@ describe("PriceDataManagementTab", () => {
     renderScreen();
     expect(await screen.findByText("No matching models")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Providers" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "本地模型列表" }));
-    expect(screen.getByRole("status")).toHaveTextContent("本地共 64 个模型");
+    await user.click(screen.getByRole("tab", { name: "Local model archive" }));
+    expect(screen.getByRole("status")).toHaveTextContent("64 of 64 archived models match");
     expect(screen.getByTestId("local-model-blank-one")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
   });
@@ -90,7 +90,7 @@ describe("PriceDataManagementTab", () => {
     expect(screen.getAllByRole("article")).toHaveLength(1);
     expect(screen.getByTestId("price-add-model")).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(within(card).getByRole("button", { name: "下架" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Delist" })).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: "Restore the built-in price" })).not.toBeInTheDocument();
   });
 });

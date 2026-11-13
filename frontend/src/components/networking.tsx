@@ -1698,10 +1698,10 @@ export const mcpHubPublicServersCall = async () => {
 export const skillHubPublicCall = async () => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/public/skill_hub` : `/public/skill_hub`;
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Skill directory request failed (HTTP ${response.status})`);
+  if (!response.ok) throw new Error(t("errors.skillDirectoryRequest", { status: response.status }));
   const data = await response.json();
   if (!data || !Array.isArray(data.plugins) || data.plugins.some((item: unknown) => !item || typeof item !== "object" || typeof (item as {name?: unknown}).name !== "string")) {
-    throw new Error("Invalid Skill directory response");
+    throw new Error(t("errors.invalidSkillDirectory"));
   }
   return data;
 };

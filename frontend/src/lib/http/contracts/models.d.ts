@@ -179,6 +179,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/price/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 核对部署价格 / Compare deployed prices
+         * @description 仅管理员；返回当前计费价、来源候选和版本。复杂或下架来源不可快捷应用 / Admin only; returns current prices, source candidates and versions. Complex or delisted prices cannot be applied automatically
+         */
+        get: operations["previewDeploymentPrices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/price/deployments/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 确认单个或批量调价 / Confirm single or bulk price changes
+         * @description 仅管理员；提交唯一部署ID和预览版本。后台重读价格，任一冲突整批回滚409；不重算历史账单 / Admin only; submit unique deployment IDs and preview versions. Server rechecks prices; any conflict rolls the batch back with 409. Historical bills remain unchanged
+         */
+        post: operations["applyDeploymentPrices"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/protocol_probe": {
         parameters: {
             query?: never;
@@ -424,6 +464,56 @@ export interface components {
             id: string;
         } | {
             model_name: string;
+        };
+        DeploymentPriceRate: {
+            measure: string;
+            side: string;
+            variant?: string;
+            window: string;
+            source_key: string;
+            label?: string;
+            /** Format: double */
+            usd: number;
+            /** Format: double */
+            unit_size: number;
+            fallback?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        DeploymentPricePreview: {
+            id: string;
+            name: string;
+            base_model: string;
+            manual: boolean;
+            current: components["schemas"]["DeploymentPriceRate"][] | null;
+            proposed: components["schemas"]["DeploymentPriceRate"][] | null;
+            changed: boolean;
+            /** @enum {string} */
+            reason: "" | "unmapped" | "delisted" | "config_model" | "unsupported_pricing" | "incomplete_pricing";
+            version: string;
+        } & {
+            [key: string]: unknown;
+        };
+        DeploymentPriceList: {
+            deployments: components["schemas"]["DeploymentPricePreview"][];
+            generated_at: string;
+        } & {
+            [key: string]: unknown;
+        };
+        DeploymentPriceSelection: {
+            items: ({
+                id: string;
+                version: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+        } & {
+            [key: string]: unknown;
+        };
+        DeploymentPriceResult: {
+            updated: number;
+        } & {
+            [key: string]: unknown;
         };
         ProtocolProbeResult: {
             /** @enum {string} */
@@ -777,6 +867,60 @@ export interface operations {
             401: components["responses"]["Error401"];
             403: components["responses"]["Error403"];
             404: components["responses"]["Error404"];
+        };
+    };
+    previewDeploymentPrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成功 / Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentPriceList"];
+                };
+            };
+            401: components["responses"]["Error401"];
+            403: components["responses"]["Error403"];
+            500: components["responses"]["Error500"];
+            503: components["responses"]["Error503"];
+        };
+    };
+    applyDeploymentPrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentPriceSelection"];
+            };
+        };
+        responses: {
+            /** @description 成功 / Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentPriceResult"];
+                };
+            };
+            400: components["responses"]["Error400"];
+            401: components["responses"]["Error401"];
+            403: components["responses"]["Error403"];
+            409: components["responses"]["Error409"];
+            500: components["responses"]["Error500"];
+            503: components["responses"]["Error503"];
         };
     };
     detectDeploymentProtocols: {

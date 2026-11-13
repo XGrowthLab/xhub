@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sunqirui1987/xhub/internal/catalog"
 	"github.com/sunqirui1987/xhub/internal/config"
 	"github.com/sunqirui1987/xhub/internal/provider/probe"
 	"github.com/sunqirui1987/xhub/internal/testutil/protocolfixture"
@@ -81,6 +82,37 @@ func TestProtocolProbeLifecycle(t *testing.T) {
 	info := h.ok("GET", "/v2/model/info?modelId="+id, admin, nil)
 	if strings.Contains(string(info.body), "signature") || strings.Contains(string(info.body), "fixture-protocol-key") {
 		t.Fatal("探测证明或密钥暴露")
+	}
+	// 同一部署先经过真实协议探测，再同步并确认市场价；调价不得破坏证明或重复探测。
+	const marketModel = "probe-market-price-integration"
+	catalog.SetModel(marketModel, map[string]any{"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002})
+	t.Cleanup(func() { catalog.RemoveModel(marketModel) })
+	h.ok("POST", "/model/update", admin, map[string]any{"id": id, "model_info": map[string]any{"base_model": marketModel}})
+	market := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":true,"data":[{"id":"probe-market-price-integration","issuer":{"name":"OpenAI"},"pricing_rules_v2":[{"details_v2":{"input":{"unit_name":"token","unit_size":1000000,"unit_price_usd":4},"output":{"unit_name":"token","unit_size":1000000,"unit_price_usd":6}}}]}]}`))
+	}))
+	defer market.Close()
+	t.Setenv("XHUB_PRICE_FEED_URL", market.URL)
+	h.ok("POST", "/reload/model_cost_map", admin, nil)
+	prices := listField(h.ok("GET", "/price/deployments", admin, nil).json(), "deployments")
+	var priceVersion any
+	for _, price := range prices {
+		if price["id"] == id && price["changed"] == true {
+			priceVersion = price["version"]
+		}
+	}
+	if priceVersion == nil {
+		t.Fatal("探测后的部署未能核对市场价格")
+	}
+	previousCalls := calls.Load()
+	h.ok("POST", "/price/deployments/apply", admin, map[string]any{"items": []any{map[string]any{"id": id, "version": priceVersion}}})
+	h.gw.ProbeChangedModels(context.Background())
+	if calls.Load() != previousCalls {
+		t.Fatal("确认价格后重复执行了协议探测")
+	}
+	updated := h.ok("GET", "/v2/model/info?modelId="+id, admin, nil).json()["data"].([]any)[0].(map[string]any)["model_info"].(map[string]any)["protocol_probe"].(map[string]any)
+	if len(updated["verified"].(map[string]any)) != 3 {
+		t.Fatal("确认价格丢失已验证的协议能力")
 	}
 	// 用普通个人会话实际穿过预算、选路和结算链；三个原生入口不能只在目录中出现。
 	payer := h.personalBillingSession()
