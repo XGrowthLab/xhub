@@ -41,4 +41,5 @@ export const protocolProbeZhCN = {
   examples: "请求示例",
   scope: "验证文字回复和一次函数工具往返；不代表图片、联网搜索、后台任务或 Token 计数也已验证。",
   status: "探测结果",
+  httpStatus: " · HTTP {status}",
 };

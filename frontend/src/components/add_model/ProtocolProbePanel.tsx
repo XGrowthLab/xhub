@@ -8,6 +8,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+// 协议名称是公开的技术标识，在中英文界面保持一致。
+const PROTOCOL_NAMES: Record<string, string> = { "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages" };
+
 type ProbeRecord = {
   checked_at?: string;
   verified?: Record<string, boolean>;
@@ -84,9 +87,7 @@ export function ProtocolProbePanel({
         {(data?.record?.results ?? []).map((result) => (
           <div key={result.protocol} className="min-w-0 rounded-lg border bg-background p-3 text-xs">
             <p className="font-medium">
-              {{ "openai-chat": "Chat", "openai-responses": "Responses", "anthropic-messages": "Messages" }[
-                result.protocol
-              ] ?? result.protocol}
+              {PROTOCOL_NAMES[result.protocol] ?? result.protocol}
             </p>
             <p
               className={`mt-2 ${result.status === "verified" ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
@@ -95,7 +96,7 @@ export function ProtocolProbePanel({
             </p>
             <p className="mt-1 text-muted-foreground">
               {t("protocolProbe." + result.stage)}
-              {result.http_status ? ` · HTTP ${result.http_status}` : ""}
+              {result.http_status ? t("protocolProbe.httpStatus", { status: result.http_status }) : ""}
             </p>
             {result.status !== "verified" && data?.record?.verified?.[result.protocol] && (
               <p className="mt-2">{t("protocolProbe.retained")}</p>

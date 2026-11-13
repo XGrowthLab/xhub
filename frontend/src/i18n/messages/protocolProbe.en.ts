@@ -42,4 +42,5 @@ export const protocolProbeEn = {
   scope:
     "Checks text replies and one function tool round trip. Does not verify images, web search, background tasks or token counting.",
   status: "Detection result",
+  httpStatus: " · HTTP {status}",
 };

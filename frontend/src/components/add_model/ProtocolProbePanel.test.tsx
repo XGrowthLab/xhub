@@ -49,7 +49,8 @@ it.each(["zh-CN", "en"] as const)("shows truthful status and safe requests in %s
   renderPanel(locale, "saved-deployment");
   await screen.findByText(tr("protocolProbe.retained"));
   expect(screen.getByText(tr("protocolProbe.temporarily_failed"))).toBeVisible();
-  expect(screen.getByText(/HTTP 503/)).toBeVisible();
+  expect(screen.getByText("Chat", { exact: true })).toBeVisible();
+  expect(screen.getByText(translate(locale, "protocolProbe.httpStatus", { status: 503 }), { exact: false })).toBeVisible();
   await user.click(screen.getByRole("button", { name: tr("protocolProbe.manual") }));
   await waitFor(() =>
     expect(api.post).toHaveBeenCalledWith("/model/protocol_probe", {

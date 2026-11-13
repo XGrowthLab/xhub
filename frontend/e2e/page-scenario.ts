@@ -89,7 +89,7 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       observed.logs = await logsResponse.json();
       await expect.poll(() => observed.logs !== undefined, { timeout: 15_000 }).toBe(true);
       const rows = observed.logs?.data ?? observed.logs ?? [];
-      if (rows.length === 0) await expect(page.getByText(t("No requests yet")).first()).toBeVisible({ timeout: 15_000 });
+      if (rows.length === 0) await expect(page.getByText(t("logsUX.empty")).first()).toBeVisible({ timeout: 15_000 });
       else await expect(page.getByRole("table")).toBeVisible({ timeout: 15_000 });
     }
     if (item.route === "/guardrails-monitor") {
