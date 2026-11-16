@@ -90,6 +90,11 @@ func New(s Host, w http.ResponseWriter, r *http.Request) {
 	if params == nil {
 		params = map[string]any{}
 	}
+	// 确认后的市场分档只能由服务端生成，不能由创建请求伪造来源及边界语义。
+	if params["market_price_tiers"] != nil || params["market_tier_semantics"] != nil {
+		util.WriteError(w, 400, "invalid_request", "market tier snapshots are server managed")
+		return
+	}
 	info, _ := body["model_info"].(map[string]any)
 	if info == nil {
 		info = map[string]any{}
@@ -178,6 +183,7 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	originalParams := maps.Clone(m.LiteLLMParams)
 	m.LiteLLMParams = maps.Clone(m.LiteLLMParams)
 
 	m.ModelInfo = maps.Clone(m.ModelInfo)
@@ -193,8 +199,17 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 			// 显式替换费率后不再沿用旧市场确认标记。
 			delete(m.ModelInfo, "market_price_revision")
 			delete(m.ModelInfo, "market_price_confirmed_at")
+			clearMarketTierSnapshot(m.LiteLLMParams)
 		}
 		for k, v := range params {
+			if k == "market_price_tiers" || k == "market_tier_semantics" || k == "pricing_rules_v2" && originalParams["market_tier_semantics"] != nil {
+				// 允许表单原样回传服务端快照，但不能通过普通编辑伪造价格或分档边界。
+				if priceVersion(v) != priceVersion(originalParams[k]) {
+					util.WriteError(w, 400, "invalid_request", "market tier snapshots are server managed")
+					return
+				}
+				continue
+			}
 			// 目录模式表单会省略费率；已有确认快照不得因编辑说明等字段退回旧目录。
 			if k == "rates" && v == nil && m.ModelInfo["market_price_revision"] != nil && previousSource != "manual" {
 				incoming, _ := body["model_info"].(map[string]any)
@@ -223,6 +238,7 @@ func Update(s Host, w http.ResponseWriter, r *http.Request) {
 	if newSource == "manual" || newSource != previousSource || newBase != previousBase {
 		delete(m.ModelInfo, "market_price_revision")
 		delete(m.ModelInfo, "market_price_confirmed_at")
+		clearMarketTierSnapshot(m.LiteLLMParams)
 	}
 	if newSource == "catalog" && (newSource != previousSource || newBase != previousBase) {
 		// 切换计价来源或基准时不能保留旧模型或手工费率；重新绑定可完整计费的目录快照。

@@ -21,15 +21,17 @@ import (
 
 // deploymentPrice 描述一个部署的当前费率和市场候选，不返回凭据或上游连接秘密。
 type deploymentPrice struct {
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Base     string         `json:"base_model"`
-	Manual   bool           `json:"manual"`
-	Current  []catalog.Rate `json:"current"`
-	Proposed []catalog.Rate `json:"proposed"`
-	Changed  bool           `json:"changed"`
-	Reason   string         `json:"reason"`
-	Version  string         `json:"version"`
+	ID            string               `json:"id"`
+	Name          string               `json:"name"`
+	Base          string               `json:"base_model"`
+	Manual        bool                 `json:"manual"`
+	Current       []catalog.Rate       `json:"current"`
+	Proposed      []catalog.Rate       `json:"proposed"`
+	CurrentTiers  []catalog.MarketTier `json:"current_tiers,omitempty"`
+	ProposedTiers []catalog.MarketTier `json:"proposed_tiers,omitempty"`
+	Changed       bool                 `json:"changed"`
+	Reason        string               `json:"reason"`
+	Version       string               `json:"version"`
 }
 
 // priceVersion 对部署和候选生成不可逆版本号；参数可以含秘密但输出不含原文。
@@ -68,6 +70,12 @@ func effectiveRates(dep config.ModelEntry) []catalog.Rate {
 // 来源下架、无明确绑定或复杂计价只允许查看，不能快捷覆盖；YAML 部署由配置文件维护。
 func pricePreview(dep config.ModelEntry, doc catalog.PriceDocument) deploymentPrice {
 	p := deploymentPrice{ID: str(dep.ModelInfo["id"]), Name: dep.ModelName, Base: str(dep.ModelInfo["base_model"]), Manual: dep.ModelInfo["pricing_source"] == "manual", Current: effectiveRates(dep)}
+	if raw, err := json.Marshal(dep.LiteLLMParams["market_price_tiers"]); err == nil {
+		_ = json.Unmarshal(raw, &p.CurrentTiers)
+	}
+	if len(p.CurrentTiers) > 0 {
+		p.Current = nil
+	}
 	row, found := doc.Models[p.Base]
 	switch {
 	case !modelIsDB(dep):
@@ -81,11 +89,14 @@ func pricePreview(dep config.ModelEntry, doc catalog.PriceDocument) deploymentPr
 			p.Reason = "delisted"
 		} else {
 			p.Proposed, p.Reason = catalog.MarketRates(row)
+			if p.Reason == "unsupported_pricing" {
+				p.ProposedTiers, p.Reason = catalog.MarketTiers(row)
+			}
 		}
 	}
-	p.Changed = p.Reason == "" && !samePrices(p.Current, p.Proposed)
+	p.Changed = p.Reason == "" && (!samePrices(p.Current, p.Proposed) || !reflect.DeepEqual(p.CurrentTiers, p.ProposedTiers))
 	// 版本只包含影响价格决策的非敏感字段；不把 API Key 等凭据送入可见摘要。
-	p.Version = priceVersion(p.ID, p.Name, p.Base, p.Manual, dep.ParamString("model", ""), dep.ParamString("custom_llm_provider", ""), dep.ParamString("litellm_credential_name", ""), dep.ModelInfo["transport"], dep.ModelInfo["endpoint_types"], p.Current, p.Proposed, p.Reason)
+	p.Version = priceVersion(p.ID, p.Name, p.Base, p.Manual, dep.ParamString("model", ""), dep.ParamString("custom_llm_provider", ""), dep.ParamString("litellm_credential_name", ""), dep.ModelInfo["transport"], dep.ModelInfo["endpoint_types"], p.Current, p.Proposed, p.CurrentTiers, p.ProposedTiers, p.Reason)
 	return p
 }
 
@@ -216,13 +227,23 @@ func ApplyDeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 			if dep.LiteLLMParams == nil {
 				dep.LiteLLMParams = map[string]any{}
 			}
-			dep.LiteLLMParams["rates"] = preview.Proposed
+			clearMarketTierSnapshot(dep.LiteLLMParams)
+			if len(preview.ProposedTiers) > 0 {
+				row := doc.Models[preview.Base]
+				dep.LiteLLMParams["pricing_rules_v2"] = row["pricing_rules_v2"]
+				dep.LiteLLMParams["market_price_tiers"] = preview.ProposedTiers
+				dep.LiteLLMParams["market_tier_semantics"] = "modelink_open_closed_v1"
+				dep.ModelInfo["pricing_source"] = "catalog"
+				delete(dep.LiteLLMParams, "rates")
+			} else {
+				dep.LiteLLMParams["rates"] = preview.Proposed
+			}
 			// 平铺旧价清除，避免管理表单显示另一套数字；全部候选维度保存为费率表。
 			for _, field := range rateFields {
 				delete(dep.LiteLLMParams, field)
 			}
 			dep.ModelInfo["market_price_confirmed_at"] = time.Now().UTC().Format(time.RFC3339)
-			dep.ModelInfo["market_price_revision"] = priceVersion(preview.Proposed)
+			dep.ModelInfo["market_price_revision"] = priceVersion(preview.Proposed, preview.ProposedTiers)
 			params, _ := json.Marshal(dep.LiteLLMParams)
 			info, _ := json.Marshal(dep.ModelInfo)
 			if _, err = tx.ExecContext(ctx, `UPDATE proxy_models SET litellm_params_json=$1, model_info_json=$2,updated_at=$3 WHERE id=$4`, string(params), string(info), time.Now().UTC().Format(time.RFC3339), item.ID); err != nil {
@@ -278,6 +299,27 @@ func bindInitialMarketPrice(ctx context.Context, s Host, params, info map[string
 	}
 	rates, reason := catalog.MarketRates(row)
 	if reason != "" {
+		if tiers, tierReason := catalog.MarketTiers(row); tierReason == "" {
+			clearMarketTierSnapshot(params)
+			delete(params, "rates")
+			for _, field := range rateFields {
+				delete(params, field)
+			}
+			params["pricing_rules_v2"] = row["pricing_rules_v2"]
+			params["market_price_tiers"] = tiers
+			params["market_tier_semantics"] = "modelink_open_closed_v1"
+			// 未显式指定来源的目录部署也须标记可信来源，否则边界语义无法在结算中验证。
+			info["pricing_source"] = "catalog"
+			info["market_price_revision"] = priceVersion(tiers)
+			return nil
+		}
+		if raw, err := json.Marshal(row["pricing_rules_v2"]); err == nil {
+			var rules []json.RawMessage
+			if json.Unmarshal(raw, &rules) == nil && len(rules) > 1 {
+				// 市场多档报价不可安全转换时，不允许新建部署退回历史首档。
+				return errors.New("market tier pricing requires manual configuration")
+			}
+		}
 		// 已有复杂目录维持原创建契约；新来源型号必须人工配置，不能猜取首档价格。
 		if _, exists := catalog.ModelRow(id); exists {
 			return nil
@@ -287,4 +329,12 @@ func bindInitialMarketPrice(ctx context.Context, s Host, params, info map[string
 	params["rates"] = rates
 	info["market_price_revision"] = priceVersion(rates)
 	return nil
+}
+
+// clearMarketTierSnapshot 删除旧的分档价格与边界语义；参数为可写部署参数，无返回。
+// 确认新价格或切换计价源时使用，避免新单档价格与旧分档同时参与结算。
+func clearMarketTierSnapshot(params map[string]any) {
+	delete(params, "pricing_rules_v2")
+	delete(params, "market_price_tiers")
+	delete(params, "market_tier_semantics")
 }

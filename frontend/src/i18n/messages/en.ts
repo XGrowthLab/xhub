@@ -12,6 +12,7 @@ import { routeTemplatesEn } from "./routeTemplates.en";
 import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
+  playgroundAttachment: { expired: "An earlier attachment is no longer available after refreshing. Clear the conversation and upload it again to continue." },
   notifications,
   marketSync,
   protocolProbe: protocolProbeEn,

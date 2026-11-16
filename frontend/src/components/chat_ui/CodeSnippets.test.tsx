@@ -47,6 +47,18 @@ describe("CodeSnippets", () => {
     expect(code).toContain("print(response.data[0].embedding)");
   });
 
+  /** 验证代码示例使用对应协议的 PDF 文件块，而不是将 PDF 冒充图片；只生成字符串，无网络或文件副作用。 */
+  it.each([
+    [EndpointType.CHAT, '"type": "file"'],
+    [EndpointType.RESPONSES, '"type": "input_file"'],
+  ])("generates valid PDF examples for %s", (endpointType, expected) => {
+    const code = generateCodeSnippet({ ...baseParams, endpointType });
+    expect(code).toContain(expected);
+    expect(code).toContain("data:application/pdf;base64,{pdf_data}");
+    expect(code).not.toContain("or data:application/pdf");
+    expect(code).toContain("Summarize this document.");
+  });
+
   describe("base URL selection", () => {
     it("should use LITELLM_UI_API_DOC_BASE_URL when provided", () => {
       const customBaseUrl = "https://custom-doc.example.com";

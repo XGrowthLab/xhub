@@ -253,7 +253,7 @@ func TestStrictBudgetRejectsUnpricedFeatures(t *testing.T) {
 		{name: "top message audio", change: func(b map[string]any) {
 			b["messages"] = []any{map[string]any{"role": "assistant", "content": "", "audio": map[string]any{"id": "audio_test"}}}
 		}},
-		{name: "PDF content", protocol: "anthropic-messages", change: func(b map[string]any) {
+		{name: "malformed PDF content", code: "invalid_request", protocol: "anthropic-messages", change: func(b map[string]any) {
 			b["messages"] = []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "document"}}}}
 		}},
 		{name: "tool result image", code: "invalid_request", protocol: "anthropic-messages", change: func(b map[string]any) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import time
 import uuid
@@ -41,6 +42,34 @@ ERROR_LOG_TEXT_DIAGNOSTIC = (
 
 
 VISION_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC"
+PDF_FIXTURE = "JVBERi0xLjQKc3ludGhldGljCiUlRU9G"
+
+
+def pdf_answer(req: dict, path: str) -> str:
+    """验证浏览器上传的 PDF 以正确协议与原始字节抵达本地上游。
+
+    参数为请求和路径；返回校验通过标识，不保存文件。缺少内容、名称或协议不正确时抛出 ValueError。
+    """
+    messages = req.get("input" if path.endswith("/responses") else "messages", [])
+    files = []
+    for message in messages:
+        for part in message.get("content", []) if isinstance(message.get("content"), list) else []:
+            kind = part.get("type")
+            if kind == "file" and path.endswith("/chat/completions"):
+                file = part.get("file", {})
+                files.append((file.get("filename"), file.get("file_data")))
+            elif kind == "input_file" and path.endswith("/responses"):
+                files.append((part.get("filename"), part.get("file_data")))
+            elif kind == "document" and path.endswith("/messages"):
+                source = part.get("source", {})
+                if source.get("type") != "base64" or source.get("media_type") != "application/pdf":
+                    raise ValueError("invalid PDF source")
+                files.append((part.get("title"), "data:application/pdf;base64," + source.get("data", "")))
+            elif kind not in ("text", "input_text", "output_text"):
+                raise ValueError("wrong PDF protocol")
+    if files != [("fixture.pdf", "data:application/pdf;base64," + PDF_FIXTURE)]:
+        raise ValueError("PDF payload lost or changed")
+    return "pdf-verified"
 
 
 def vision_answer(req: dict, path: str) -> str:
@@ -235,6 +264,18 @@ class Handler(BaseHTTPRequestHandler):
                 if Handler.market_variant and model_id == "e2e-market-chat":
                     # 较长但有效的来源价格规则，用于验证详情跨页时不会一次性返回整个事件。
                     rows[-1]["pricing_rules_v2"][0]["details_v2"]["input"]["e2e_padding"] = "x" * 20000
+            if os.environ.get("E2E_MARKET_TIER") == "1":
+                # 分档样例仅在专属浏览器测试启用；价格、用量和模型均为合成数据。
+                def token_rate(price):
+                    """生成每百万 Token 的合成美元价，参数为单价；无外部副作用。"""
+                    return {"unit_name": "token", "unit_size": 1000000, "unit_price_usd": price}
+                rows.append({"id": "e2e-market-tier", "name": "e2e-market-tier", "issuer": {"name": "OpenAI"},
+                    "model_constraints": {"context_length": 128000, "max_tokens": 8192},
+                    "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                    "pricing_rules_v2": [
+                        {"input_range": [0, 5], "output_range": [0, 99999999], "details_v2": {"ncache": token_rate(1), "output": token_rate(2)}},
+                        {"input_range": [5, 99999999], "output_range": [0, 99999999], "details_v2": {"ncache": token_rate(2), "output": token_rate(3)}},
+                    ]})
             self._json({"status": True, "data": rows})
             return
         if self._ark() or self._fal():
@@ -290,9 +331,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._monitor_tps(req):
             return
-        if req.get("model", "").startswith("e2e-vision-"):
+        if req.get("model", "").startswith(("e2e-vision-", "e2e-pdf-")):
             try:
-                text = vision_answer(req, self.path)
+                text = pdf_answer(req, self.path) if req.get("model", "").startswith("e2e-pdf-") else vision_answer(req, self.path)
                 # 软预算不注入cap：Chat/Responses允许省略，Messages保留协议必填约束；显式cap仍校验。
                 if req["model"].startswith("e2e-vision-budget-"):
                     cap_field = "max_output_tokens" if self.path.endswith("/responses") else "max_tokens"

@@ -1,5 +1,12 @@
 export const marketSync = {
-  variant: { uncached: "Uncached", cached: "Cached", "1h": "1 hour", search: "request" },
+  variant: {
+    uncached: "Uncached",
+    cached: "Cached",
+    "1h": "1 hour",
+    "30m": "30 minutes",
+    "12h": "12 hours",
+    search: "request",
+  },
   unit: { token: "1M tokens", query: "request", second: "second", picture: "image" },
   delistedSaved: "Model delisted; local record retained",
   listedSaved: "Model listed",
@@ -20,6 +27,7 @@ export const marketSync = {
   deployment: "Deployment / pricing model",
   current: "Current billing prices",
   proposed: "Latest market prices",
+  inputTier: "Input tokens: {lower} < amount ≤ {upper}",
   action: "Action",
   select: "Select {name}",
   manual: "Manual pricing",

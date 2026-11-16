@@ -47,7 +47,7 @@ func budgetSelectPrices(rates []catalog.Rate, window, ttl string) (budgetTierPri
 	}
 	// 客户端声明只约束其缓存块；透明代理还可能注入另一期限的系统前缀缓存。
 	// 因此新计划始终冻结全部已知写价并取最大值预占，不能把请求TTL当成全部实测维度的上界。
-	for _, variant := range []string{"", "1h"} {
+	for _, variant := range []string{"", "1h", "30m", "12h"} {
 		if r, found := budgetRate(rates, "cache_write", variant, window); found {
 			if p.CacheWriteByTTL == nil {
 				p.CacheWriteByTTL = map[string]catalog.Rate{}
@@ -224,6 +224,12 @@ func budgetTierRates(raw any) ([]catalog.Rate, error) {
 		case "c_1h_cache":
 			r.Side = "cache_write"
 			r.Variant = "1h"
+		case "c_30m_cache":
+			r.Side = "cache_write"
+			r.Variant = "30m"
+		case "c_12h_cache":
+			r.Side = "cache_write"
+			r.Variant = "12h"
 		case "bi_input":
 			r.Side = "batch_input"
 		case "bi_output":
@@ -324,11 +330,15 @@ func budgetTierMaximum(tiers []budgetPriceTier) (catalog.Rate, catalog.Rate, *ca
 
 // budgetSelectTier 根据完整实测输入/输出从冻结表选择费率；输入总量包括独立缓存读与写，避免缓存绕过长上下文档。
 // 来源未说明共享阈值的开闭，因此阈值两侧费率不同必须保留未知占用；相同收费契约可安全结算。
-func budgetSelectTier(tiers []budgetPriceTier, u catalog.Usage) (budgetTierPrices, error) {
+func budgetSelectTier(tiers []budgetPriceTier, u catalog.Usage, semantics string) (budgetTierPrices, error) {
 	input := int64(u.PromptTokens) + int64(u.CacheWriteTokens)
 	var selected *budgetTierPrices
 	for _, tier := range tiers {
 		if input < int64(tier.InputRange[0]) || input > int64(tier.InputRange[1]) || u.CompletionTokens < tier.OutputRange[0] || u.CompletionTokens > tier.OutputRange[1] {
+			continue
+		}
+		// Modelink 的页面明确展示 (下界, 上界]；零用量特殊归入首档，其他来源沿用歧义拒绝。
+		if semantics == "modelink_open_closed_v1" && tier.InputRange[0] > 0 && input == int64(tier.InputRange[0]) {
 			continue
 		}
 		if selected != nil && !budgetSamePrices(*selected, tier.budgetTierPrices) {

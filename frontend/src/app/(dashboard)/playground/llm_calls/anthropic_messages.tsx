@@ -7,6 +7,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens, type ProviderCacheUsage } from "@/utils/promptCacheUsage";
 import { t } from "@/i18n";
+import { messagesContentPart } from "@/components/llm_calls/attachment_parts";
 
 /** 将累计 Messages 用量映射为 UI 指标；参数为输入、输出和供应商缓存计数，返回 TokenUsage。
  * 调用场景为流式累计与非流式响应，不修改原始用量；缺失缓存字段时省略对应指标。 */
@@ -59,7 +60,7 @@ export async function makeAnthropicMessagesRequest(
 
     const requestBody: any = {
       model: selectedModel,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => ({ role: m.role, content: Array.isArray(m.content) ? m.content.map(messagesContentPart) : m.content })),
       stream: streamingEnabled,
       max_tokens: 1024,
       // @ts-ignore - litellm specific parameter

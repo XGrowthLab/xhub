@@ -491,6 +491,8 @@ export interface components {
             /** @enum {string} */
             reason: "" | "unmapped" | "delisted" | "config_model" | "unsupported_pricing" | "incomplete_pricing";
             version: string;
+            current_tiers?: components["schemas"]["DeploymentPriceTier"][];
+            proposed_tiers?: components["schemas"]["DeploymentPriceTier"][];
         } & {
             [key: string]: unknown;
         };
@@ -531,6 +533,13 @@ export interface components {
             verified: {
                 [key: string]: boolean;
             };
+        };
+        DeploymentPriceTier: {
+            input_range: number[];
+            output_range: number[];
+            rates: components["schemas"]["DeploymentPriceRate"][];
+        } & {
+            [key: string]: unknown;
         };
     };
     responses: {

@@ -125,6 +125,10 @@ func StrictBudgetPlan(dep config.ModelEntry, finalBody []byte, protocol string, 
 	if tiered {
 		snapshot.Tiers = tiers
 		snapshot.IntervalSemantics = "shared_boundaries_require_equal_rates"
+		if dep.LiteLLMParams["market_tier_semantics"] == "modelink_open_closed_v1" && dep.ModelInfo["pricing_source"] == "catalog" {
+			// 仅服务端确认的 Modelink 快照可采用该来源公开的左开右闭区间。
+			snapshot.IntervalSemantics = "modelink_open_closed_v1"
+		}
 		// 原始目录不声明开闭边界；预占覆盖所有可达档，最终共享边界只有费率一致才可结算。
 		snapshot.Input, snapshot.Output, snapshot.CacheRead, snapshot.CacheWrite = budgetTierMaximum(tiers)
 		snapshot.CacheWriteByTTL = budgetMaximumCacheTTL(tiers)
@@ -192,7 +196,7 @@ func (p BudgetPlan) Charge(u catalog.Usage, rawUsage ...map[string]any) (catalog
 		if int64(u.PromptTokens)+int64(u.CacheWriteTokens) > int64(s.InputBound) {
 			return fail("measured total input including cache writes exceeds the reserved bound")
 		}
-		prices, err := budgetSelectTier(s.Tiers, u)
+		prices, err := budgetSelectTier(s.Tiers, u, s.IntervalSemantics)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -301,16 +305,20 @@ func ValidateStrictBudgetUsage(raw map[string]any, plans ...BudgetPlan) error {
 			}
 		}
 	}
-	five, hour, present, err := budgetCacheCreationCounts(raw)
+	counts, present, err := budgetCacheCreationCounts(raw)
 	if err != nil {
 		return err
 	}
-	if present && five+hour > 0 {
+	var cacheTotal int64
+	for _, count := range counts {
+		cacheTotal += int64(count)
+	}
+	if present && cacheTotal > 0 {
 		var plan *budgetPriceSnapshot
 		if len(plans) > 0 {
 			plan = plans[0].frozen
 		}
-		if err := budgetValidateCacheTTL(plan, five, hour); err != nil {
+		if err := budgetValidateCacheTTL(plan, counts); err != nil {
 			return err
 		}
 	}
@@ -818,6 +826,15 @@ func budgetContent(value any, ttl *string, protocol, role string, hasImages *boo
 			if err := llmdialogue.ValidateBudgetInputImage(part, protocol); err != nil {
 				return budgetFailure("invalid_request", "invalid image input for strict budget")
 			}
+			*hasImages = true
+		case "file", "input_file", "document":
+			if role != "user" {
+				return budgetFailure("unsupported_budget", "strict budget document input requires user content")
+			}
+			if err := llmdialogue.ValidateBudgetInputPDF(part, protocol); err != nil {
+				return budgetFailure("invalid_request", "invalid PDF input for strict budget")
+			}
+			// PDF 可能含图片，沿用整输入窗预占及多模态价格校验，不能按纯文本估算。
 			*hasImages = true
 		case "tool_result":
 			if protocol != "anthropic-messages" || role != "user" {

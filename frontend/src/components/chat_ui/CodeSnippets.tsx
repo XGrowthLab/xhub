@@ -122,8 +122,8 @@ response = client.chat.completions.create(
 
 print(response)
 
-# Example with image or PDF (uncomment and provide file path to use)
-# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# Example with an image (uncomment and provide a file path)
+# base64_file = encode_image("path/to/your/file.jpg")
 # response_with_file = client.chat.completions.create(
 #     model="${modelNameForCode}",
 #     messages=[
@@ -137,7 +137,7 @@ print(response)
 #                 {
 #                     "type": "image_url",
 #                     "image_url": {
-#                         "url": f"data:image/jpeg;base64,{base64_file}"  # or data:application/pdf;base64,{base64_file}
+#                         "url": f"data:image/jpeg;base64,{base64_file}"
 #                     }
 #                 }
 #             ]
@@ -145,6 +145,17 @@ print(response)
 #     ]${extraBodyCode}
 # )
 # print(response_with_file)
+
+# Example with a PDF (uncomment and provide a file path)
+# pdf_data = encode_image("path/to/your/document.pdf")
+# response_with_pdf = client.chat.completions.create(
+#     model="${modelNameForCode}",
+#     messages=[{"role": "user", "content": [
+#         {"type": "text", "text": "Summarize this document."},
+#         {"type": "file", "file": {"filename": "document.pdf", "file_data": f"data:application/pdf;base64,{pdf_data}"}},
+#     ]}]
+# )
+# print(response_with_pdf)
 `;
       break;
     }
@@ -182,8 +193,8 @@ response = client.responses.create(
 
 print(response.output_text)
 
-# Example with image or PDF (uncomment and provide file path to use)
-# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# Example with an image (uncomment and provide a file path)
+# base64_file = encode_image("path/to/your/file.jpg")
 # response_with_file = client.responses.create(
 #     model="${modelNameForCode}",
 #     input=[
@@ -193,13 +204,24 @@ print(response.output_text)
 #                 {"type": "input_text", "text": "${safePrompt}"},
 #                 {
 #                     "type": "input_image",
-#                     "image_url": f"data:image/jpeg;base64,{base64_file}",  # or data:application/pdf;base64,{base64_file}
+#                     "image_url": f"data:image/jpeg;base64,{base64_file}",
 #                 },
 #             ],
 #         }
 #     ]${extraBodyCode}
 # )
 # print(response_with_file.output_text)
+
+# Example with a PDF (uncomment and provide a file path)
+# pdf_data = encode_image("path/to/your/document.pdf")
+# response_with_pdf = client.responses.create(
+#     model="${modelNameForCode}",
+#     input=[{"role": "user", "content": [
+#         {"type": "input_text", "text": "Summarize this document."},
+#         {"type": "input_file", "filename": "document.pdf", "file_data": f"data:application/pdf;base64,{pdf_data}"},
+#     ]}]
+# )
+# print(response_with_pdf.output_text)
 `;
       break;
     }

@@ -73,6 +73,10 @@ func (p SoftPricePlan) Charge(raw map[string]any) (catalog.Charge, error) {
 	}
 	if tiered {
 		snapshot.Tiers = tiers
+		if p.dep.LiteLLMParams["market_tier_semantics"] == "modelink_open_closed_v1" && p.dep.ModelInfo["pricing_source"] == "catalog" {
+			// 只对已确认的 Modelink 快照使用来源明确的边界；未知来源仍拒绝歧义。
+			snapshot.IntervalSemantics = "modelink_open_closed_v1"
+		}
 		snapshot.Input, snapshot.Output, snapshot.CacheRead, snapshot.CacheWrite = budgetTierMaximum(tiers)
 		snapshot.CacheWriteByTTL = budgetMaximumCacheTTL(tiers)
 	} else {

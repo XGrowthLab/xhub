@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// ContentPart 保存跨协议消息中有序的文本或图片；URL 为远程地址或原始 data URL，FileID 仅能由 Responses 原生通道解释。
+// ContentPart 保存跨协议消息中有序的文本、图片或内联 PDF；URL 为远程地址或原始 data URL，FileID 仅能由 Responses 原生通道解释。
 // 解析器生成、编码器读取；不下载图片，不保存文件，也不把图片字节伪装成文本或推断模型视觉能力。
 type ContentPart struct {
-	Type, Text, URL, FileID, Detail string
+	Type, Text, URL, FileID, Detail, Filename string
 }
 
 // imageDetail 校验 OpenAI 图片精度；参数为可省略字段，返回原值或明确类型/枚举错误，供图片解析器调用。
@@ -165,7 +165,7 @@ func messageContent(value any, protocol, role string) (string, []ContentPart, er
 	}
 	var text strings.Builder
 	var content []ContentPart
-	hasImage := false
+	hasMedia := false
 	for _, value := range parts {
 		block := dialogueMap(value)
 		switch block["type"] {
@@ -181,13 +181,20 @@ func messageContent(value any, protocol, role string) (string, []ContentPart, er
 			if err != nil {
 				return "", nil, err
 			}
-			hasImage = true
+			hasMedia = true
 			content = append(content, image)
+		case "file", "input_file", "document":
+			file, err := parsePDFPart(block, protocol, role)
+			if err != nil {
+				return "", nil, err
+			}
+			hasMedia = true
+			content = append(content, file)
 		default:
 			return "", nil, fmt.Errorf("unsupported content capability %v", block["type"])
 		}
 	}
-	if !hasImage {
+	if !hasMedia {
 		content = nil
 	}
 	return text.String(), content, nil
@@ -204,6 +211,14 @@ func encodeImageContent(content []ContentPart, protocol string) ([]any, error) {
 				kind = "input_text"
 			}
 			out = append(out, map[string]any{"type": kind, "text": part.Text})
+			continue
+		}
+		if part.Type == "file" {
+			file, err := encodePDFPart(part, protocol)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, file)
 			continue
 		}
 		if part.Type != "image" {

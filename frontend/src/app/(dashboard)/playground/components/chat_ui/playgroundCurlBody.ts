@@ -1,5 +1,6 @@
 import type { ModelEndpoint } from "@/components/llm_calls/fetch_models";
 import { buildMcpToolBlocks, type BuildMcpToolBlocksArgs } from "@/components/llm_calls/mcp_tool_blocks";
+import { messagesContentPart, responsesContentPart } from "@/components/llm_calls/attachment_parts";
 
 export type CurlBodyOptions = BuildMcpToolBlocksArgs & {
   endpoint: ModelEndpoint;
@@ -37,13 +38,7 @@ export function playgroundCurlBody(options: CurlBodyOptions): Record<string, unk
       ? messages.map((message) => ({
           ...message,
           content: Array.isArray(message.content)
-            ? message.content.map((part) =>
-                part.type === "text"
-                  ? { type: message.role === "assistant" ? "output_text" : "input_text", text: part.text }
-                  : part.type === "image_url"
-                    ? { type: "input_image", image_url: part.image_url.url }
-                    : part,
-              )
+            ? message.content.map((part) => responsesContentPart(part, message.role))
             : message.content,
         }))
       : messages.map((message) => ({ ...message, type: "message" }));
@@ -52,25 +47,12 @@ export function playgroundCurlBody(options: CurlBodyOptions): Record<string, unk
       body.previous_response_id = options.previousResponseId;
     }
   } else if (protocol === "anthropic-messages") {
-    body.messages = native
-      ? messages
-          .filter((message) => message.role !== "system")
-          .map((message) => ({
-            ...message,
-            content: Array.isArray(message.content)
-              ? message.content.map((part) => {
-                  if (part.type !== "image_url") return part;
-                  const url = part.image_url.url as string;
-                  const match = /^data:([^;]+);base64,(.+)$/.exec(url);
-                  // 与实际发送器一致：本地图片转 base64，远端图片使用 URL source。
-                  return {
-                    type: "image",
-                    source: match ? { type: "base64", media_type: match[1], data: match[2] } : { type: "url", url },
-                  };
-                })
-              : message.content,
-          }))
-      : messages;
+    body.messages = messages
+      .filter((message) => !native || message.role !== "system")
+      .map((message) => ({
+        ...message,
+        content: Array.isArray(message.content) ? message.content.map(messagesContentPart) : message.content,
+      }));
     if (native) {
       const system = messages
         .filter((message) => message.role === "system")

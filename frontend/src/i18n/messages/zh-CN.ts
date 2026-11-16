@@ -13,6 +13,7 @@ import { routeTemplatesZhCN } from "./routeTemplates.zh-CN";
 import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
+  playgroundAttachment: { expired: "刷新后之前的附件已不可用，请清空对话并重新上传附件后继续。" },
   notifications,
   marketSync,
   protocolProbe: protocolProbeZhCN,

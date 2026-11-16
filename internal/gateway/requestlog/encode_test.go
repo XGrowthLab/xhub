@@ -70,6 +70,25 @@ func TestEncodeRedactsQueryAndCustomCredentialHeaders(t *testing.T) {
 	}
 }
 
+// TestEncodeOmitsInlinePDF 验证三协议的文件字节不会写入请求日志，普通文字与文件名称仍可排障。
+// 使用独立内存 JSON 和 HTTP 请求，覆盖损坏 JSON 的保守降级；不写盘、不修改原始请求，无需清理。
+func TestEncodeOmitsInlinePDF(t *testing.T) {
+	for _, raw := range []string{
+		`{"messages":[{"content":[{"type":"text","text":"Keep this text"},{"type":"file","file":{"filename":"sample.pdf","file_data":"data:application/pdf;base64,secretpdf"}}]}]}`,
+		`{"input":[{"content":[{"type":"input_file","filename":"sample.pdf","file_data":"data:application/pdf;base64,secretpdf"},{"type":"input_text","text":"Keep this text"}]}]}`,
+		`{"messages":[{"content":[{"type":"document","title":"sample.pdf","source":{"type":"base64","media_type":"application/pdf","data":"secretpdf"}},{"type":"text","text":"Keep this text"}]}]}`,
+	} {
+		messages, _, proxy := Encode(nil, []byte(raw), nil)
+		if strings.Contains(messages+proxy, "secretpdf") || !strings.Contains(proxy, "sample.pdf") || !strings.Contains(proxy, "Keep this text") || !strings.Contains(proxy, "[file content omitted]") {
+			t.Fatalf("PDF 日志脱敏或普通信息保留失败: %s", proxy)
+		}
+	}
+	_, _, proxy := Encode(nil, []byte(`{"file_data":"secretpdf`), nil)
+	if strings.Contains(proxy, "secretpdf") || !strings.Contains(proxy, "unparsed body omitted") {
+		t.Fatal("损坏正文包含文件时应保守省略")
+	}
+}
+
 // TestRedactSecretTextHandlesEmbeddedKeys 验证普通任务标识保留且独立和嵌入的密钥样式被掩盖；纯函数无需清理。
 func TestRedactSecretTextHandlesEmbeddedKeys(t *testing.T) {
 	got := redactSecretText("task-1 sk-short prefixsk-ABCDEFGHIJKLMNOPQRST")

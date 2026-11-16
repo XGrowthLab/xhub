@@ -182,10 +182,10 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 		}
 		if protocol == "anthropic-messages" {
 			if parts, ok := m["content"].([]any); ok {
-				hasImage := false
+				hasMedia := false
 				for _, part := range parts {
-					if dialogueMap(part)["type"] == "image" {
-						hasImage = true
+					if dialogueMap(part)["type"] == "image" || dialogueMap(part)["type"] == "document" {
+						hasMedia = true
 					}
 				}
 				for _, p := range parts {
@@ -195,6 +195,8 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 						fields = []string{"type", "thinking", "signature"}
 					} else if b["type"] == "image" {
 						fields = []string{"type", "source"}
+					} else if b["type"] == "document" {
+						fields = []string{"type", "source", "title"}
 					} else if b["type"] == "redacted_thinking" {
 						fields = []string{"type", "data"}
 					}
@@ -222,7 +224,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 							return d, fmt.Errorf("content text must be string")
 						}
 						turn.Text += dialogueString(b["text"])
-						if hasImage {
+						if hasMedia {
 							turn.Content = append(turn.Content, ContentPart{Type: "text", Text: dialogueString(b["text"])})
 						}
 					case "image":
@@ -231,6 +233,12 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 							return d, e
 						}
 						turn.Content = append(turn.Content, image)
+					case "document":
+						file, e := parsePDFPart(b, protocol, role)
+						if e != nil {
+							return d, e
+						}
+						turn.Content = append(turn.Content, file)
 					case "tool_use":
 						a, e := json.Marshal(b["input"])
 						if e != nil {

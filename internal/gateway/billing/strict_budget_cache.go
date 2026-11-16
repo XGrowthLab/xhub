@@ -20,19 +20,21 @@ func budgetMaximumCacheTTL(tiers []budgetPriceTier) map[string]catalog.Rate {
 }
 
 // budgetCacheCreationCounts 读取原始缓存写入期限分桶，校验整数、已知期限及汇总一致性。
-// 参数为只读usage；返回5m/1h数量、是否提供分桶及错误。没有分桶不会猜测期限，未知非零桶拒绝。
-func budgetCacheCreationCounts(raw map[string]any) (five, hour int, present bool, err error) {
+// 参数为只读usage；返回期限及数量、是否提供分桶和错误。没有分桶不会猜测期限，未知非零桶拒绝。
+func budgetCacheCreationCounts(raw map[string]any) (counts map[string]int, present bool, err error) {
 	value := raw["cache_creation"]
 	if value == nil {
-		return 0, 0, false, nil
+		return nil, false, nil
 	}
-	fail := func(message string) (int, int, bool, error) {
-		return 0, 0, true, budgetFailure("invalid_usage", message)
+	fail := func(message string) (map[string]int, bool, error) {
+		return nil, true, budgetFailure("invalid_usage", message)
 	}
 	details, ok := value.(map[string]any)
 	if !ok {
 		return fail("measured cache creation details must be an object")
 	}
+	counts = map[string]int{}
+	var total64 int64
 	for key, value := range details {
 		n, ok := budgetUsageInteger(value)
 		if !ok {
@@ -40,17 +42,22 @@ func budgetCacheCreationCounts(raw map[string]any) (five, hour int, present bool
 		}
 		switch key {
 		case "ephemeral_5m_input_tokens":
-			five = n
+			counts[""] = n
 		case "ephemeral_1h_input_tokens":
-			hour = n
+			counts["1h"] = n
+		case "ephemeral_30m_input_tokens":
+			counts["30m"] = n
+		case "ephemeral_12h_input_tokens":
+			counts["12h"] = n
 		default:
 			if n != 0 {
 				return fail("measured cache creation TTL is unsupported")
 			}
+			continue
 		}
+		total64 += int64(n)
 	}
-	// 以64位先相加，避免两个分别合法的最大整数在32位环境中溢出。
-	total64 := int64(five) + int64(hour)
+	// 先以 64 位求和，避免多期限分桶分别合法但相加溢出。
 	if total64 > 2147483647 {
 		return fail("measured cache creation counts exceed the supported bound")
 	}
@@ -73,12 +80,12 @@ func budgetCacheCreationCounts(raw map[string]any) (five, hour int, present bool
 			}
 		}
 	}
-	return five, hour, true, nil
+	return counts, true, nil
 }
 
 // budgetValidateCacheTTL 对比原始分桶与冻结费率，不修改计划或回退到最新目录。
-// 参数为可为空的冻结计划及已验证数量；新计划允许已冻结的混合桶，历史单期限快照仍要求完全匹配。
-func budgetValidateCacheTTL(plan *budgetPriceSnapshot, five, hour int) error {
+// 参数为可为空的冻结计划及已验证的期限分桶；新计划允许已冻结的混合桶，历史单期限快照仍要求完全匹配。
+func budgetValidateCacheTTL(plan *budgetPriceSnapshot, counts map[string]int) error {
 	fail := func() error {
 		return budgetFailure("invalid_usage", "measured cache creation TTL differs from the reserved price")
 	}
@@ -86,19 +93,21 @@ func budgetValidateCacheTTL(plan *budgetPriceSnapshot, five, hour int) error {
 		return fail()
 	}
 	if len(plan.CacheWriteByTTL) > 0 {
-		if _, ok := plan.CacheWriteByTTL[""]; five > 0 && !ok {
+		if _, hasThirtyMinutes := plan.CacheWriteByTTL["30m"]; hasThirtyMinutes && counts[""] > 0 {
+			// 来源同时给出 30 分钟专价时，通用写入价没有证明适用于 5 分钟，不能猜测。
 			return fail()
 		}
-		if _, ok := plan.CacheWriteByTTL["1h"]; hour > 0 && !ok {
-			return fail()
+		for ttl, count := range counts {
+			if _, ok := plan.CacheWriteByTTL[ttl]; count > 0 && !ok {
+				return fail()
+			}
 		}
 		return nil
 	}
-	if five > 0 && hour > 0 {
-		return budgetFailure("invalid_usage", "mixed cache creation TTLs require separate prices")
-	}
-	if hour > 0 && plan.CacheWrite.Variant != "1h" || five > 0 && plan.CacheWrite.Variant == "1h" {
-		return fail()
+	for ttl, count := range counts {
+		if count > 0 && ttl != plan.CacheWrite.Variant {
+			return fail()
+		}
 	}
 	return nil
 }
@@ -107,20 +116,24 @@ func budgetValidateCacheTTL(plan *budgetPriceSnapshot, five, hour int) error {
 // 参数为私有账单、冻结计划、已归一化缓存总数和可选原始usage；错误时调用方丢弃账单，不修改共享计划。
 // 多期限计划必须有原始分桶；只有旧单期限计划或仅默认5m费率可沿用聚合计量，不把最高预占价当实收费率。
 func budgetAddCacheCharges(c *catalog.Charge, s *budgetPriceSnapshot, total int, raw []map[string]any) error {
-	var five, hour int
+	var counts map[string]int
 	var present bool
 	var err error
 	if len(raw) > 0 {
-		five, hour, present, err = budgetCacheCreationCounts(raw[0])
+		counts, present, err = budgetCacheCreationCounts(raw[0])
 		if err != nil {
 			return err
 		}
 	}
 	if present {
-		if int64(five)+int64(hour) != int64(total) {
+		var measured int64
+		for _, count := range counts {
+			measured += int64(count)
+		}
+		if measured != int64(total) {
 			return budgetFailure("invalid_usage", "measured cache creation details contradict the normalized total")
 		}
-		if err := budgetValidateCacheTTL(s, five, hour); err != nil {
+		if err := budgetValidateCacheTTL(s, counts); err != nil {
 			return err
 		}
 	}
@@ -136,11 +149,10 @@ func budgetAddCacheCharges(c *catalog.Charge, s *budgetPriceSnapshot, total int,
 		budgetAddCharge(c, rate, total)
 		return nil
 	}
-	if five > 0 {
-		budgetAddCharge(c, s.CacheWriteByTTL[""], five)
-	}
-	if hour > 0 {
-		budgetAddCharge(c, s.CacheWriteByTTL["1h"], hour)
+	for _, ttl := range []string{"", "1h", "30m", "12h"} {
+		if counts[ttl] > 0 {
+			budgetAddCharge(c, s.CacheWriteByTTL[ttl], counts[ttl])
+		}
 	}
 	return nil
 }
