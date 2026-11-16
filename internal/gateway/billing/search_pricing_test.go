@@ -2,8 +2,11 @@ package billing
 
 import (
 	"math"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/sunqirui1987/xhub/internal/catalog"
 )
 
 // TestWebSearchRequested 验证三种协议的搜索声明和普通客户端工具区分；仅解析合成正文，不访问外部服务。
@@ -113,5 +116,44 @@ func TestTieredSearchUsesFrozenBand(t *testing.T) {
 	high["details_v2"].(map[string]any)["web_search_req"].(map[string]any)["unit_name"] = "second"
 	if _, err := NewSoftPricePlan(dep, time.Now()).WithSearchRequest(true).Charge(map[string]any{"input_tokens": 51, "output_tokens": 2, "searches": 1}); err == nil {
 		t.Fatal("未知单位不应定价")
+	}
+}
+
+// TestModelinkDeepSeekSearchAndWindows 验证三个 DeepSeek 的广场快照可完整计费，分时型号按当时价格加实际搜索费。
+// 使用经裁剪的公开价格夹具，覆盖高峰、非高峰、搜索和固定价；只使用内存数据，无凭据及清理副作用。
+func TestModelinkDeepSeekSearchAndWindows(t *testing.T) {
+	raw, err := os.ReadFile("../../catalog/testdata/modelink-ds-prices.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := catalog.BuildPriceDocument(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id       string
+		when     time.Time
+		searches int
+		want     float64
+	}{
+		{"deepseek/deepseek-v4.1-flash", time.Date(2026, 3, 2, 2, 0, 0, 0, time.UTC), 2, .00231885},
+		{"deepseek/deepseek-v4.1-flash", time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC), 2, .001884065},
+		{"deepseek/deepseek-v4-flash", time.Date(2026, 3, 2, 2, 0, 0, 0, time.UTC), 0, .00028986},
+		{"deepseek/deepseek-v4-pro", time.Date(2026, 3, 2, 2, 0, 0, 0, time.UTC), 0, .00347826},
+	} {
+		t.Run(tc.id+tc.when.String(), func(t *testing.T) {
+			rates, reason := catalog.MarketRates(doc.Models[tc.id])
+			if reason != "" {
+				t.Fatalf("市场价不能冻结: %s", reason)
+			}
+			dep := strictBudgetDeployment()
+			dep.ModelInfo["pricing_source"] = "catalog"
+			dep.LiteLLMParams = map[string]any{"model": tc.id, "rates": rates}
+			plan := NewSoftPricePlan(dep, tc.when).WithSearchRequest(tc.searches > 0)
+			charge, err := plan.Charge(map[string]any{"input_tokens": 1000, "output_tokens": 500, "tool_usage": map[string]any{"web_search": tc.searches}})
+			if err != nil || math.Abs(charge.Total-tc.want) > 1e-11 {
+				t.Fatalf("真实广场价格计算错误: charge=%+v want=%g err=%v", charge, tc.want, err)
+			}
+		})
 	}
 }
