@@ -1,0 +1,545 @@
+{
+  "status": true,
+  "data": [
+    {
+      "id": "x-ai/grok-4.5",
+      "name": "Grok-4.5",
+      "issuer": {
+        "name": "xAI",
+        "avatar": "",
+        "model_page": ""
+      },
+      "model_constraints": {
+        "context_length": 500000,
+        "max_completion_tokens": 0,
+        "max_tokens": 500000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "instruct_type": "",
+        "schema_output": {
+          "supported": true
+        },
+        "function_calling": {
+          "supported": true
+        },
+        "reasoning": {
+          "supported": true
+        },
+        "content_cache": {
+          "supported": true
+        }
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            200000
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0414,
+              "unit_price_usd": 0.006,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00207,
+              "unit_price_usd": 0.0003,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0138,
+              "unit_price_usd": 0.002,
+              "name": "非缓存输入"
+            }
+          }
+        },
+        {
+          "input_range": [
+            200000,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0828,
+              "unit_price_usd": 0.012,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00414,
+              "unit_price_usd": 0.0006,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0276,
+              "unit_price_usd": 0.004,
+              "name": "非缓存输入"
+            }
+          }
+        }
+      ],
+      "model_alias": [
+        "grok-4.5"
+      ]
+    },
+    {
+      "id": "x-ai/grok-4.6",
+      "name": "Grok-4.6",
+      "issuer": {
+        "name": "xAI",
+        "avatar": "",
+        "model_page": ""
+      },
+      "model_constraints": {
+        "context_length": 500000,
+        "max_completion_tokens": 0,
+        "max_tokens": 128000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "instruct_type": "",
+        "schema_output": {
+          "supported": true
+        },
+        "function_calling": {
+          "supported": true
+        },
+        "reasoning": {
+          "supported": true
+        },
+        "content_cache": {
+          "supported": true
+        }
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            200000
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0414,
+              "unit_price_usd": 0.006,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00345,
+              "unit_price_usd": 0.0005,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0138,
+              "unit_price_usd": 0.002,
+              "name": "非缓存输入"
+            }
+          }
+        },
+        {
+          "input_range": [
+            200000,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0828,
+              "unit_price_usd": 0.012,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0069,
+              "unit_price_usd": 0.001,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0276,
+              "unit_price_usd": 0.004,
+              "name": "非缓存输入"
+            }
+          }
+        }
+      ],
+      "model_alias": []
+    },
+    {
+      "id": "x-ai/grok-4.7",
+      "name": "Grok 4.7",
+      "issuer": {
+        "name": "xAI",
+        "avatar": "",
+        "model_page": "https://docs.x.ai/developers/models/grok-4.7"
+      },
+      "model_constraints": {
+        "context_length": 500000,
+        "max_completion_tokens": 0,
+        "max_tokens": 128000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "instruct_type": "",
+        "schema_output": {
+          "supported": true
+        },
+        "function_calling": {
+          "supported": true
+        },
+        "reasoning": {
+          "supported": true
+        },
+        "content_cache": {
+          "supported": true
+        }
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            200000
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0414,
+              "unit_price_usd": 0.006,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00345,
+              "unit_price_usd": 0.0005,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0138,
+              "unit_price_usd": 0.002,
+              "name": "非缓存输入"
+            }
+          },
+          "item_order": [
+            "cache",
+            "ncache",
+            "output"
+          ]
+        },
+        {
+          "input_range": [
+            200000,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0828,
+              "unit_price_usd": 0.012,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0069,
+              "unit_price_usd": 0.001,
+              "name": "缓存输入"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0276,
+              "unit_price_usd": 0.004,
+              "name": "非缓存输入"
+            }
+          },
+          "item_order": [
+            "cache",
+            "ncache",
+            "output"
+          ]
+        }
+      ],
+      "model_alias": []
+    },
+    {
+      "id": "openai/gpt-6.1-terra",
+      "name": "GPT-6.1-Terra",
+      "issuer": {
+        "name": "OpenAI",
+        "avatar": "https://static.qiniu.com/ai-inference/model-icons/openai.png",
+        "model_page": "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      },
+      "model_constraints": {
+        "context_length": 1050000,
+        "max_completion_tokens": 0,
+        "max_tokens": 128000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "architecture": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "instruct_type": "",
+        "schema_output": {
+          "supported": true
+        },
+        "function_calling": {
+          "supported": true
+        },
+        "reasoning": {
+          "supported": true
+        },
+        "content_cache": {
+          "supported": true
+        }
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            272000
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0345,
+              "unit_price_usd": 0.005,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.000345,
+              "unit_price_usd": 5e-05,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.008625,
+              "unit_price_usd": 0.00125,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.008625,
+              "unit_price_usd": 0.00125,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.01725,
+              "unit_price_usd": 0.0025,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0069,
+              "unit_price_usd": 0.001,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        },
+        {
+          "input_range": [
+            272000,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.05175,
+              "unit_price_usd": 0.0075,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00069,
+              "unit_price_usd": 0.0001,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.01725,
+              "unit_price_usd": 0.0025,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.01725,
+              "unit_price_usd": 0.0025,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0345,
+              "unit_price_usd": 0.005,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0138,
+              "unit_price_usd": 0.002,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        }
+      ],
+      "model_alias": [
+        "gpt-6.1-terra"
+      ]
+    }
+  ]
+}

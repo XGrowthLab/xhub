@@ -102,3 +102,37 @@ it("localizes known dimensions and preserves custom identifiers", async () => {
   expect(screen.getAllByText(/百万 Token/).length).toBeGreaterThan(0);
   expect(document.body).not.toHaveTextContent("marketSync.");
 });
+
+/** 分别用中英文展示两档及缓存期限，确认窗口保留相同完整报价；组件夹具独立，卸载时清理。 */
+it.each([
+  ["zh-CN", "输入 Token：0 < 数量 ≤ 272,000", "核对并更新", "确认更新 1 个部署", "12 小时"],
+  ["en", "Input tokens: 0 < amount ≤ 272,000", "Review and update", "Confirm prices for 1 deployments", "12 hours"],
+] as const)("shows complete market tiers in %s", async (locale, range, review, title, ttl) => {
+  vi.mocked(apiClient.get).mockResolvedValue({
+    deployments: [
+      {
+        ...row,
+        proposed: null,
+        proposed_tiers: [
+          {
+            input_range: [0, 272000],
+            output_range: [0, 99999999],
+            rates: [row.proposed![0], { ...row.proposed![0], side: "cache_write", variant: "12h" }],
+          },
+          {
+            input_range: [272000, 99999999],
+            output_range: [0, 99999999],
+            rates: [{ ...row.proposed![0], usd: 0.000004 }],
+          },
+        ],
+      },
+    ],
+  });
+  setup(locale);
+  expect(await screen.findByText(range)).toBeVisible();
+  expect(screen.getByText(new RegExp(ttl))).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: review }));
+  const dialog = screen.getByRole("dialog", { name: title });
+  expect(within(dialog).getByText(range)).toBeVisible();
+  expect(dialog).toHaveTextContent("$4");
+});

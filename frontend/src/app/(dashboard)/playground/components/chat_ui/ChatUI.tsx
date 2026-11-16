@@ -62,6 +62,8 @@ import NativeEndpointPlayground from "./NativeEndpointPlayground";
 import { ChatCurlGuide } from "./ChatCurlGuide";
 import { getProxyBaseUrl } from "@/components/networking";
 import { callTextEndpoint } from "@/components/llm_calls/model_endpoints";
+import { canonicalAttachment, requestHistoryWithAttachments } from "@/components/llm_calls/attachment_history";
+import { responsesContentPart } from "@/components/llm_calls/attachment_parts";
 import FilePreviewCard from "./FilePreviewCard";
 import ChatMessageBubble from "./ChatMessageBubble";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
@@ -220,6 +222,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestHistory = useRef(chatHistory);
+  // 文件仅留在当前页面内存；持久化历史只含标识，避免大附件和隐私正文写入 sessionStorage。
+  const attachmentPayloads = useRef(new Map<string, any[]>());
   const requestSession = useRef(responsesSessionId);
   const [selectedTags, setSelectedTags] = useState<string[]>(() => {
     const saved = sessionStorage.getItem("selectedTags");
@@ -750,6 +754,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
+    const historyForRequest = requestHistoryWithAttachments(chatHistory, attachmentPayloads.current);
+    const resumesOnServer = !isNativeBinding && endpointType === EndpointType.RESPONSES && useApiSessionManagement && !!responsesSessionId;
+    const sendsChatHistory = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES || endpointType === EndpointType.ANTHROPIC_MESSAGES;
+    if (!historyForRequest && !resumesOnServer && sendsChatHistory) {
+      toast.error(t("playgroundAttachment.expired"));
+      return;
+    }
+
     // Create new abort controller for this request
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -792,7 +804,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     }
     // Handle image for chat completions API
-    else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+    else if ((endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage) {
       try {
         newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
       } catch (error) {
@@ -823,7 +835,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         responsesImagePreviewUrl || undefined,
         responsesUploadedImage.name,
       );
-    } else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+    } else if ((endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage) {
       displayMessage = createChatDisplayMessage(
         inputMessage,
         true,
@@ -844,6 +856,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
       displayMessage = createDisplayMessage(inputMessage, false);
     }
 
+    let attachmentToken: string | undefined;
+    if (Array.isArray(newUserMessage.content) && (chatUploadedImage || responsesUploadedImage)) {
+      attachmentToken = uuidv4();
+      displayMessage.attachmentToken = attachmentToken;
+    }
     setChatHistory([...chatHistory, displayMessage]);
     clearMCPEvents(); // Clear previous MCP events for new conversation turn
     codeInterpreter.clearResult(); // Clear previous code interpreter results
@@ -858,9 +875,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             key: effectiveApiKey,
             model: selectedModel,
             messages: [
-              ...chatHistory
-                .filter((msg) => !msg.isImage && !msg.isAudio)
-                .map(({ role, content }) => ({ role, content })),
+              ...(historyForRequest ?? []),
               newUserMessage,
             ],
             onText: (chunk) => updateTextUI("assistant", chunk, selectedModel),
@@ -875,12 +890,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           // Create chat history for API call - strip out model field and isImage field
           // For chat completions, we preserve the multimodal content structure
           const apiChatHistory = [
-            ...chatHistory
-              .filter((msg) => !msg.isImage && !msg.isAudio)
-              .map(({ role, content }) => ({
-                role,
-                content: typeof content === "string" ? content : "",
-              })),
+            ...(historyForRequest ?? []),
             newUserMessage,
           ];
 
@@ -966,9 +976,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
           } else {
             // When using UI session management or starting new API session, send full history
             apiChatHistory = [
-              ...chatHistory
-                .filter((msg) => !msg.isImage && !msg.isAudio)
-                .map(({ role, content }) => ({ role, content })),
+              ...(historyForRequest ?? []).map((message) => ({
+                ...message,
+                content: Array.isArray(message.content)
+                  ? message.content.map((part: any) => responsesContentPart(part, message.role))
+                  : message.content,
+              })),
               newUserMessage,
             ];
           }
@@ -1005,9 +1018,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
-            ...chatHistory
-              .filter((msg) => !msg.isImage && !msg.isAudio)
-              .map(({ role, content }) => ({ role, content })),
+            ...(historyForRequest ?? []),
             newUserMessage,
           ];
 
@@ -1120,6 +1131,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
         );
       }
       if (active()) {
+        if (attachmentToken && Array.isArray(newUserMessage.content)) {
+          attachmentPayloads.current.set(attachmentToken, canonicalAttachment(newUserMessage.content));
+        }
         setInputMessage("");
         handleRemoveAllImages();
         handleRemoveResponsesImage();
@@ -1146,6 +1160,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleCancelRequest();
     setRequestFailure(null);
     clearChatHistoryHook();
+    attachmentPayloads.current.clear();
     handleRemoveAllImages();
     handleRemoveResponsesImage();
     handleRemoveChatImage();
@@ -1183,6 +1198,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setIsLoading(false);
       setRequestFailure(null);
       clearChatHistoryHook();
+      attachmentPayloads.current.clear();
     }
   }, [requestContext, clearChatHistoryHook]);
   useEffect(
@@ -1619,7 +1635,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       image={
                         endpointType === EndpointType.RESPONSES
                           ? responsesUploadedImage
-                          : endpointType === EndpointType.CHAT
+                          : endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES
                             ? chatUploadedImage
                             : null
                       }
@@ -1814,7 +1830,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     />
                   )}
 
-                  {endpointType === EndpointType.CHAT && chatUploadedImage && (
+                  {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage && (
                     <FilePreviewCard
                       file={chatUploadedImage}
                       previewUrl={chatImagePreviewUrl}
@@ -1901,7 +1917,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             onRemoveImage={handleRemoveResponsesImage}
                           />
                         )}
-                        {endpointType === EndpointType.CHAT && !chatUploadedImage && (
+                        {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && !chatUploadedImage && (
                           <ChatImageUpload
                             chatUploadedImage={chatUploadedImage}
                             chatImagePreviewUrl={chatImagePreviewUrl}

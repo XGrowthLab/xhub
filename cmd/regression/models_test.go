@@ -2,9 +2,11 @@ package regression
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/sunqirui1987/xhub/internal/catalog"
 	"github.com/sunqirui1987/xhub/internal/config"
 )
 
@@ -519,4 +521,46 @@ func rowsOfFrom(body map[string]any, keys ...string) []map[string]any {
 		return out
 	}
 	return nil
+}
+
+// TestModelContractAvailableCapabilityOverride 验证公开模型列表以实际部署的显式能力为准，并继续检查访问权限。
+// 独立 PostgreSQL、租户与内存目录覆盖 false、true、未指定及非法身份；测试结束恢复目录并清理所有夹具。
+func TestModelContractAvailableCapabilityOverride(t *testing.T) {
+	const base = "fixture-capability-override-live"
+	catalog.SetModel(base, map[string]any{"supports_vision": true, "supports_function_calling": true})
+	t.Cleanup(func() { catalog.RemoveModel(base) })
+	deps := []config.ModelEntry{chatDeployment("vision-disabled"), chatDeployment("vision-enabled"), chatDeployment("vision-inherited"), chatDeployment("vision-mixed"), chatDeployment("vision-mixed")}
+	for i := range deps {
+		deps[i].ModelInfo["base_model"] = base
+	}
+	deps[0].ModelInfo["supports_vision"] = false
+	deps[1].ModelInfo["supports_vision"] = true
+	deps[3].ModelInfo["supports_vision"] = true
+	deps[4].ModelInfo["supports_vision"] = false
+	h := newHarness(t, deps...)
+	admin := h.adminSession()
+	owner := h.openScope(t, admin, deps[0].ModelName)
+	if bad := h.do("GET", "/model/available", "sk-invalid", nil); bad.status != 401 {
+		t.Fatalf("未授权模型列表状态错误: %d", bad.status)
+	}
+	rows := rowsOfFrom(h.ok("GET", "/model/available", owner.session, nil).json(), "data", "models")
+	for _, tc := range []struct {
+		name   string
+		vision bool
+	}{{"vision-disabled", false}, {"vision-enabled", true}, {"vision-inherited", true}} {
+		row := findBy(rows, "id", tc.name)
+		if row == nil {
+			t.Fatalf("授权模型缺失: %s", tc.name)
+		}
+		values, _ := row["capabilities"].([]any)
+		caps := []string{}
+		for _, v := range values {
+			if s, ok := v.(string); ok {
+				caps = append(caps, s)
+			}
+		}
+		if slices.Contains(caps, "vision") != tc.vision || !slices.Contains(caps, "tools") {
+			t.Fatalf("%s 能力错误: %v", tc.name, caps)
+		}
+	}
 }

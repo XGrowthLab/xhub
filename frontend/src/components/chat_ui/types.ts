@@ -38,6 +38,8 @@ export interface MessageType {
   usage?: TokenUsage;
   toolName?: string;
   imagePreviewUrl?: string;
+  /** 附件的临时内存标识；浏览器会话只保存标识，不持久化文件内容。 */
+  attachmentToken?: string;
   image?: {
     url: string;
     detail: string;
@@ -47,7 +49,9 @@ export interface MessageType {
 }
 
 export interface MultimodalContent {
-  type: "input_text" | "input_image";
+  type: "input_text" | "input_image" | "input_file";
   text?: string;
   image_url?: string;
+  filename?: string;
+  file_data?: string;
 }

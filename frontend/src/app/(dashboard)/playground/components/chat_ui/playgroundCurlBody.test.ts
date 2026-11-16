@@ -114,6 +114,13 @@ it("原生多模态按实际协议转换图片", () => {
     },
   ]);
 });
+
+/** 前置 PDF 附件；验证普通与透传 Messages 的示例均使用 document，原始用户输入和文件字节不变，无网络或残留。 */
+it.each(["adapted", "bypass"] as const)("%s Messages 示例使用 PDF 文档块", (kind) => {
+  const part = { type: "file", file: { filename: "sample.pdf", file_data: "data:application/pdf;base64,JVBERi0=" } };
+  const result = playgroundCurlBody({ ...options, messages: [{ role: "user", content: [{ type: "text", text: "原文" }, part] }], endpoint: { ...options.endpoint, protocol: "anthropic-messages", kind } });
+  expect(result.messages).toEqual([{ role: "user", content: [{ type: "text", text: "原文" }, { type: "document", title: "sample.pdf", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" } }] }]);
+});
 /** 前置 Responses 工具与代码解释器；验证工具路径、允许列表及 Bypass 扩展过滤，无外部工具调用或清理。 */
 it("工具配置跟随协议且原生请求不注入工具", () => {
   const configured = {

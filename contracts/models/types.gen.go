@@ -179,10 +179,12 @@ type DeploymentPricePreview struct {
 	BaseModel            string                       `json:"base_model"`
 	Changed              bool                         `json:"changed"`
 	Current              *[]DeploymentPriceRate       `json:"current"`
+	CurrentTiers         *[]DeploymentPriceTier       `json:"current_tiers,omitempty"`
 	Id                   string                       `json:"id"`
 	Manual               bool                         `json:"manual"`
 	Name                 string                       `json:"name"`
 	Proposed             *[]DeploymentPriceRate       `json:"proposed"`
+	ProposedTiers        *[]DeploymentPriceTier       `json:"proposed_tiers,omitempty"`
 	Reason               DeploymentPricePreviewReason `json:"reason"`
 	Version              string                       `json:"version"`
 	AdditionalProperties map[string]interface{}       `json:"-"`
@@ -221,6 +223,14 @@ type DeploymentPriceSelection struct {
 type DeploymentPriceSelection_Items_Item struct {
 	Id                   string                 `json:"id"`
 	Version              string                 `json:"version"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// DeploymentPriceTier defines model for DeploymentPriceTier.
+type DeploymentPriceTier struct {
+	InputRange           []int                  `json:"input_range"`
+	OutputRange          []int                  `json:"output_range"`
+	Rates                []DeploymentPriceRate  `json:"rates"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
@@ -653,6 +663,14 @@ func (a *DeploymentPricePreview) UnmarshalJSON(b []byte) error {
 		delete(object, "current")
 	}
 
+	if raw, found := object["current_tiers"]; found {
+		err = json.Unmarshal(raw, &a.CurrentTiers)
+		if err != nil {
+			return fmt.Errorf("error reading 'current_tiers': %w", err)
+		}
+		delete(object, "current_tiers")
+	}
+
 	if raw, found := object["id"]; found {
 		err = json.Unmarshal(raw, &a.Id)
 		if err != nil {
@@ -683,6 +701,14 @@ func (a *DeploymentPricePreview) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("error reading 'proposed': %w", err)
 		}
 		delete(object, "proposed")
+	}
+
+	if raw, found := object["proposed_tiers"]; found {
+		err = json.Unmarshal(raw, &a.ProposedTiers)
+		if err != nil {
+			return fmt.Errorf("error reading 'proposed_tiers': %w", err)
+		}
+		delete(object, "proposed_tiers")
 	}
 
 	if raw, found := object["reason"]; found {
@@ -735,6 +761,13 @@ func (a DeploymentPricePreview) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("error marshaling 'current': %w", err)
 	}
 
+	if a.CurrentTiers != nil {
+		object["current_tiers"], err = json.Marshal(a.CurrentTiers)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'current_tiers': %w", err)
+		}
+	}
+
 	object["id"], err = json.Marshal(a.Id)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'id': %w", err)
@@ -753,6 +786,13 @@ func (a DeploymentPricePreview) MarshalJSON() ([]byte, error) {
 	object["proposed"], err = json.Marshal(a.Proposed)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'proposed': %w", err)
+	}
+
+	if a.ProposedTiers != nil {
+		object["proposed_tiers"], err = json.Marshal(a.ProposedTiers)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'proposed_tiers': %w", err)
+		}
 	}
 
 	object["reason"], err = json.Marshal(a.Reason)
@@ -1150,6 +1190,98 @@ func (a DeploymentPriceSelection_Items_Item) MarshalJSON() ([]byte, error) {
 	object["version"], err = json.Marshal(a.Version)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'version': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeploymentPriceTier. Returns the specified
+// element and whether it was found
+func (a DeploymentPriceTier) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeploymentPriceTier
+func (a *DeploymentPriceTier) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeploymentPriceTier to handle AdditionalProperties
+func (a *DeploymentPriceTier) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["input_range"]; found {
+		err = json.Unmarshal(raw, &a.InputRange)
+		if err != nil {
+			return fmt.Errorf("error reading 'input_range': %w", err)
+		}
+		delete(object, "input_range")
+	}
+
+	if raw, found := object["output_range"]; found {
+		err = json.Unmarshal(raw, &a.OutputRange)
+		if err != nil {
+			return fmt.Errorf("error reading 'output_range': %w", err)
+		}
+		delete(object, "output_range")
+	}
+
+	if raw, found := object["rates"]; found {
+		err = json.Unmarshal(raw, &a.Rates)
+		if err != nil {
+			return fmt.Errorf("error reading 'rates': %w", err)
+		}
+		delete(object, "rates")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeploymentPriceTier to handle AdditionalProperties
+func (a DeploymentPriceTier) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["input_range"], err = json.Marshal(a.InputRange)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'input_range': %w", err)
+	}
+
+	object["output_range"], err = json.Marshal(a.OutputRange)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'output_range': %w", err)
+	}
+
+	object["rates"], err = json.Marshal(a.Rates)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'rates': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

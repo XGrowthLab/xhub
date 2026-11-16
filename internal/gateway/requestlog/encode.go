@@ -16,8 +16,16 @@ import (
 func Encode(r *http.Request, reqBody, respBody []byte) (messages, response, proxy string) {
 	reqDoc := jsonDocument(reqBody)
 	respDoc := jsonDocument(respBody)
+	// 日志用于排障而不是文件存储；只移除文件载荷，保留用户文字、名称和结构，原始上游请求不受影响。
+	redactInlineFiles(reqDoc)
+	redactInlineFiles(respDoc)
 	if reqDoc == nil && len(reqBody) > 0 {
-		reqDoc = map[string]any{"body": string(reqBody)}
+		// 非法 JSON 无法可靠识别文件边界，避免把不完整的附件原文持久化。
+		if strings.Contains(string(reqBody), "file_data") || strings.Contains(string(reqBody), "application/pdf") {
+			reqDoc = map[string]any{"body": "[unparsed body omitted]"}
+		} else {
+			reqDoc = map[string]any{"body": string(reqBody)}
+		}
 	}
 	if respDoc == nil && len(respBody) > 0 {
 		respDoc = map[string]any{"body": string(respBody)}
@@ -48,6 +56,29 @@ func Encode(r *http.Request, reqBody, respBody []byte) (messages, response, prox
 		"body":    reqDoc,
 	}
 	return mustJSON(messagesDoc), mustJSON(respDoc), mustJSON(proxyDoc)
+}
+
+// redactInlineFiles 原地移除日志文档中的内联文件数据；v 为已独立解析的 JSON，不引用实际请求。
+// Encode 在持久化日志前调用；保留文件名称、媒体类型、普通文本与 JSON 结构，不访问或解析文件。
+func redactInlineFiles(v any) {
+	switch value := v.(type) {
+	case map[string]any:
+		if _, exists := value["file_data"]; exists {
+			value["file_data"] = "[file content omitted]"
+		}
+		if value["media_type"] == "application/pdf" && value["type"] == "base64" {
+			if _, exists := value["data"]; exists {
+				value["data"] = "[file content omitted]"
+			}
+		}
+		for _, child := range value {
+			redactInlineFiles(child)
+		}
+	case []any:
+		for _, child := range value {
+			redactInlineFiles(child)
+		}
+	}
 }
 
 // assembleLoggedResponse turns a stored event stream into the final response document the log drawer can read. A chat or Responses stream is not one JSON value, so it used to be kept as a raw body and the output panel stayed empty.

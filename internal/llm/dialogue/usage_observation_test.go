@@ -71,3 +71,31 @@ func TestMergeDialogueUsageCumulativeAliases(t *testing.T) {
 		})
 	}
 }
+
+// TestSearchUsageObservation 验证搜索累计次数可跨帧增长，倒退和矛盾无法被后续帧掩盖。
+// 仅处理内存用量；不访问供应商，输入对象不被修改且无需清理。
+func TestSearchUsageObservation(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		first, next map[string]any
+		blocked     bool
+	}{
+		{"growth", map[string]any{"tool_usage": map[string]any{"web_search": 1}}, map[string]any{"searches": 2}, false},
+		{"decrease", map[string]any{"searches": 2}, map[string]any{"tool_usage": map[string]any{"web_search": 1}}, true},
+		{"conflicting aliases", map[string]any{"searches": 1, "tool_usage": map[string]any{"web_search": 2}}, map[string]any{"searches": 2}, true},
+		{"invalid count", map[string]any{"tool_usage": map[string]any{"web_search": -1}}, map[string]any{"searches": 2}, true},
+		{"breakdown is not a count", map[string]any{"tool_usage_details": map[string]any{"web_search": map[string]any{"search_engine": 2}}}, map[string]any{"tool_usage": map[string]any{"web_search": 2}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MergeDialogueUsage(nil, tc.first)
+			got = MergeDialogueUsage(got, tc.next)
+			reason, _ := got["pricing_blocked"].(string)
+			if (reason != "") != tc.blocked {
+				t.Fatalf("搜索用量可信状态错误: %+v", got)
+			}
+			if _, mutated := tc.first["pricing_blocked"]; mutated {
+				t.Fatal("修改上游原始帧")
+			}
+		})
+	}
+}

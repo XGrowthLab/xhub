@@ -334,3 +334,13 @@ func TestEventRowsBudgetScope(t *testing.T) {
 		}
 	}
 }
+
+// TestCostBreakdownSeparatesSearch 验证搜索按次费用不混入输出 token 费用，且总额与冻结账单一致。
+// 使用内存日志快照构造历史记录，不读写数据库，无需清理。
+func TestCostBreakdownSeparatesSearch(t *testing.T) {
+	row := iam.UsageEvent{Model: "test", PromptTokens: 8, CompletionTokens: 2, Cost: .020012, TS: offpeakTestInstant(), PriceSnapshot: `{"window":"all","applied":[{"measure":"token","side":"input","variant":"uncached","unit_size":1,"usd":0.000001,"quantity":8,"source_key":"input_cost_per_token"},{"measure":"token","side":"output","variant":"standard","unit_size":1,"usd":0.000002,"quantity":2,"source_key":"output_cost_per_token"},{"measure":"query","side":"output","variant":"search","unit_size":1,"usd":0.01,"quantity":2,"source_key":"web_search_req"}]}`}
+	got := costBreakdown(row)
+	if got["input_cost"] != .000008 || got["output_cost"] != .000004 || got["tool_usage_cost"] != .02 {
+		t.Fatalf("搜索费用与 token 费用混淆: %+v", got)
+	}
+}

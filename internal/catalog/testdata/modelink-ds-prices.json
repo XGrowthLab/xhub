@@ -1,0 +1,187 @@
+{
+  "status": true,
+  "data": [
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "model_constraints": {
+        "context_length": 1000000,
+        "max_completion_tokens": 0,
+        "max_tokens": 384000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "issuer": {
+        "name": "DeepSeek",
+        "avatar": "",
+        "model_page": ""
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "input": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.001,
+              "unit_price_usd": 0.00014493,
+              "name": "输入"
+            },
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.002,
+              "unit_price_usd": 0.00028986,
+              "name": "输出"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "model_constraints": {
+        "context_length": 1000000,
+        "max_completion_tokens": 0,
+        "max_tokens": 384000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "issuer": {
+        "name": "DeepSeek",
+        "avatar": "",
+        "model_page": ""
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "input": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.012,
+              "unit_price_usd": 0.00173913,
+              "name": "输入"
+            },
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.024,
+              "unit_price_usd": 0.00347826,
+              "name": "输出"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "model_constraints": {
+        "context_length": 1000000,
+        "max_completion_tokens": 0,
+        "max_tokens": 384000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "issuer": {
+        "name": "DeepSeek",
+        "avatar": "https://static.qiniu.com/ai-inference/model-icons/deepseek.png",
+        "model_page": ""
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            99999999
+          ],
+          "output_range": [
+            0,
+            99999999
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output_peak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.008,
+              "unit_price_usd": 0.00115942,
+              "name": "输出（高峰）"
+            },
+            "output_offpeak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.004,
+              "unit_price_usd": 0.00057971,
+              "name": "输出（空闲）"
+            },
+            "cache_peak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 4e-05,
+              "unit_price_usd": 5.8e-06,
+              "name": "缓存输入（高峰）"
+            },
+            "cache_offpeak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 2e-05,
+              "unit_price_usd": 2.9e-06,
+              "name": "缓存输入（空闲）"
+            },
+            "ncache_peak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.002,
+              "unit_price_usd": 0.00028986,
+              "name": "非缓存输入（高峰）"
+            },
+            "ncache_offpeak": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.001,
+              "unit_price_usd": 0.00014493,
+              "name": "非缓存输入（空闲）"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.005,
+              "unit_price_usd": 0.00072464,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output_peak",
+            "output_offpeak",
+            "cache_peak",
+            "cache_offpeak",
+            "ncache_peak",
+            "ncache_offpeak",
+            "web_search_req"
+          ]
+        }
+      ]
+    }
+  ]
+}

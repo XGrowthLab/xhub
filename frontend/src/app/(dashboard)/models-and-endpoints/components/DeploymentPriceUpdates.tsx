@@ -15,6 +15,11 @@ export type DeploymentRate = {
   usd: number;
   source_key: string;
 };
+export type DeploymentTier = {
+  input_range: [number, number];
+  output_range: [number, number];
+  rates: DeploymentRate[];
+};
 export type DeploymentPrice = {
   id: string;
   name: string;
@@ -22,6 +27,8 @@ export type DeploymentPrice = {
   manual: boolean;
   current: DeploymentRate[] | null;
   proposed: DeploymentRate[] | null;
+  current_tiers?: DeploymentTier[];
+  proposed_tiers?: DeploymentTier[];
   changed: boolean;
   reason: string;
   version: string;
@@ -29,7 +36,7 @@ export type DeploymentPrice = {
 
 // 已知计价维度使用翻译；未识别的历史配置保留技术标识，避免显示不存在的翻译键。
 const sides = ["input", "output", "cache_read", "cache_write", "batch_input", "batch_output"];
-const variants = ["uncached", "cached", "1h", "search"];
+const variants = ["uncached", "cached", "1h", "30m", "12h", "search"];
 const windows = ["peak", "offpeak"];
 const measures = ["token", "query", "second", "picture"];
 
@@ -122,6 +129,26 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
     );
   }
 
+  /** 按来源给出的左开右闭输入范围展示各档费率；参数为已确认或候选快照，不修改价格。 */
+  function priceDetails(items: DeploymentRate[] | null, tiers?: DeploymentTier[]) {
+    if (!tiers?.length) return rates(items);
+    return (
+      <ol className="space-y-4">
+        {tiers.map((tier, index) => (
+          <li key={index} className="space-y-2">
+            <p className="font-medium">
+              {t("marketSync.inputTier", {
+                lower: tier.input_range[0].toLocaleString("en-US"),
+                upper: tier.input_range[1].toLocaleString("en-US"),
+              })}
+            </p>
+            {rates(tier.rates)}
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
   return (
     <section aria-label={t("marketSync.prices")} className="space-y-4 rounded-xl border bg-card p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -196,8 +223,10 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
                     </span>
                   </label>
                 </td>
-                <td className="p-4">{rates(row.current)}</td>
-                <td className="p-4">{row.reason ? t("marketSync.reason." + row.reason) : rates(row.proposed)}</td>
+                <td className="p-4">{priceDetails(row.current, row.current_tiers)}</td>
+                <td className="p-4">
+                  {row.reason ? t("marketSync.reason." + row.reason) : priceDetails(row.proposed, row.proposed_tiers)}
+                </td>
                 <td className="p-4">
                   {row.changed && !row.reason && (
                     <Button size="sm" variant="outline" onClick={() => review([row])}>
@@ -232,11 +261,11 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
                 <div className="mt-3 grid gap-4 sm:grid-cols-2">
                   <div>
                     <h3 className="mb-2 text-sm font-medium">{t("marketSync.current")}</h3>
-                    {rates(row.current)}
+                    {priceDetails(row.current, row.current_tiers)}
                   </div>
                   <div>
                     <h3 className="mb-2 text-sm font-medium">{t("marketSync.proposed")}</h3>
-                    {rates(row.proposed)}
+                    {priceDetails(row.proposed, row.proposed_tiers)}
                   </div>
                 </div>
               </li>

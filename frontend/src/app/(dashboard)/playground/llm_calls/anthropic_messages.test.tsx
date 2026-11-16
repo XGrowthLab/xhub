@@ -84,6 +84,17 @@ describe("anthropic_messages non-streaming", () => {
     vi.clearAllMocks();
   });
 
+  /** 验证调试台的 PDF 附件发送为 Messages document；本地协议响应夹具在每例后恢复，不保留文件。 */
+  it("sends inline PDF as a Messages document", async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: "text", text: "OK" }], usage: { input_tokens: 1, output_tokens: 1 } });
+    const content = [{ type: "text", text: "Read" }, { type: "file", file: { filename: "test.pdf", file_data: "data:application/pdf;base64,JVBERi0=" } }];
+    await makeAnthropicMessagesRequest([{ role: "user", content } as any], vi.fn(), "claude", "test-token", undefined, undefined, undefined, undefined, undefined, ...NON_STREAMING_ARGS);
+    expect(mockMessagesCreate.mock.calls[0][0].messages[0].content).toEqual([
+      { type: "text", text: "Read" },
+      { type: "document", title: "test.pdf", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" } },
+    ]);
+  });
+
   /** 前置隔离协议响应；验证请求参数、业务回调或错误边界；afterEach 恢复 fetch 和 mock，无外部数据。 */
   it("sends stream:false through messages.create and renders the full reply at once", async () => {
     mockMessagesCreate.mockResolvedValue({

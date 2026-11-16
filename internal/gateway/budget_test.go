@@ -91,7 +91,7 @@ func TestSearchTokenOnlyLifecycle(t *testing.T) {
 	if !ok || string(body) != string(raw) || !s.tokenOnlyBudget("search") {
 		t.Fatal("搜索未进入保持正文的软预算")
 	}
-	if w.Header().Get("X-XHub-Budget-Reservation-Id") != "" || w.Header().Get("X-XHub-Budget-State") != "token_only" {
+	if w.Header().Get("X-XHub-Budget-Reservation-Id") != "" || w.Header().Get("X-XHub-Budget-State") != "soft" || w.Header().Get("X-XHub-Billing-Scope") != "tokens_and_search" {
 		t.Fatal("搜索预算头有旧状态")
 	}
 	if !s.MarkBudgetAttemptSubmitted(w, r, "search") {
@@ -117,6 +117,9 @@ func TestPricingFailureCode(t *testing.T) {
 	}{
 		{nil, ""}, {fmt.Errorf("measured cache reads have no reserved price"), "cache_read_price_missing"},
 		{fmt.Errorf("measured cache writes have no reserved price"), "cache_write_price_missing"},
+		{fmt.Errorf("measured search usage is missing"), "search_usage_missing"},
+		{fmt.Errorf("search usage is invalid or inconsistent"), "search_usage_invalid"},
+		{fmt.Errorf("measured searches have no confirmed price"), "search_price_missing"},
 		{fmt.Errorf("private configuration value"), "pricing_unavailable"},
 	} {
 		if got := pricingFailureCode(tc.err); got != tc.want {

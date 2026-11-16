@@ -2,6 +2,7 @@ package billing
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,11 @@ type DeploymentFinder interface {
 // 测试：billing/cost_test.go
 func CallCost(s DeploymentFinder, alias, depID string, usage catalog.Usage, start time.Time) (total, input, output float64, ok bool, charge catalog.Charge) {
 	if dep, found := s.FindDeployment(depID); found {
+		if dep.LiteLLMParams["market_tier_semantics"] == "modelink_open_closed_v1" {
+			// 少数没有尝试快照的旧结算入口仍须使用冻结部署分档，绝不能回落目录首档。
+			c, valid := marketTierCost(dep, usage, start)
+			return c.Total, c.Input, c.Output, valid, c
+		}
 		if c, ok := deploymentCost(dep, usage, start); ok {
 			return c.Total, c.Input, c.Output, true, c
 		}
@@ -57,6 +63,29 @@ func CallCost(s DeploymentFinder, alias, depID string, usage catalog.Usage, star
 		return 0, 0, 0, false, catalog.Charge{}
 	}
 	return c.Total, c.Input, c.Output, true, c
+}
+
+// marketTierCost 按已确认的 Modelink 分档和已归一化用量计算一次费用。
+// dep 为实际部署、usage 为实测用量、start 为请求开始时间；返回账单及是否完整计价。
+// 旧结算入口缺少缓存 TTL 原始分桶时必须拒绝不确定账单；正常请求优先使用出站时冻结的计划。
+func marketTierCost(dep config.ModelEntry, usage catalog.Usage, start time.Time) (catalog.Charge, bool) {
+	if dep.ModelInfo["pricing_source"] != "catalog" || usage.PromptTokens < 0 || usage.CacheWriteTokens < 0 || usage.CompletionTokens < 0 {
+		return catalog.Charge{}, false
+	}
+	if int64(usage.PromptTokens)+int64(usage.CacheWriteTokens) > math.MaxInt32 {
+		return catalog.Charge{}, false
+	}
+	input := usage.PromptTokens + usage.CacheWriteTokens
+	tiers, tiered, err := budgetTiers(dep, nil, input, usage.CompletionTokens, catalog.WindowAt(start), "")
+	if err != nil || !tiered || len(tiers) == 0 {
+		return catalog.Charge{}, false
+	}
+	snapshot := budgetPriceSnapshot{InputImagesIncluded: true, InputBound: input, OutputCap: usage.CompletionTokens, Amount: math.MaxFloat64, Window: catalog.WindowAt(start), Model: dep.ParamString("model", ""), Tiers: tiers, IntervalSemantics: "modelink_open_closed_v1"}
+	snapshot.Input, snapshot.Output, snapshot.CacheRead, snapshot.CacheWrite = budgetTierMaximum(tiers)
+	snapshot.CacheWriteByTTL = budgetMaximumCacheTTL(tiers)
+	plan := BudgetPlan{frozen: &snapshot, soft: true}
+	charge, err := plan.Charge(usage)
+	return charge, err == nil
 }
 
 // deploymentCost prices a call from the prices typed on the deployment itself.

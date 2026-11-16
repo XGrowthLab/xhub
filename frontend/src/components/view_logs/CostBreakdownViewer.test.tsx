@@ -502,7 +502,7 @@ it.each(["en", "zh-CN"] as const)("%s 完整显示小额费用并区分未知与
 
 /** 真实双语组件验证缺价原因可见、未知错误不泄漏和缓存命中仍免费；自动卸载，不访问后台。 */
 for (const locale of ["en", "zh-CN"] as const) {
-  for (const code of ["cache_read_price_missing", "cache_write_price_missing", "private-internal-detail"]) {
+  for (const code of ["cache_read_price_missing", "cache_write_price_missing", "search_usage_missing", "search_usage_invalid", "search_price_missing", "private-internal-detail"]) {
     it(`shows safe pricing reason ${locale} ${code}`, async () => {
       window.localStorage.removeItem(LOCALE_COOKIE);
       document.cookie = `${LOCALE_COOKIE}=; path=/; max-age=0`;
@@ -510,7 +510,20 @@ for (const locale of ["en", "zh-CN"] as const) {
       await userEvent.click(screen.getByText(locale === "en" ? "Cost Breakdown" : "费用明细"));
       expect(screen.getByRole("status")).toBeVisible();
       expect(screen.getByRole("status")).not.toHaveTextContent("private-internal-detail");
-      expect(screen.getByRole("status")).toHaveTextContent(locale === "en" ? /price|priced/ : /价格|定价/);
+      expect(screen.getByRole("status")).toHaveTextContent(locale === "en" ? /price|priced/ : /价格|定价|计价/);
     });
   }
+}
+
+/** 验证双语费用面板独立展示搜索费用和输出 token 费用；内存组件测试，卸载后自动清理。 */
+for (const locale of ["en", "zh-CN"] as const) {
+  it(`shows metered search separately ${locale}`, async () => {
+    window.localStorage.removeItem(LOCALE_COOKIE);
+    document.cookie = `${LOCALE_COOKIE}=; path=/; max-age=0`;
+    renderWithProviders(<I18nProvider initialLocale={locale}><CostBreakdownViewer costBreakdown={{input_cost:.000008, output_cost:.000004, tool_usage_cost:.02, total_cost:.020012}} totalSpend={.020012} /></I18nProvider>);
+    await userEvent.click(screen.getByText(locale === "en" ? "Cost Breakdown" : "费用明细"));
+    expect(screen.getByText(locale === "en" ? "Tool Usage Cost:" : "工具用量费用:")).toBeVisible();
+    expect(screen.getByText("$0.02")).toBeVisible();
+    expect(screen.getByText("$0.000004")).toBeVisible();
+  });
 }

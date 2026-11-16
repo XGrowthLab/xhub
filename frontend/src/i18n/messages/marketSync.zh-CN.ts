@@ -1,5 +1,5 @@
 export const marketSync = {
-  variant: { uncached: "非缓存", cached: "缓存", "1h": "1 小时", search: "次" },
+  variant: { uncached: "非缓存", cached: "缓存", "1h": "1 小时", "30m": "30 分钟", "12h": "12 小时", search: "次" },
   unit: { token: "百万 Token", query: "次", second: "秒", picture: "张" },
   delistedSaved: "模型已下架，本地记录已保留",
   listedSaved: "模型已上架",
@@ -19,6 +19,7 @@ export const marketSync = {
   deployment: "部署 / 计价模型",
   current: "当前计费价格",
   proposed: "最新市场价格",
+  inputTier: "输入 Token：{lower} < 数量 ≤ {upper}",
   action: "操作",
   select: "选择 {name}",
   manual: "手工定价",

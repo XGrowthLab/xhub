@@ -18,7 +18,7 @@ import (
 func searchTokenDeployment(base string) config.ModelEntry {
 	dep := hardBudgetDeployment("search-token-only")
 	dep.LiteLLMParams["api_base"] = base
-	dep.LiteLLMParams["search_context_cost_per_query"] = 1.0 // 故意有工具价格，证明软预算不会额外收费。
+	dep.LiteLLMParams["search_context_cost_per_query"] = 1.0 // 搜索实际次数按冻结单价计费。
 	dep.ModelInfo["transport"] = "bypass_openai_responses"
 	dep.ModelInfo["endpoint_types"] = []string{"responses", "bypass:openai-responses"}
 	return dep
@@ -29,27 +29,27 @@ func searchTokenItem(id, action string) map[string]any {
 	return map[string]any{"id": id, "type": "web_search_call", "status": "completed", "action": map[string]any{"type": action}}
 }
 
-// TestSearchTokenOnlySettlement 验证标准/旁路同步流及modern/preview搜索不被硬预占阻断，完整实测token落账，工具费用排除。
+// TestModelContractSearchSettlement 验证标准/旁路同步流及modern/preview搜索不被硬预占阻断，完整实测 token 和搜索次数落账。
 // 前置独立PG和本地上游；含正常多工具与超过请求cap的供应商实际输出，结束自动清理schema/服务器，不调用付费模型。
-func TestSearchTokenOnlySettlement(t *testing.T) {
+func TestModelContractSearchSettlement(t *testing.T) {
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	for _, path := range []string{"/v1/responses", "/bypass/openai/v1/responses"} {
 		for _, stream := range []bool{false, true} {
-			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history"} {
+			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history", "additional"} {
 				t.Run(fmt.Sprintf("%s/stream=%v/%s", path, stream, mode), func(t *testing.T) {
 					var calls atomic.Int32
 					received := make(chan map[string]any, 1)
 					output := []any{map[string]any{"id": "msg_test", "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": "SEARCH_OK", "annotations": []any{}}}}}
 					searches := 0
 					if mode != "zero" && mode != "history" {
-						output = append(output, searchTokenItem("ws_1", "search"), searchTokenItem("ws_2", "open_page"))
+						output = append(output, searchTokenItem("ws_1", "search"))
 						searches = 2
 					}
 					ct := 4
 					if mode == "over-cap" {
 						ct = 9000
 					}
-					terminal, _ := json.Marshal(map[string]any{"id": "resp_test", "object": "response", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 8, "output_tokens": ct, "searches": searches, "web_search_calls": searches, "num_server_side_tools_used": searches, "server_side_tool_usage_details": map[string]any{"web_search_calls": searches}, "context_details": map[string]any{"fixture": true}}})
+					terminal, _ := json.Marshal(map[string]any{"id": "resp_test", "object": "response", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 8, "output_tokens": ct, "searches": searches, "tool_usage": map[string]any{"web_search": searches}, "tool_usage_details": map[string]any{"web_search": map[string]any{"search_engine": searches}}, "web_search_calls": searches, "num_server_side_tools_used": searches, "server_side_tool_usage_details": map[string]any{"web_search_calls": searches}, "context_details": map[string]any{"fixture": true}}})
 					raw := string(terminal)
 					if stream {
 						raw = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":" + raw + "}\n\n"
@@ -77,6 +77,11 @@ func TestSearchTokenOnlySettlement(t *testing.T) {
 						kind = "web_search_preview"
 					}
 					body := map[string]any{"model": dep.ModelName, "input": "Reply briefly using search only if needed.", "tools": []any{map[string]any{"type": kind}}, "stream": stream}
+					if mode == "additional" {
+						// Codex 可在 additional_tools 中声明搜索；真实用量仍必须计入，不依赖顶层 tools。
+						delete(body, "tools")
+						body["input"] = []any{map[string]any{"type": "additional_tools", "tools": []any{map[string]any{"type": "web_search"}}}, map[string]any{"role": "user", "content": "Search for Go."}}
+					}
 					if mode == "over-cap" {
 						body["max_output_tokens"] = 32
 						body["max_tool_calls"] = 1
@@ -93,8 +98,8 @@ func TestSearchTokenOnlySettlement(t *testing.T) {
 					} else if sent["max_output_tokens"] != nil || sent["max_tool_calls"] != nil {
 						t.Fatalf("搜索请求被注入内部cap %+v", sent)
 					}
-					if got.header("X-XHub-Budget-State") != "token_only" || got.header("X-XHub-Budget-Guarantee") != "soft" || got.header("X-XHub-Tool-Costs") != "excluded" {
-						t.Fatal("客户端未获知token-only软预算")
+					if got.header("X-XHub-Budget-State") != "soft" || got.header("X-XHub-Budget-Guarantee") != "soft" || got.header("X-XHub-Tool-Costs") != "search_metered" {
+						t.Fatal("客户端未获知搜索计费软预算")
 					}
 					if got.header("X-XHub-Budget-Reservation-Id") != "" {
 						t.Fatal("搜索不应创建硬预占")
@@ -107,12 +112,12 @@ func TestSearchTokenOnlySettlement(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					want := 8*testInputRate + float64(ct)*testOutputRate
+					want := 8*testInputRate + float64(ct)*testOutputRate + float64(searches)
 					if len(holds) != 0 || !nearlyEqual(key.Spend, want) {
-						t.Fatalf("token-only账单或占用错误 spend=%g want=%g holds=%+v", key.Spend, want, holds)
+						t.Fatalf("搜索账单或占用错误 spend=%g want=%g holds=%+v", key.Spend, want, holds)
 					}
 					log := h.ok("GET", "/spend/logs/ui/"+got.header("X-Litellm-Call-Id"), admin, nil).text()
-					if !strings.Contains(log, "tokens_only") || !strings.Contains(log, "excluded") {
+					if !strings.Contains(log, "tokens_and_search") || !strings.Contains(log, "search_metered") {
 						t.Fatalf("日志未记录费用范围 %s", log)
 					}
 					if searches > 0 && (!strings.Contains(got.text(), "web_search_calls") || !strings.Contains(log, "web_search_calls")) {
@@ -221,13 +226,13 @@ func TestSearchTokenOnlyAdmission(t *testing.T) {
 	}
 }
 
-// TestSearchTokenOnlyUnknownUsage 验证缺失或冲突token用量不能伪报免费，也不产生新硬预算占用。
+// TestModelContractSearchUnknownUsage 验证缺失或冲突token用量不能伪报免费，也不产生新硬预算占用。
 // 标准和旁路同步/流走真实后台，本地上游返回不完整账单；独立数据库及服务器由harness清理。
-func TestSearchTokenOnlyUnknownUsage(t *testing.T) {
+func TestModelContractSearchUnknownUsage(t *testing.T) {
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	for _, path := range []string{"/v1/responses", "/bypass/openai/v1/responses"} {
 		for _, stream := range []bool{false, true} {
-			for _, mode := range []string{"missing", "conflict"} {
+			for _, mode := range []string{"missing", "conflict", "search-missing", "search-conflict"} {
 				t.Run(fmt.Sprintf("%s/%v/%s", path, stream, mode), func(t *testing.T) {
 					usage := map[string]any{"input_tokens": 8}
 					if mode == "conflict" {

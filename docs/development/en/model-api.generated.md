@@ -1446,6 +1446,18 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
     },
     "version": {
       "type": "string"
+    },
+    "current_tiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceTier"
+      }
+    },
+    "proposed_tiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceTier"
+      }
     }
   },
   "additionalProperties": true
@@ -1614,5 +1626,45 @@ Admin only; submit unique deployment IDs and preview versions. Server rechecks p
     }
   },
   "additionalProperties": false
+}
+```
+
+### DeploymentPriceTier
+
+```json
+{
+  "type": "object",
+  "required": [
+    "input_range",
+    "output_range",
+    "rates"
+  ],
+  "properties": {
+    "input_range": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "output_range": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "rates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/DeploymentPriceRate"
+      }
+    }
+  },
+  "additionalProperties": true
 }
 ```

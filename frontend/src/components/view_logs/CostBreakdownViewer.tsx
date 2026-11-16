@@ -94,7 +94,14 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const isCached = String(cacheHit ?? "").toLowerCase() === "true";
   const isUnpriced = !isCached && costBreakdown?.pricing_status === "unpriced";
   const pricingReason = costBreakdown?.usage?.PricingBlocked;
-  const reasonKey = pricingReason === "cache_read_price_missing" ? "cachePrice.readMissing" : pricingReason === "cache_write_price_missing" ? "cachePrice.writeMissing" : "cachePrice.unavailable";
+  const reasonKeys: Record<string, string> = {
+    cache_read_price_missing: "cachePrice.readMissing",
+    cache_write_price_missing: "cachePrice.writeMissing",
+    search_usage_missing: "searchPricing.usageMissing",
+    search_usage_invalid: "searchPricing.usageInvalid",
+    search_price_missing: "searchPricing.priceMissing",
+  };
+  const reasonKey = reasonKeys[pricingReason ?? ""] ?? "cachePrice.unavailable";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
 
   const hasCostBreakdown = costBreakdown?.input_cost !== undefined || costBreakdown?.output_cost !== undefined;

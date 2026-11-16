@@ -17,6 +17,7 @@ type budgetTierPrices struct {
 	CacheRead       *catalog.Rate           `json:"cache_read_rate,omitempty"`
 	CacheWrite      *catalog.Rate           `json:"cache_write_rate,omitempty"`
 	CacheWriteByTTL map[string]catalog.Rate `json:"cache_write_rates_by_ttl,omitempty"`
+	Search          *catalog.Rate           `json:"search_rate,omitempty"`
 }
 
 // budgetPriceTier 原样保留目录输入/输出区间；来源未声明开闭，共享边界不能猜测采用较高或较低档。
@@ -45,9 +46,14 @@ func budgetSelectPrices(rates []catalog.Rate, window, ttl string) (budgetTierPri
 	} else if r, found := budgetRate(rates, "cache_read", "", window); found {
 		p.CacheRead = &r
 	}
+	search, err := budgetSearchRate(rates, window)
+	if err != nil {
+		return p, err
+	}
+	p.Search = search
 	// 客户端声明只约束其缓存块；透明代理还可能注入另一期限的系统前缀缓存。
 	// 因此新计划始终冻结全部已知写价并取最大值预占，不能把请求TTL当成全部实测维度的上界。
-	for _, variant := range []string{"", "1h"} {
+	for _, variant := range []string{"", "1h", "30m", "12h"} {
 		if r, found := budgetRate(rates, "cache_write", variant, window); found {
 			if p.CacheWriteByTTL == nil {
 				p.CacheWriteByTTL = map[string]catalog.Rate{}
@@ -177,7 +183,7 @@ func budgetTierRange(raw any) ([2]int, error) {
 
 // budgetTierRates 严格转换单档details_v2为每Token USD费率；参数必须有明确单位大小和美元价格。
 // CNY展示价格不作为USD后备，缺失价格不能视为零；只允许已知文字、缓存、批处理与搜索报价键。
-// 请求层已拒绝服务器搜索/批处理，因此这两种独立维度不参与文字预占。
+// 硬预算请求层拒绝搜索/批处理预占；软预算可读取冻结的搜索单价，按实际用量结算。
 func budgetTierRates(raw any) ([]catalog.Rate, error) {
 	details, ok := raw.(map[string]any)
 	if !ok || len(details) == 0 {
@@ -224,6 +230,12 @@ func budgetTierRates(raw any) ([]catalog.Rate, error) {
 		case "c_1h_cache":
 			r.Side = "cache_write"
 			r.Variant = "1h"
+		case "c_30m_cache":
+			r.Side = "cache_write"
+			r.Variant = "30m"
+		case "c_12h_cache":
+			r.Side = "cache_write"
+			r.Variant = "12h"
 		case "bi_input":
 			r.Side = "batch_input"
 		case "bi_output":
@@ -232,11 +244,14 @@ func budgetTierRates(raw any) ([]catalog.Rate, error) {
 			if unit["unit_name"] != "query" && unit["unit_name"] != "request" && unit["unit_name"] != "time" {
 				return nil, budgetFailure("unsupported_budget", "catalog search price has an unsupported unit")
 			}
-			continue
+			if math.IsNaN(r.USD) || math.IsInf(r.USD, 0) || (usd > 0 && r.USD == 0) {
+				return nil, budgetFailure("unsupported_budget", "catalog search price cannot be normalized")
+			}
+			r.Measure, r.Side, r.Variant = "query", "output", "search"
 		default:
 			return nil, budgetFailure("unsupported_budget", "catalog tier contains an unsupported price dimension")
 		}
-		if unit["unit_name"] != "token" || math.IsNaN(r.USD) || math.IsInf(r.USD, 0) || (usd > 0 && r.USD == 0) {
+		if r.Measure == "token" && unit["unit_name"] != "token" || math.IsNaN(r.USD) || math.IsInf(r.USD, 0) || (usd > 0 && r.USD == 0) {
 			return nil, budgetFailure("unsupported_budget", "catalog tier token unit or normalized USD price is invalid")
 		}
 		identity := r.Side + "/" + r.Variant + "/" + r.Window
@@ -324,11 +339,15 @@ func budgetTierMaximum(tiers []budgetPriceTier) (catalog.Rate, catalog.Rate, *ca
 
 // budgetSelectTier 根据完整实测输入/输出从冻结表选择费率；输入总量包括独立缓存读与写，避免缓存绕过长上下文档。
 // 来源未说明共享阈值的开闭，因此阈值两侧费率不同必须保留未知占用；相同收费契约可安全结算。
-func budgetSelectTier(tiers []budgetPriceTier, u catalog.Usage) (budgetTierPrices, error) {
+func budgetSelectTier(tiers []budgetPriceTier, u catalog.Usage, semantics string) (budgetTierPrices, error) {
 	input := int64(u.PromptTokens) + int64(u.CacheWriteTokens)
 	var selected *budgetTierPrices
 	for _, tier := range tiers {
 		if input < int64(tier.InputRange[0]) || input > int64(tier.InputRange[1]) || u.CompletionTokens < tier.OutputRange[0] || u.CompletionTokens > tier.OutputRange[1] {
+			continue
+		}
+		// Modelink 的页面明确展示 (下界, 上界]；零用量特殊归入首档，其他来源沿用歧义拒绝。
+		if semantics == "modelink_open_closed_v1" && tier.InputRange[0] > 0 && input == int64(tier.InputRange[0]) {
 			continue
 		}
 		if selected != nil && !budgetSamePrices(*selected, tier.budgetTierPrices) {
@@ -360,7 +379,7 @@ func budgetSamePrices(a, b budgetTierPrices) bool {
 			return false
 		}
 	}
-	return a.Input.USD == b.Input.USD && a.Output.USD == b.Output.USD && equal(a.CacheRead, b.CacheRead) && equal(a.CacheWrite, b.CacheWrite)
+	return a.Input.USD == b.Input.USD && a.Output.USD == b.Output.USD && equal(a.CacheRead, b.CacheRead) && equal(a.CacheWrite, b.CacheWrite) && equal(a.Search, b.Search)
 }
 
 // budgetPriceSource 统一选择实际费率源；显式manual始终优先，其他模式只有非null价格覆盖才切换手工来源。

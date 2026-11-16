@@ -2,6 +2,7 @@ import type { ModelEndpoint, ModelGroup } from "./fetch_models";
 import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { t } from "@/i18n";
+import { messagesContentPart, responsesContentPart } from "./attachment_parts";
 
 const UI_ENDPOINTS: Record<string, EndpointType> = {
   "/v1/chat/completions": EndpointType.CHAT,
@@ -26,7 +27,7 @@ export const modelEndpoints = (model?: ModelGroup): ModelEndpoint[] => model?.en
  */
 export const endpointUIType = (endpoint?: ModelEndpoint): EndpointType | null =>
   endpoint && !(endpoint.kind === "bypass" && endpoint.protocol === "openai-images")
-    ? (UI_ENDPOINTS[endpoint.path] ??
+    ? UI_ENDPOINTS[endpoint.path] ??
       (
         {
           "openai-chat": EndpointType.CHAT,
@@ -34,7 +35,7 @@ export const endpointUIType = (endpoint?: ModelEndpoint): EndpointType | null =>
           "anthropic-messages": EndpointType.ANTHROPIC_MESSAGES,
         } as Record<string, EndpointType>
       )[endpoint.protocol] ??
-      null)
+      null
     : null;
 /** textEndpoints 返回模型声明的文本对话端点。
  * 参数 model：可选模型元数据。返回：Chat Completions、Responses、Messages 的真实绑定。
@@ -132,7 +133,7 @@ export async function callTextEndpoint({
       usageFacts.input_tokens_details?.cached_tokens ??
       usageFacts.prompt_tokens_details?.cached_tokens;
     onUsage?.({
-      promptTokens: input === undefined ? undefined : input + (messagesAPI ? (cached ?? 0) : 0),
+      promptTokens: input === undefined ? undefined : input + (messagesAPI ? cached ?? 0 : 0),
       completionTokens: output,
       totalTokens:
         usageFacts.total_tokens ??
@@ -146,13 +147,7 @@ export async function callTextEndpoint({
     body.input = messages.map((message) => ({
       ...message,
       content: Array.isArray(message.content)
-        ? message.content.map((part: any) =>
-            part.type === "text"
-              ? { type: message.role === "assistant" ? "output_text" : "input_text", text: part.text }
-              : part.type === "image_url"
-                ? { type: "input_image", image_url: part.image_url.url }
-                : part,
-          )
+        ? message.content.map((part: any) => responsesContentPart(part, message.role))
         : message.content,
     }));
     if (maxTokens !== undefined) body.max_output_tokens = maxTokens;
@@ -161,17 +156,7 @@ export async function callTextEndpoint({
       .filter((message) => message.role !== "system")
       .map((message) => ({
         ...message,
-        content: Array.isArray(message.content)
-          ? message.content.map((part: any) => {
-              if (part.type !== "image_url") return part;
-              const url = part.image_url.url as string;
-              const match = /^data:([^;]+);base64,(.+)$/.exec(url);
-              return {
-                type: "image",
-                source: match ? { type: "base64", media_type: match[1], data: match[2] } : { type: "url", url },
-              };
-            })
-          : message.content,
+        content: Array.isArray(message.content) ? message.content.map(messagesContentPart) : message.content,
       }));
     const system = messages
       .filter((message) => message.role === "system")

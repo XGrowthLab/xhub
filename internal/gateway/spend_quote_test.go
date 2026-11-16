@@ -102,8 +102,14 @@ func TestQuoteSpendKeepsFrozenPriceAndPendingState(t *testing.T) {
 	searchDep := config.ModelEntry{ModelName: "quote-model", LiteLLMParams: map[string]any{"model": "quote-upstream", "input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008}, ModelInfo: map[string]any{"pricing_source": "manual"}}
 	s.budgetCalls["token-only"] = &budgetAttempt{TokenOnly: true, SoftPrice: billing.NewSoftPricePlan(searchDep, start, true)}
 	search := s.quoteSpend("token-only", "quote-model", "", map[string]any{"input_tokens": 8, "output_tokens": 2, "searches": 9}, start, false, 200)
-	if !search.tokenOnly || !search.priced || search.billed.Searches != 0 || math.Abs(search.total-0.000032) > 1e-12 {
-		t.Fatalf("仅 Token 计价不能计入搜索次数或丢失用量: %+v", search)
+	if search.priced || search.billed.Searches != 9 || search.billed.PricingBlocked != "search_price_missing" {
+		t.Fatalf("实际搜索无单价不能标记已计价或丢失次数: %+v", search)
+	}
+	searchDep.LiteLLMParams["search_context_cost_per_query"] = .01
+	s.budgetCalls["search-metered"] = &budgetAttempt{TokenOnly: true, SearchBilling: true, SoftPrice: billing.NewSoftPricePlan(searchDep, start, true).WithSearchRequest(true)}
+	search = s.quoteSpend("search-metered", "quote-model", "", map[string]any{"input_tokens": 8, "output_tokens": 2, "searches": 9}, start, false, 200)
+	if !search.searchBilling || !search.priced || search.billed.Searches != 9 || math.Abs(search.total-.090032) > 1e-12 {
+		t.Fatalf("实际搜索次数和冻结价格未入账: %+v", search)
 	}
 	if s.exchanges["quote"].rawResponse != "pending" || s.callNotes["quote"].Provider != "provider" || s.budgetCalls["quote"] == nil {
 		t.Fatal("报价不应消费待结算请求状态")

@@ -1,20 +1,13 @@
-# Hosted web search: token-only billing
+# Hosted web search billing
 
-Native Responses requests declaring `web_search`, `web_search_2025_08_26`, `web_search_preview`, or `web_search_preview_2025_03_11` use **token-only soft budgets**. No supplier certification profile or search price is required. Existing authentication, model access restrictions and available-balance admission remain active.
+Requests declaring hosted search use a soft budget. Authentication, model access and available-balance checks still apply before the call; the gateway neither reserves a hard budget nor changes the client's tools or limits. Concurrent requests or a single request can exceed the balance available at admission.
 
-The gateway preserves the search tools and caller-provided limits. It does not add `max_tool_calls` or `max_output_tokens`, remove search, or create a hard-budget reservation for these requests. Complete measured input/output tokens, including reported reasoning and cache tokens, use the deployment's normal token pricing. Search/tool charges are excluded even when upstream reports them or the deployment has a search price. Raw upstream usage and search results remain in responses and logs.
+The gateway charges reported token usage and the actual total search count using the model prices frozen for that request. Search uses the configured per-query rate; response items or tool-call counts are not a substitute for the actual count reported by the supplier. This does not automatically charge other tools.
 
-A request can spend more than the balance remaining when it started; concurrent search requests do **not** have a hard spending guarantee. Completed token charges count toward subsequent admission. Missing or contradictory token usage remains unpriced rather than being estimated. Search output exceeding a caller limit is charged using actual reported tokens and does not create a new uncertain reservation.
+When search is declared but the supplier does not report a count, or when the reported counts conflict or lack a corresponding price, the charge is marked unpriced. The gateway does not guess the count or treat an absent price as free. An administrator must inspect supplier usage and model pricing; such records are not fully settled.
 
-Observable response headers:
+For an upstream whose search count or price cannot be confirmed, administrators can mark the deployment's search capability unsupported. Standard endpoints and Chat, Responses, and Messages bypass reject search on that deployment before contacting the supplier; bypass never silently drops tools. Ordinary custom functions and read-only token counting remain available.
 
-- `X-XHub-Budget-State: token_only`
-- `X-XHub-Billing-Scope: tokens_only`
-- `X-XHub-Budget-Guarantee: soft`
-- `X-XHub-Tool-Costs: excluded`
+Responses that meter search include `X-XHub-Budget-State: soft`, `X-XHub-Billing-Scope: tokens_and_search`, `X-XHub-Tool-Costs: search_metered` and `X-XHub-Budget-Guarantee: soft`. The log's price snapshot and cost breakdown retain the billing scope, search count and unit price.
 
-The usage price snapshot stores the same scope and guarantee under `budget`. Streaming clients receive the policy headers before generation. Tool usage is retained as upstream evidence, not charged. Supported public search history can be continued through native Responses; cross-protocol conversion of search history remains unsupported.
-
-Soft budgets now apply to all model requests. The budget layer no longer rejects hosted tools using an allowlist; protocol conversion and upstream capability restrictions still apply. Existing uncertain reservations are not automatically released or modified.
-
-Regression uses local HTTP suppliers and a private PostgreSQL schema; browser tests create and clean up a model and limited key in both supported UI languages. These prove gateway policy, not upstream search availability, quality or compliance with client-provided limits.
+Regression tests use local HTTP suppliers and isolated PostgreSQL. Browser tests create and clean up models and keys in both supported UI languages. These tests do not establish external supplier search availability or guarantee complete usage reporting.

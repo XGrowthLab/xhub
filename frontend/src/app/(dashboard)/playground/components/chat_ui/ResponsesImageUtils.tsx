@@ -14,21 +14,26 @@ export const convertImageToBase64 = (file: File): Promise<string> => {
   });
 };
 
+/** 创建 Responses 图文或 PDF 消息；参数为用户文字和本地附件，返回可发送的协议内容。
+ * 调试台与 curl 预览调用；PDF 使用 input_file，图片使用 input_image，不改变文字或读取远端资源。 */
 export const createMultimodalMessage = async (
   inputMessage: string,
   file: File,
 ): Promise<{ role: string; content: MultimodalContent[] }> => {
   const base64Data = await convertImageToBase64(file);
-  const mimeType = file.type || (file.name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/jpeg");
+  const isPDF = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+  const mimeType = isPDF ? "application/pdf" : file.type || "image/jpeg";
 
   return {
     role: "user",
     content: [
       { type: "input_text", text: inputMessage },
-      {
-        type: "input_image",
-        image_url: `data:${mimeType};base64,${base64Data}`,
-      },
+      isPDF
+        ? { type: "input_file", filename: file.name, file_data: `data:application/pdf;base64,${base64Data}` }
+        : {
+            type: "input_image",
+            image_url: `data:${mimeType};base64,${base64Data}`,
+          },
     ],
   };
 };

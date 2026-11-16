@@ -35,7 +35,19 @@ func Available(s Host, w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if index, ok := seen[entry.ModelName]; ok {
-			data[index]["endpoints"] = providerdeployment.MergeEndpoints(data[index]["endpoints"].([]providerdeployment.EndpointBinding), providerdeployment.DeploymentEndpoints(entry))
+			previous := data[index]["endpoints"].([]providerdeployment.EndpointBinding)
+			next := availableCard(entry)
+			current := next["endpoints"].([]providerdeployment.EndpointBinding)
+			if len(current) > 0 {
+				if len(previous) == 0 {
+					// 首条部署不可用时，只展示后续可用部署的能力。
+					data[index]["capabilities"] = next["capabilities"]
+				} else {
+					// 同名模型可能路由到任一可用部署；只有所有候选都支持的能力才作为模型通用能力展示。
+					data[index]["capabilities"] = sharedCapabilities(data[index]["capabilities"].([]string), next["capabilities"].([]string))
+				}
+			}
+			data[index]["endpoints"] = providerdeployment.MergeEndpoints(previous, current)
 			// 同名部署只要存在有效绑定就可调用，不能被另一条无效部署的错误覆盖。
 			if len(data[index]["endpoints"].([]providerdeployment.EndpointBinding)) > 0 {
 				delete(data[index], "unavailable_reason")
@@ -46,6 +58,21 @@ func Available(s Host, w http.ResponseWriter, r *http.Request) {
 		data = append(data, availableCard(entry))
 	}
 	util.WriteJSON(w, 200, map[string]any{"object": "list", "data": data})
+}
+
+// sharedCapabilities 返回两个可用部署共同支持的展示能力；参数为各部署的能力列表，返回独立切片。
+// 同名模型卡片合并时调用；保留首个列表的顺序，不修改原始切片或改变路由、权限和计费。
+func sharedCapabilities(first, next []string) []string {
+	shared := make([]string, 0, len(first))
+	for _, capability := range first {
+		for _, other := range next {
+			if capability == other {
+				shared = append(shared, capability)
+				break
+			}
+		}
+	}
+	return shared
 }
 
 // availableCard 把部署转换为可选模型卡片；优先使用部署价格，其次按base_model绑定读取目录，避免改名丢价。
@@ -95,7 +122,12 @@ func availableCard(entry config.ModelEntry) map[string]any {
 		{"supports_function_calling", "tools"}, {"supports_response_schema", "structured"},
 		{"supports_reasoning", "reasoning"}, {"supports_vision", "vision"}, {"supports_prompt_caching", "caching"},
 	} {
-		if boolValue(info[capability.field]) || boolValue(row[capability.field]) {
+		// 已实测的部署能力优先于市场目录；显式 false 不能被目录的通用能力重新开启。
+		value, configured := info[capability.field]
+		if !configured || value == nil {
+			value = row[capability.field]
+		}
+		if boolValue(value) {
 			card["capabilities"] = append(card["capabilities"].([]string), capability.name)
 		}
 	}

@@ -100,6 +100,7 @@ func TestModelContractResponseRoundtrip(t *testing.T) {
 		dst any
 	}{
 		{`{"deployments":[{"id":"d","name":"test","base_model":"model","manual":false,"current":[{"measure":"token","side":"input","window":"all","source_key":"input","usd":0.000002,"unit_size":1000000,"variant":"uncached","label":"input","fallback":false,"extension":"keep"}],"proposed":null,"changed":false,"reason":"","version":"v","extension":true}],"generated_at":"2026-01-01","extension":"keep"}`, new(DeploymentPriceList)},
+		{`{"deployments":[{"id":"d","name":"test","base_model":"model","manual":false,"current":null,"proposed":null,"current_tiers":[{"input_range":[0,272000],"output_range":[0,99999999],"rates":[{"measure":"token","side":"input","window":"all","source_key":"ncache","usd":0.000001,"unit_size":1000}],"extension":"retained"}],"proposed_tiers":[{"input_range":[272000,99999999],"output_range":[0,99999999],"rates":[]}],"changed":true,"reason":"","version":"v"}],"generated_at":"2026-01-01"}`, new(DeploymentPriceList)},
 		{`{"items":[{"id":"d","version":"v","extension":"keep"}],"extension":"keep"}`, new(DeploymentPriceSelection)},
 		{`{"updated":2,"extension":"keep"}`, new(DeploymentPriceResult)},
 		{`{"model_name":"m","litellm_params":{"model":"up","input_cost_per_token":0.000000123456789,"extension":null},"model_info":{"id":"d","disabled":false,"db_model":true,"endpoint_types":["chat","responses"],"vendor_extension":{"big":9007199254740993}}}`, new(Deployment)},
@@ -139,7 +140,8 @@ func TestPriceContractRejectsMalformedFields(t *testing.T) {
 		fields map[string]string
 	}{
 		{"list", func() any { return new(DeploymentPriceList) }, map[string]string{"deployments": `"bad"`, "generated_at": `7`}},
-		{"preview", func() any { return new(DeploymentPricePreview) }, map[string]string{"base_model": `7`, "changed": `"bad"`, "current": `"bad"`, "id": `7`, "manual": `"bad"`, "name": `7`, "proposed": `"bad"`, "reason": `7`, "version": `7`}},
+		{"preview", func() any { return new(DeploymentPricePreview) }, map[string]string{"base_model": `7`, "changed": `"bad"`, "current": `"bad"`, "current_tiers": `"bad"`, "proposed_tiers": `"bad"`, "id": `7`, "manual": `"bad"`, "name": `7`, "proposed": `"bad"`, "reason": `7`, "version": `7`}},
+		{"tier", func() any { return new(DeploymentPriceTier) }, map[string]string{"input_range": `"bad"`, "output_range": `"bad"`, "rates": `"bad"`}},
 		{"rate", func() any { return new(DeploymentPriceRate) }, map[string]string{"fallback": `"bad"`, "label": `7`, "measure": `7`, "side": `7`, "source_key": `7`, "unit_size": `"bad"`, "usd": `"bad"`, "variant": `7`, "window": `7`}},
 		{"result", func() any { return new(DeploymentPriceResult) }, map[string]string{"updated": `"bad"`}},
 		{"selection", func() any { return new(DeploymentPriceSelection) }, map[string]string{"items": `"bad"`}},
@@ -152,5 +154,26 @@ func TestPriceContractRejectsMalformedFields(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestPriceTierExtensionRoundtrip 验证分档扩展属性可读取、写入并保留，非法 JSON 值返回错误。
+// 使用独立内存对象，不依赖网络、数据库或用户数据，测试结束由运行时回收。
+func TestPriceTierExtensionRoundtrip(t *testing.T) {
+	tier := DeploymentPriceTier{InputRange: []int{0, 200000}, OutputRange: []int{0, 99999999}, Rates: []DeploymentPriceRate{}}
+	if _, ok := tier.Get("source_note"); ok {
+		t.Fatal("不存在的扩展字段不应被识别")
+	}
+	tier.Set("source_note", "confirmed")
+	if got, ok := tier.Get("source_note"); !ok || got != "confirmed" {
+		t.Fatalf("分档扩展字段丢失: %v", got)
+	}
+	raw, err := json.Marshal(tier)
+	if err != nil || !strings.Contains(string(raw), `"source_note":"confirmed"`) {
+		t.Fatalf("分档扩展字段未序列化: %s %v", raw, err)
+	}
+	tier.Set("invalid", make(chan int))
+	if _, err := json.Marshal(tier); err == nil {
+		t.Fatal("非法扩展值不能静默丢失")
 	}
 }
