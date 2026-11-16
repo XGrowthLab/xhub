@@ -75,3 +75,28 @@ func TestPDFInputBoundaries(t *testing.T) {
 		t.Fatal("远程文件被静默转换")
 	}
 }
+
+// TestPDFBudgetValidation 验证严格预算复用格式校验时允许缓存提示、保留原始正文并拒绝文件引用。
+// 使用三协议合成内存数据和独立副本，不访问网络或持久资源，测试结束自动回收。
+func TestPDFBudgetValidation(t *testing.T) {
+	for _, protocol := range []string{"openai-chat", "openai-responses", "anthropic-messages"} {
+		body, _ := pdfBody(protocol)
+		field := "messages"
+		if protocol == "openai-responses" {
+			field = "input"
+		}
+		block := body[field].([]any)[0].(map[string]any)["content"].([]any)[1].(map[string]any)
+		block["cache_control"] = map[string]any{"type": "ephemeral"}
+		before, _ := json.Marshal(block)
+		if err := ValidateBudgetInputPDF(block, protocol); err != nil {
+			t.Fatalf("%s 合法 PDF 被预算校验拒绝: %v", protocol, err)
+		}
+		after, _ := json.Marshal(block)
+		if string(before) != string(after) {
+			t.Fatal("预算校验修改了原始 PDF 内容")
+		}
+	}
+	if err := ValidateBudgetInputPDF(map[string]any{"type": "input_file", "file_id": "opaque"}, "openai-responses"); err == nil {
+		t.Fatal("不透明文件引用不能用于严格预算")
+	}
+}
