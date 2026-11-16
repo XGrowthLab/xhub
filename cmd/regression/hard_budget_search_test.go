@@ -35,7 +35,7 @@ func TestModelContractSearchSettlement(t *testing.T) {
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	for _, path := range []string{"/v1/responses", "/bypass/openai/v1/responses"} {
 		for _, stream := range []bool{false, true} {
-			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history"} {
+			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history", "additional"} {
 				t.Run(fmt.Sprintf("%s/stream=%v/%s", path, stream, mode), func(t *testing.T) {
 					var calls atomic.Int32
 					received := make(chan map[string]any, 1)
@@ -77,6 +77,11 @@ func TestModelContractSearchSettlement(t *testing.T) {
 						kind = "web_search_preview"
 					}
 					body := map[string]any{"model": dep.ModelName, "input": "Reply briefly using search only if needed.", "tools": []any{map[string]any{"type": kind}}, "stream": stream}
+					if mode == "additional" {
+						// Codex 可在 additional_tools 中声明搜索；真实用量仍必须计入，不依赖顶层 tools。
+						delete(body, "tools")
+						body["input"] = []any{map[string]any{"type": "additional_tools", "tools": []any{map[string]any{"type": "web_search"}}}, map[string]any{"role": "user", "content": "Search for Go."}}
+					}
 					if mode == "over-cap" {
 						body["max_output_tokens"] = 32
 						body["max_tool_calls"] = 1
