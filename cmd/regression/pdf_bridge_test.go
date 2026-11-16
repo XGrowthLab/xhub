@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-// TestInlinePDFRealGateway 验证三种入口经真实网关、隔离数据库与 Chat 上游保持 PDF 字节并结算。
+// TestModelContractInlinePDFRealGateway 验证三种入口经真实网关、隔离数据库与 Chat 上游保持 PDF 字节并结算。
 // 使用本机可校验内容的合成上游及个人密钥，覆盖协议转换、非流式、错误输入不外发和费用；harness 清理数据库与服务。
-func TestInlinePDFRealGateway(t *testing.T) {
+func TestModelContractInlinePDFRealGateway(t *testing.T) {
 	data := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\nsynthetic\n%%EOF"))
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

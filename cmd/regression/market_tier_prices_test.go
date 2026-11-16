@@ -12,9 +12,9 @@ import (
 	"github.com/sunqirui1987/xhub/internal/catalog"
 )
 
-// TestMarketTierPriceRealGateway 验证真实管理路由、隔离 PostgreSQL 与上游计量之间的分档计费。
+// TestModelContractMarketTierPriceRealGateway 验证真实管理路由、隔离 PostgreSQL 与上游计量之间的分档计费。
 // 本地来源提供两档，覆盖边界、快照冻结、管理员确认和伪造拒绝；harness 在测试结束时清理 schema 与服务。
-func TestMarketTierPriceRealGateway(t *testing.T) {
+func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	before := catalog.PriceDocument{Version: 1, Models: catalog.CostMap(), Providers: catalog.Providers(), Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt()}
 	t.Cleanup(func() { _, _ = catalog.ApplyDocument(before) })
 	h := newHarness(t)
@@ -88,5 +88,15 @@ func TestMarketTierPriceRealGateway(t *testing.T) {
 	}
 	if r := h.do("POST", "/model/update", admin, map[string]any{"id": id, "litellm_params": map[string]any{"market_tier_semantics": "forged"}}); r.status != 400 {
 		t.Fatalf("普通编辑不应伪造分档语义: %s", r.describe())
+	}
+	// 管理员切换手工价格必须保留明确提交的档位；普通用户不得更改，且目录确认标记不能继承。
+	manualRules := []any{map[string]any{"input_range": []int{0, 99999999}, "output_range": []int{0, 99999999}, "details_v2": map[string]any{"ncache": unit(3), "output": unit(9), "cache": unit(.2)}}}
+	manual := map[string]any{"id": id, "model_info": map[string]any{"pricing_source": "manual"}, "litellm_params": map[string]any{"pricing_rules_v2": manualRules, "input_cost_per_token": .000003, "output_cost_per_token": .000009}}
+	if r := h.do("POST", "/model/update", tenant.session, manual); r.status != 403 {
+		t.Fatalf("普通用户修改模型价格未被拒绝: %s", r.describe())
+	}
+	h.ok("POST", "/model/update", admin, manual)
+	if got := call(12, 0); math.Abs(got-.000081) > 1e-10 {
+		t.Fatalf("手工分档价格未生效: %g", got)
 	}
 }

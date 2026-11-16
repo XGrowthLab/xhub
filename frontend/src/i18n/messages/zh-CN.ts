@@ -13,6 +13,11 @@ import { routeTemplatesZhCN } from "./routeTemplates.zh-CN";
 import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
+  searchPricing: {
+    usageMissing: "上游未报告搜索次数，本次请求无法完整计价。",
+    usageInvalid: "上游报告的搜索次数无效或互相矛盾，本次请求无法完整计价。",
+    priceMissing: "上游报告了搜索次数，但模型未确认搜索单价，本次请求无法完整计价。",
+  },
   playgroundAttachment: { expired: "刷新后之前的附件已不可用，请清空对话并重新上传附件后继续。" },
   notifications,
   marketSync,

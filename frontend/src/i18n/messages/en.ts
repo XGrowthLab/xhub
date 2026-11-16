@@ -12,6 +12,11 @@ import { routeTemplatesEn } from "./routeTemplates.en";
 import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
+  searchPricing: {
+    usageMissing: "The upstream did not report the number of searches, so this request cannot be priced completely.",
+    usageInvalid: "The upstream reported invalid or conflicting search counts, so this request cannot be priced completely.",
+    priceMissing: "The upstream reported searches, but the model has no confirmed search price. This request cannot be priced completely.",
+  },
   playgroundAttachment: { expired: "An earlier attachment is no longer available after refreshing. Clear the conversation and upload it again to continue." },
   notifications,
   marketSync,

@@ -88,10 +88,10 @@ func (s *Server) setChatHeaders(w http.ResponseWriter, p *auth.Principal, alias,
 
 // spendQuote 保存单次费用计算与价格快照事实；只属于当前请求，不持有响应写入器或执行持久化。
 type spendQuote struct {
-	billed                        catalog.Usage
-	charge                        catalog.Charge
-	total, input, output          float64
-	priced, softActive, tokenOnly bool
+	billed                                       catalog.Usage
+	charge                                       catalog.Charge
+	total, input, output                         float64
+	priced, softActive, tokenOnly, searchBilling bool
 }
 
 // quoteSpend 按现有费率、冻结价格及请求状态计算单次费用事实。
@@ -106,6 +106,9 @@ func (s *Server) quoteSpend(callID, alias, depID string, usage map[string]any, s
 	tokenOnly := s.tokenOnlyBudget(callID)
 	if tokenOnly {
 		billed = billing.SearchTokenUsage(usage)
+		if searches, present, err := billing.SearchUsage(usage); err == nil && present {
+			billed.Searches = searches
+		}
 	}
 	total, input, output, priced, charge := billing.CallCost(s, alias, depID, billed, start)
 	softActive := false
@@ -127,7 +130,7 @@ func (s *Server) quoteSpend(callID, alias, depID string, usage map[string]any, s
 		// 失败响应可能没有 usage，不能因此误报模型价格不完整。
 		billed.PricingBlocked = ""
 	}
-	return spendQuote{billed: billed, charge: charge, total: total, input: input, output: output, priced: priced, softActive: softActive, tokenOnly: tokenOnly}
+	return spendQuote{billed: billed, charge: charge, total: total, input: input, output: output, priced: priced, softActive: softActive, tokenOnly: tokenOnly, searchBilling: s.searchBudget(callID)}
 }
 
 // recordSpend 计算费用响应头并记录用量；同步对话先冻结最终快照，交付确认后再持久化并结算。
@@ -156,8 +159,10 @@ func (s *Server) recordSpend(w http.ResponseWriter, p *auth.Principal, callID, a
 	if quote.softActive {
 		budgetMetadata = map[string]any{"state": "soft", "billing_scope": "model_usage", "guarantee": "soft"}
 	}
-	if quote.tokenOnly {
+	if quote.tokenOnly && !quote.searchBilling {
 		budgetMetadata = map[string]any{"state": "token_only", "billing_scope": "tokens_only", "tool_costs": "excluded", "guarantee": "soft"}
+	} else if quote.searchBilling {
+		budgetMetadata = map[string]any{"state": "soft", "billing_scope": "tokens_and_search", "tool_costs": "search_metered", "guarantee": "soft"}
 	}
 
 	// LiteLLM stores response_cost or 0.0. Unknown models still get a row, with spend 0.

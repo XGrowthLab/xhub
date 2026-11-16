@@ -433,6 +433,11 @@ func costBreakdown(e iam.UsageEvent) map[string]any {
 		}
 		for _, rate := range snap.Applied {
 			amount := catalog.RoundMoney(rate.Quantity * rate.USD)
+			if rate.Measure == "query" && (rate.Variant == "search" || rate.SourceKey == "search_context_cost_per_query" || strings.HasPrefix(rate.SourceKey, "web_search_req")) {
+				// 搜索按次价不能计入输出 Token 小计，否则页面会展示不成立的 Token 乘法公式。
+				out["tool_usage_cost"] = catalog.RoundMoney(valueOrZero(out["tool_usage_cost"]) + amount)
+				continue
+			}
 			switch rate.Side {
 			case "input":
 				out["input_cost"] = catalog.RoundMoney(valueOrZero(out["input_cost"]) + amount)
@@ -480,7 +485,7 @@ func costBreakdown(e iam.UsageEvent) map[string]any {
 		// The sum of the sides is what the rates add up to. It can differ from
 		// total_cost above if a model was repriced mid-flight; keeping both lets
 		// the console show the discrepancy instead of hiding it.
-		out["original_cost"] = catalog.RoundMoney(valueOrZero(out["input_cost"]) + valueOrZero(out["output_cost"]))
+		out["original_cost"] = catalog.RoundMoney(valueOrZero(out["input_cost"]) + valueOrZero(out["output_cost"]) + valueOrZero(out["tool_usage_cost"]))
 		return out
 	}
 

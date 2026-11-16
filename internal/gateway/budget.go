@@ -23,8 +23,9 @@ var _ dpcontract.BudgetHost = (*Server)(nil)
 
 // budgetAttempt 保存本次出站冻结的计价源；软预算不创建持久预占或跟踪冻结状态。
 type budgetAttempt struct {
-	SoftPrice billing.SoftPricePlan
-	TokenOnly bool
+	SoftPrice     billing.SoftPricePlan
+	TokenOnly     bool
+	SearchBilling bool
 }
 
 // PrepareBudgetAttempt 为所有模型协议执行软预算准入，不再按输入窗口预占或改写输出上限。
@@ -78,7 +79,9 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		s.budgetCalls = map[string]*budgetAttempt{}
 	}
 	tokenOnly := billing.SoftTokenOnly(dep, protocol)
-	s.budgetCalls[callID] = &budgetAttempt{SoftPrice: billing.NewSoftPricePlan(dep, start, tokenOnly), TokenOnly: tokenOnly}
+	plan := billing.NewSoftPricePlan(dep, start, tokenOnly).WithSearchRequest(billing.WebSearchRequested(protocol, body))
+	searchBilling := tokenOnly && plan.IncludesSearch()
+	s.budgetCalls[callID] = &budgetAttempt{SoftPrice: plan, TokenOnly: tokenOnly, SearchBilling: searchBilling}
 	s.mu.Unlock()
 	w.Header().Set("X-XHub-Budget-State", "token_only")
 	w.Header().Set("X-XHub-Billing-Scope", "tokens_only")
@@ -88,6 +91,10 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		w.Header().Set("X-XHub-Budget-State", "soft")
 		w.Header().Set("X-XHub-Billing-Scope", "model_usage")
 		w.Header().Del("X-XHub-Tool-Costs")
+	} else if searchBilling {
+		w.Header().Set("X-XHub-Budget-State", "soft")
+		w.Header().Set("X-XHub-Billing-Scope", "tokens_and_search")
+		w.Header().Set("X-XHub-Tool-Costs", "search_metered")
 	}
 	if pending := deliveryBuffer(w); pending != nil && pending.preparedID == "" {
 		// 在实际调用上游前持久化零费用标记，避免供应商处理期间网关退出后没有恢复证据。
@@ -134,6 +141,15 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		pending.principal = &principal
 	}
 	return body, true
+}
+
+// searchBudget 读取冻结尝试是否计量搜索；callID 为请求标识，返回布尔值，不修改费用或额度。
+// 供账单摘要使用，与出站响应头使用同一冻结策略，访问共享状态时持锁。
+func (s *Server) searchBudget(callID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attempt := s.budgetCalls[callID]
+	return attempt != nil && attempt.SearchBilling
 }
 
 // MarkBudgetAttemptSubmitted 在实际发送前检查取消；参数为请求及兼容执行器的调用ID，返回是否继续。
@@ -207,6 +223,12 @@ func pricingFailureCode(err error) string {
 		return "cache_read_price_missing"
 	case "measured cache writes have no reserved price":
 		return "cache_write_price_missing"
+	case "measured search usage is missing":
+		return "search_usage_missing"
+	case "measured searches have no confirmed price":
+		return "search_price_missing"
+	case "search usage is invalid or inconsistent", "search usage container is invalid", "search usage is missing":
+		return "search_usage_invalid"
 	default:
 		return "pricing_unavailable"
 	}

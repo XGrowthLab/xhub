@@ -1,12 +1,12 @@
 # API key soft budgets
 
-All model requests use soft budgets, including normal conversations, tools and native passthrough. Existing image-generation, per-second and per-query model prices remain billable; only hosted tool calls within conversations are excluded. Before each upstream attempt, the gateway checks the available balance of applicable key, user, team, organization and project scopes. A nonpositive balance rejects new requests. Fixed allocations, model access and RPM/TPM limits still apply independently.
+All model requests use soft budgets, including normal conversations, tools and native passthrough. Existing image-generation, per-second and per-query model prices remain billable; reported hosted web searches are charged at the confirmed per-query rate; other hosted tool charges are excluded. Before each upstream attempt, the gateway checks the available balance of applicable key, user, team, organization and project scopes. A nonpositive balance rejects new requests. Fixed allocations, model access and RPM/TPM limits still apply independently.
 
 Requests admitted with a positive balance may finish and are charged for actual input, output and cache tokens. The budget layer no longer reserves the full context window or injects a 4096-token output cap. Prices are frozen at request start, including cache TTLs and pricing tiers. A single request or concurrent requests can overdraw the balance; subsequent requests are denied. A multi-turn CLI task is not one request.
 
-Client output limits and protocol requirements remain unchanged. Tool invocations are excluded from charges while raw usage remains in responses and logs. Missing or conflicting usage and incomplete prices are marked unpriced, never guessed. Billing storage failure retains pending records and can return 503 for new requests until recovered.
+Client output limits and protocol requirements remain unchanged. Reported web search counts are charged at the frozen search price; other hosted tool invocations remain excluded. Raw usage remains in responses and logs. Missing or conflicting usage and incomplete prices are marked unpriced, never guessed. Billing storage failure retains pending records and can return 503 for new requests until recovered.
 
-Headers: `X-XHub-Budget-State: token_only`, `X-XHub-Budget-Guarantee: soft`, `X-XHub-Billing-Scope: tokens_only`, `X-XHub-Tool-Costs: excluded`. No new hard reservation headers are generated.
+For token-only calls the headers are `X-XHub-Budget-State: token_only`, `X-XHub-Budget-Guarantee: soft`, `X-XHub-Billing-Scope: tokens_only`, `X-XHub-Tool-Costs: excluded`. Calls metering search instead use `X-XHub-Budget-State: soft`, `X-XHub-Billing-Scope: tokens_and_search` and `X-XHub-Tool-Costs: search_metered`. No new hard reservation headers are generated.
 
 ## Upgrade and legacy records
 

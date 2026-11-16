@@ -382,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self.path.endswith("/responses") or "max_tool_calls" in req or not any(t.get("type") == "web_search" for t in req.get("tools", [])):
                 self.send_error(400, "search fixture requires Responses, search and no injected tool cap")
                 return
-            result = {"id": "resp_budget_search", "object": "response", "status": "completed", "output": [{"id": "ws_budget_search", "type": "web_search_call", "status": "completed", "action": {"type": "search", "queries": ["Go programming language"]}}, {"id": "msg_budget_search", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "e2e-budget-search"}]}], "usage": {"input_tokens": 8, "output_tokens": 2}}
+            result = {"id": "resp_budget_search", "object": "response", "status": "completed", "output": [{"id": "ws_budget_search", "type": "web_search_call", "status": "completed", "action": {"type": "search", "queries": ["Go programming language"]}}, {"id": "msg_budget_search", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "e2e-budget-search"}]}], "usage": {"input_tokens": 8, "output_tokens": 2, "tool_usage": {"web_search": 1}, "tool_usage_details": {"web_search": {"search_engine": 1}}}}
             if req.get("stream"):
                 self._sse([{"type": "response.completed", "response": result}])
             else:

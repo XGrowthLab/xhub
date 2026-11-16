@@ -24,7 +24,7 @@ export function registerHardBudgetSearchScenario(locale: "zh-CN" | "en") {
       modelID = (await created.json()).model_info.id;
       await page.getByTestId("create-key-button").click();
       await page.getByLabel(tr("Key Name")).fill(name);
-      await page.getByLabel(tr("Max Budget (USD)"), { exact: true }).fill("0.00002");
+      await page.getByLabel(tr("Max Budget (USD)"), { exact: true }).fill("0.02002");
       const minted = page.waitForResponse(r => r.url().includes("/key/generate") && r.request().method() === "POST");
       await page.getByRole("button", { name: tr("pages.apiKeys.createSubmit"), exact: true }).click();
       const key = await (await minted).json(); keyID = key.token_id;
@@ -33,15 +33,15 @@ export function registerHardBudgetSearchScenario(locale: "zh-CN" | "en") {
         const response = await page.request.post(GATEWAY + "/v1/responses", { headers: { Authorization: "Bearer " + key.key }, data: { model: name, input: "Search for the official Go website.", tools: [{ type: "web_search" }], tool_choice: "required", max_output_tokens: 32, stream } });
         expect(response.status(), await response.text()).toBe(200);
         expect(await response.text()).toContain("web_search_call");
-        expect(response.headers()["x-xhub-budget-state"]).toBe("token_only");
+        expect(response.headers()["x-xhub-budget-state"]).toBe("soft");
         expect(response.headers()["x-xhub-budget-guarantee"]).toBe("soft");
-        expect(response.headers()["x-xhub-tool-costs"]).toBe("excluded");
+        expect(response.headers()["x-xhub-tool-costs"]).toBe("search_metered");
         expect(response.headers()["x-xhub-max-tool-calls"]).toBeUndefined();
         expect(response.headers()["x-xhub-dropped-capabilities"]).toBeUndefined();
       }
-      await expect.poll(async () => (await (await page.request.get(GATEWAY + "/key/info?key=" + keyID, { headers })).json()).info.spend).toBeCloseTo(0.000024, 8);
+      await expect.poll(async () => (await (await page.request.get(GATEWAY + "/key/info?key=" + keyID, { headers })).json()).info.spend).toBeCloseTo(0.020024, 8);
       await stableGoto(page, "/api-keys?key=" + keyID);
-      await expect(page.getByLabel(tr("Max Budget (USD)"), { exact: true })).toHaveValue("0.00002");
+      await expect(page.getByLabel(tr("Max Budget (USD)"), { exact: true })).toHaveValue("0.02002");
       const denied = await page.request.post(GATEWAY + "/v1/responses", { headers: { Authorization: "Bearer " + key.key }, data: { model: name, input: "Search again.", tools: [{ type: "web_search" }], max_output_tokens: 32 } });
       expect(denied.status()).toBe(403);
       expect((await denied.json()).error).toBeTruthy();
