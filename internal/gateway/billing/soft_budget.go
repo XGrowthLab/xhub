@@ -166,8 +166,8 @@ func (p SoftPricePlan) Charge(raw map[string]any) (catalog.Charge, error) {
 	return charge, err
 }
 
-// SoftTokenOnly 判断对话是否采用仅Token计费；参数为部署和出站协议，返回是否排除托管工具次数。
-// 图片/音视频接口及仅按秒、张、查询收费的部署保留已有计费维度，准入仍统一软预算，不把它们改成免费。
+// SoftTokenOnly 判断对话是否采用 Token 主计费路径；参数为部署和出站协议，返回是否使用该结算器。
+// 搜索另按实际次数及冻结单价计费；图片、音视频和仅按秒、张、查询计费的部署沿用其他计费路径。
 func SoftTokenOnly(dep config.ModelEntry, protocol string) bool {
 	switch protocol {
 	case "openai-chat", "openai-responses", "anthropic", "anthropic-messages", "gemini", "vertex":

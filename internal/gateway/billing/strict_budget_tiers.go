@@ -183,7 +183,7 @@ func budgetTierRange(raw any) ([2]int, error) {
 
 // budgetTierRates 严格转换单档details_v2为每Token USD费率；参数必须有明确单位大小和美元价格。
 // CNY展示价格不作为USD后备，缺失价格不能视为零；只允许已知文字、缓存、批处理与搜索报价键。
-// 请求层已拒绝服务器搜索/批处理，因此这两种独立维度不参与文字预占。
+// 硬预算请求层拒绝搜索/批处理预占；软预算可读取冻结的搜索单价，按实际用量结算。
 func budgetTierRates(raw any) ([]catalog.Rate, error) {
 	details, ok := raw.(map[string]any)
 	if !ok || len(details) == 0 {
