@@ -3,6 +3,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -330,6 +331,23 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
 					return
 				}
+				if emptyBypassDialogue(candidateHit.Transport.EndpointID, countOnly, response) {
+					// 上游已受理请求但没有正文，也没有可核实的用量；不能把它记成成功，
+					// 更不能自动重放这次可能已计费的请求，避免同一调用产生重复上游费用。
+					const message = "upstream returned an empty dialogue response"
+					if response.Diagnostics == nil {
+						response.Diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
+					}
+					response.Diagnostics.Failure = dpdiagnostics.ObserveFailure(r.Context(), "upstream_body", errors.New(message), time.Since(start))
+					response.Diagnostics.Failure.Kind = "empty_response"
+					h.RememberExchange(callID, r, raw, []byte(message))
+					note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
+					note.Upstream = response.Diagnostics
+					h.AnnotateCall(callID, note)
+					h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, map[string]any{"pricing_blocked": "upstream_usage_missing"}, start, false, http.StatusBadGateway, selectedID)
+					util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", "upstream request failed")
+					return
+				}
 				if status >= 500 || status == http.StatusTooManyRequests {
 					h.NoteFailure(router.CooldownID(rawDep), settings)
 					// 服务端可能在受理付费任务后才返回错误，不能因此创建第二个任务。
@@ -420,6 +438,21 @@ forwarded:
 	h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, usage, start, false, status, depID)
 	response.Body = respBody
 	dptransport.WriteThrough(w, response)
+}
+
+// emptyBypassDialogue 判断原生对话创建是否收到没有正文的成功响应。
+// endpoint 为登记入口，countOnly 标识只读计数，response 为已读取的出站结果；返回 true 时调用方须停止重放并报告上游错误。
+// 仅在非流式 2xx 对话创建后调用；已发送的 SSE、计数及其他异步/媒体接口保持原有契约，空白正文按空响应处理，无副作用。
+func emptyBypassDialogue(endpoint string, countOnly bool, response dptransport.ForwardResponse) bool {
+	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false
+	}
+	switch endpoint {
+	case "bypass:openai-chat", "bypass:openai-responses", "bypass:anthropic-messages":
+		return len(bytes.TrimSpace(response.Body)) == 0
+	default:
+		return false
+	}
 }
 
 // serveBypassFollow 查询、取消或读取已创建原生任务，始终回到创建该任务的部署。
