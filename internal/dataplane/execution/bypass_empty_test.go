@@ -60,8 +60,11 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "upstream request failed") || calls.Load() != 1 {
 				t.Fatalf("空响应必须报错且不得重放: status=%d calls=%d body=%s", rec.Code, calls.Load(), rec.Body.String())
 			}
-			if len(h.spend) != 1 || h.spend[0].usage["pricing_blocked"] != "upstream_usage_missing" {
+			if len(h.spend) != 1 || h.spend[0].status != 502 || h.spend[0].usage["pricing_blocked"] != "upstream_usage_missing" {
 				t.Fatalf("空响应缺少未计价事实: %+v", h.spend)
+			}
+			if len(h.failures) != 1 {
+				t.Fatalf("空响应应计入上游健康状态: failures=%v", h.failures)
 			}
 			found := false
 			for _, note := range h.notes {

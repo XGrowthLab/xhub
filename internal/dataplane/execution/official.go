@@ -158,11 +158,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	list, _ = dprouting.DropDisabled(list)
 	// 原生对话保留载荷，但不能绕过管理员明确禁用的搜索能力；筛选发生在调度、回退和上游调用前。
 	// 非对话入口不应用该策略，避免把媒体或任务正文中的同名字段当成搜索。
-	if !countOnly {
-		switch hit.Transport.EndpointID {
-		case "bypass:openai-chat", "bypass:openai-responses", "bypass:anthropic-messages":
-			list, _ = providerdeployment.Candidates(list, hit.Transport.EndpointID, nil, body)
-		}
+	if !countOnly && isBypassDialogueEndpoint(hit.Transport.EndpointID) {
+		list, _ = providerdeployment.Candidates(list, hit.Transport.EndpointID, nil, body)
 	}
 	state := h.RouteState()
 	state.Allocations = settings.Policy.Shares()
@@ -334,6 +331,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				if emptyBypassDialogue(candidateHit.Transport.EndpointID, countOnly, response) {
 					// 上游已受理请求但没有正文，也没有可核实的用量；不能把它记成成功，
 					// 更不能自动重放这次可能已计费的请求，避免同一调用产生重复上游费用。
+					// 连续无效响应仍需计入部署健康状态，以便后续独立请求遵循已有冷却策略。
+					h.NoteFailure(router.CooldownID(rawDep), settings)
 					const message = "upstream returned an empty dialogue response"
 					if response.Diagnostics == nil {
 						response.Diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
@@ -442,14 +441,21 @@ forwarded:
 
 // emptyBypassDialogue 判断原生对话创建是否收到没有正文的成功响应。
 // endpoint 为登记入口，countOnly 标识只读计数，response 为已读取的出站结果；返回 true 时调用方须停止重放并报告上游错误。
-// 仅在非流式 2xx 对话创建后调用；已发送的 SSE、计数及其他异步/媒体接口保持原有契约，空白正文按空响应处理，无副作用。
+// 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，空白正文按空响应处理，无副作用。
 func emptyBypassDialogue(endpoint string, countOnly bool, response dptransport.ForwardResponse) bool {
-	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 {
+	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 || !isBypassDialogueEndpoint(endpoint) {
 		return false
 	}
+	return len(bytes.TrimSpace(response.Body)) == 0
+}
+
+// isBypassDialogueEndpoint 判断入口是否为本次验证的三种原生对话协议。
+// endpoint 为注册端点标识；返回是否适用对话策略，供搜索过滤和空响应判断复用，无副作用。
+// Gemini、Vertex 和媒体协议沿用原有处理，避免未验证协议的行为被意外更改。
+func isBypassDialogueEndpoint(endpoint string) bool {
 	switch endpoint {
 	case "bypass:openai-chat", "bypass:openai-responses", "bypass:anthropic-messages":
-		return len(bytes.TrimSpace(response.Body)) == 0
+		return true
 	default:
 		return false
 	}

@@ -35,6 +35,8 @@ test("empty native response fails without replay and leaves confirmed billing in
     expect(result.failed.body).toContain("upstream_error");
     expect(result.recovered.status, result.recovered.body).toBe(200);
     expect(result.recovered.body).toContain("Recovered");
+    expect(result.failed.id).toBeTruthy();
+    expect(result.recovered.id).toBeTruthy();
     expect(await count() - before).toBe(2);
     const detail = async (id: string | null) => {
       expect(id).toBeTruthy();
@@ -42,13 +44,16 @@ test("empty native response fails without replay and leaves confirmed billing in
       return response.ok() ? await response.json() : null;
     };
     await expect.poll(async () => (await detail(result.failed.id))?.status).toBe("error");
+    await expect.poll(async () => Number((await detail(result.failed.id))?.spend)).toBe(0);
     await expect.poll(async () => Number((await detail(result.recovered.id))?.spend)).toBeCloseTo(0.000012, 10);
     await stableGoto(page, "/logs?log_id=" + result.failed.id);
     await expect(page.getByRole("dialog")).toContainText("502");
+    await expect(page.getByRole("dialog")).toContainText("HTTP 状态码");
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "English", exact: true }).click();
     await stableGoto(page, "/logs?log_id=" + result.failed.id);
     await expect(page.getByRole("dialog")).toContainText("502");
+    await expect(page.getByRole("dialog")).toContainText("HTTP Status");
   } finally {
     if (token) expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [token] } })).status()).toBe(200);
     if (deployment) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: deployment } })).status()).toBe(200);

@@ -318,8 +318,8 @@ class Handler(BaseHTTPRequestHandler):
             Handler.market_new_model = req.get("model") or "e2e-market-new-model"
             self._json({"ok": True})
             return
-        if req.get("model") == "e2e-empty-messages":
-            # 模拟真实供应商偶发空 200；只有用户主动发送恢复消息才返回带用量的合法响应。
+        if req.get("model") == "e2e-empty-messages" and self.path.split("?")[0] == "/v1/messages":
+            # 包含触发文本时返回空 200；其他消息返回带用量的合法响应。
             if any(m.get("content") == "Trigger empty response." for m in req.get("messages", [])):
                 self._response(200, b"", "application/json")
             else:

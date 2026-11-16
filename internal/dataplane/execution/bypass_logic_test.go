@@ -214,6 +214,8 @@ type spendNote struct {
 	op, depID, callID string
 	// 执行器提交的用量映射引用，夹具不计算金额。
 	usage map[string]any
+	// 提交的状态码用于验证失败不被记录为成功。
+	status int
 }
 
 // logicHost 是原生执行测试的内存宿主，提供固定身份、显式部署、路由快照及任务归属。
@@ -340,10 +342,10 @@ func (h *logicHost) NoteLatency(string, float64) {}
 func (h *logicHost) SetChatHeaders(http.ResponseWriter, *auth.Principal, string, string) {}
 
 // RecordSpend 是 logicHost 的测试接口实现。
-// 将 op、depID、callID 和 usage 追加到 spend，其他参数忽略；无返回，不扣费，usage 保留原映射引用，不可并发写。
+// 将 op、depID、callID、usage 和状态码追加到 spend；无返回，不扣费，usage 保留原映射引用，不可并发写。
 // 调用方为本文件或同包的执行测试；仅模拟所述边界，不能据此推断生产宿主的行为。
-func (h *logicHost) RecordSpend(_ http.ResponseWriter, _ *auth.Principal, callID, _, op string, usage map[string]any, _ time.Time, _ bool, _ int, depID string) {
-	h.spend = append(h.spend, spendNote{op: op, depID: depID, callID: callID, usage: usage})
+func (h *logicHost) RecordSpend(_ http.ResponseWriter, _ *auth.Principal, callID, _, op string, usage map[string]any, _ time.Time, _ bool, status int, depID string) {
+	h.spend = append(h.spend, spendNote{op: op, depID: depID, callID: callID, usage: usage, status: status})
 }
 
 // RememberExchange 是 logicHost 的测试接口实现。
