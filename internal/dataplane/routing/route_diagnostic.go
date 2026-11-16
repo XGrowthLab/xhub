@@ -32,11 +32,11 @@ type routeDiagnosis struct {
 }
 
 // DiagnoseRoute 只读分析候选消失在哪个路由阶段，供执行失败日志与错误响应使用。
-// 参数 directory 为完整目录，eligible 为能力候选；alias、endpoint 指定请求模型与入口；settings、state 是当前模板与运行快照；dialogue 为可选对话需求；adapted 区分适配与原生检查。
+// 参数 directory 为完整目录，eligible 为能力候选；alias、endpoint 指定请求模型与入口；settings、state 是当前模板与运行快照；dialogue 为可选对话需求；adapted 区分适配与原生检查；nativeBody 是可选原生正文。
 // 返回 routeDiagnosis，含模型/组匹配、停用、能力、权重、冷却等统计与最终失败原因。
 // 执行器没有候选时调用；复制必要目录元数据以匹配停用模型，不能改变真实目录或让诊断本身推进随机/轮询调度。
 // 只观察配置与状态，不发送探测、不扣费、不修复旧权重；管理员应根据诊断修正模板或部署。
-func DiagnoseRoute(directory, eligible []config.ModelEntry, alias, endpoint string, settings router.RouteSettings, state router.State, dialogue *llmdialogue.Dialogue, adapted bool) routeDiagnosis {
+func DiagnoseRoute(directory, eligible []config.ModelEntry, alias, endpoint string, settings router.RouteSettings, state router.State, dialogue *llmdialogue.Dialogue, adapted bool, nativeBody ...map[string]any) routeDiagnosis {
 	d := routeDiagnosis{loaded: len(directory), endpoint: endpoint, state: state}
 	active, _ := DropDisabled(directory)
 	matched := settings.Candidates(active, alias)
@@ -44,7 +44,7 @@ func DiagnoseRoute(directory, eligible []config.ModelEntry, alias, endpoint stri
 	if !adapted {
 		dialogue = nil
 	}
-	_, d.decisions = providerdeployment.Candidates(matched, endpoint, dialogue)
+	_, d.decisions = providerdeployment.Candidates(matched, endpoint, dialogue, nativeBody...)
 	// 单独匹配暂停目录，避免全局暂停计数把其他公开模型误判为已禁用；复制元数据不修改共享配置。
 	var paused []config.ModelEntry
 	for _, dep := range directory {

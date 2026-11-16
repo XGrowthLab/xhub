@@ -7,30 +7,17 @@ import (
 	"strings"
 
 	"github.com/sunqirui1987/xhub/internal/catalog"
+	llmdialogue "github.com/sunqirui1987/xhub/internal/llm/dialogue"
 )
 
 // WebSearchRequested 检查实际出站 JSON 是否声明已知的联网搜索能力；protocol 为出站协议，body 为原始正文。
 // 软预算冻结时调用；不修改请求、不执行搜索，也不把普通客户端函数或历史调用计为新的服务器搜索。
 func WebSearchRequested(protocol string, body []byte) bool {
-	if protocol != "openai-responses" && protocol != "openai-chat" && protocol != "anthropic-messages" {
-		return false
-	}
 	var obj map[string]any
 	if json.Unmarshal(body, &obj) != nil {
 		return false
 	}
-	if protocol == "openai-chat" && obj["web_search_options"] != nil {
-		return true
-	}
-	tools, _ := obj["tools"].([]any)
-	for _, item := range tools {
-		tool, _ := item.(map[string]any)
-		kind, _ := tool["type"].(string)
-		if isSearchTool(kind) || kind == "web_search_20250305" || kind == "web_search_20260209" {
-			return true
-		}
-	}
-	return false
+	return llmdialogue.NativeWebSearchRequested(protocol, obj)
 }
 
 // SearchUsage 读取供应商明确报告的搜索总次数；raw 为原始实测 usage，返回次数、是否报告和冲突错误。

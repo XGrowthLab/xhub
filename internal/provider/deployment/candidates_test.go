@@ -62,3 +62,34 @@ func TestDialogueBindingsUseEndpointDirectory(t *testing.T) {
 		t.Fatal("不同原生协议不能互通")
 	}
 }
+
+// TestNativeCandidatesHonorSearchPolicy 验证透传仅在部署明确禁用搜索且本次请求声明搜索时剔除候选。
+// 使用纯内存部署，覆盖三种原生协议、普通函数、历史搜索和可用备选部署，无需清理外部资源。
+func TestNativeCandidatesHonorSearchPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint, transport string
+		search, ordinary    map[string]any
+	}{
+		{"bypass:openai-responses", "bypass_openai_responses", map[string]any{"input": []any{map[string]any{"type": "additional_tools", "tools": []any{map[string]any{"type": "web_search"}}}}}, map[string]any{"input": []any{map[string]any{"type": "web_search_call"}}}},
+		{"bypass:openai-chat", "bypass_openai_chat", map[string]any{"web_search_options": map[string]any{}}, map[string]any{"tools": []any{map[string]any{"type": "function", "function": map[string]any{"name": "web_search"}}}}},
+		{"bypass:anthropic-messages", "bypass_anthropic_messages", map[string]any{"tools": []any{map[string]any{"type": "web_search_20250305"}}}, map[string]any{"tools": []any{map[string]any{"type": "function", "name": "web_search"}}}},
+	} {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			disabled := config.ModelEntry{ModelName: "shared", LiteLLMParams: map[string]any{"model": "real"}, ModelInfo: map[string]any{"transport": tc.transport, "endpoint_types": []string{tc.endpoint}, "web_search_support": "unsupported"}}
+			enabled := config.CloneModels([]config.ModelEntry{disabled})[0]
+			enabled.ModelInfo["web_search_support"] = "inherit"
+			pool, decisions := providerdeployment.Candidates([]config.ModelEntry{disabled}, tc.endpoint, nil, tc.search)
+			if len(pool) != 0 || len(decisions) != 1 || !decisions[0].SearchUnsupported {
+				t.Fatalf("禁用搜索未拒绝原生搜索: %+v", decisions)
+			}
+			pool, _ = providerdeployment.Candidates([]config.ModelEntry{disabled}, tc.endpoint, nil, tc.ordinary)
+			if len(pool) != 1 {
+				t.Fatal("普通工具或历史不能被误拒绝")
+			}
+			pool, _ = providerdeployment.Candidates([]config.ModelEntry{disabled, enabled}, tc.endpoint, nil, tc.search)
+			if len(pool) != 1 || pool[0].ModelInfo["web_search_support"] != "inherit" {
+				t.Fatal("未保留支持搜索的备选部署")
+			}
+		})
+	}
+}

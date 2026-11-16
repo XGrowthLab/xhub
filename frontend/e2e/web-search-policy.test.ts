@@ -49,6 +49,23 @@ for (const locale of ["zh-CN", "en"] as const) {
       await expect(page.getByLabel(tr("providerGuideUI.searchSupport"))).toHaveValue("unsupported");
       await expect(page.getByLabel(tr("providerGuideUI.searchFallback"))).toHaveValue("drop_optional");
       await page.getByRole("button", { name: tr("providerGuideUI.cancel"), exact: true }).click();
+      // 透传不能绕过模型的搜索设置，也不能把普通同名函数误判为托管搜索。
+      const native = await page.evaluate(async ({ bearer, name }) => {
+        const post = async (extra: object) => {
+          const response = await fetch("/gw/bypass/openai/v1/chat/completions", {
+            method: "POST", headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json" },
+            body: JSON.stringify({ model: name, messages: [{ role: "user", content: "Hello" }], ...extra }),
+          });
+          return { status: response.status, raw: await response.text() };
+        };
+        return {
+          blocked: await post({ web_search_options: {} }),
+          ordinary: await post({ tools: [{ type: "function", function: { name: "web_search", parameters: { type: "object", properties: {} } } }] }),
+        };
+      }, { bearer, name });
+      expect(native.blocked.status, native.blocked.raw).toBe(400);
+      expect(native.blocked.raw).toContain("unsupported_capability");
+      expect(native.ordinary.status, native.ordinary.raw).toBe(200);
       let lastCall = "";
       for (const stream of [false, true]) {
         const result = await call(stream);

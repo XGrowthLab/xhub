@@ -16,6 +16,8 @@ func TestWebSearchRequested(t *testing.T) {
 		want          bool
 	}{
 		{"openai-responses", `{"tools":[{"type":"web_search"}]}`, true},
+		{"openai-responses", `{"input":[{"type":"additional_tools","tools":[{"type":"web_search_preview"}]}]}`, true},
+		{"openai-responses", `{"tool_choice":{"type":"web_search"}}`, true},
 		{"openai-chat", `{"web_search_options":{}}`, true},
 		{"anthropic-messages", `{"tools":[{"type":"web_search_20250305"}]}`, true},
 		{"openai-responses", `{"tools":[{"type":"function","name":"web_search"}]}`, false},

@@ -88,6 +88,11 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	countOnly := hit.Action.Name == "count_tokens"
 	// 复用入口已验证的载体，避免再次解码 JSON 或复制 multipart 文件；候选改写不修改原载体。
 	body, raw := requestBody.Fields, requestBody.Raw
+	policyBody := body
+	if countOnly {
+		// 只读 token 计数不会执行搜索，不受生成请求的搜索限制。
+		policyBody = nil
+	}
 	// 固定路径别名解析和候选过滤共用目录；凭据仍在候选尝试时读取。
 	directory := h.Models()
 	field := hit.Transport.ModelField
@@ -150,6 +155,14 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	}
 	list := eligible(directory, hit)
 	list, _ = dprouting.DropDisabled(list)
+	// 原生对话保留载荷，但不能绕过管理员明确禁用的搜索能力；筛选发生在调度、回退和上游调用前。
+	// 非对话入口不应用该策略，避免把媒体或任务正文中的同名字段当成搜索。
+	if !countOnly {
+		switch hit.Transport.EndpointID {
+		case "bypass:openai-chat", "bypass:openai-responses", "bypass:anthropic-messages":
+			list, _ = providerdeployment.Candidates(list, hit.Transport.EndpointID, nil, body)
+		}
+	}
 	state := h.RouteState()
 	state.Allocations = settings.Policy.Shares()
 	runtimePin := dprouting.RuntimePin(list, plan.Pinned)
@@ -164,7 +177,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	}
 	pool, settings = fallbacks.SelectAffinity(&plan, pool, alias, list, state, settings)
 	if plan.Required && len(pool) == 0 {
-		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.ID, settings, state, nil, false)
+		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.EndpointID, settings, state, nil, false, policyBody)
 		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(settings, plan.Target.DeploymentID)})
 		util.WriteTypedError(w, r.URL.Path, 409, "unavailable", "response deployment unavailable")
 		return
@@ -174,8 +187,12 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if len(pool) == 0 {
-		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.ID, settings, state, nil, false)
+		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.EndpointID, settings, state, nil, false, policyBody)
 		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(settings, "")})
+		if status, code, message := diagnosis.Failure(alias); code == "unsupported_capability" {
+			util.WriteTypedError(w, r.URL.Path, status, code, message)
+			return
+		}
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "model not found: "+alias)
 		return
 	}
