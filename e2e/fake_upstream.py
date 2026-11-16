@@ -318,6 +318,13 @@ class Handler(BaseHTTPRequestHandler):
             Handler.market_new_model = req.get("model") or "e2e-market-new-model"
             self._json({"ok": True})
             return
+        if req.get("model") == "e2e-empty-messages" and self.path.split("?")[0] == "/v1/messages":
+            # 包含触发文本时返回空 200；其他消息返回带用量的合法响应。
+            if any(m.get("content") == "Trigger empty response." for m in req.get("messages", [])):
+                self._response(200, b"", "application/json")
+            else:
+                self._json({"id": "msg_recovered", "type": "message", "role": "assistant", "model": "e2e-empty-messages", "content": [{"type": "text", "text": "Recovered"}], "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 2}})
+            return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":
             valid = req.get("model") == "count-upstream" and isinstance(req.get("messages"), list) and self.headers.get("x-api-key") == "sk-fake"
