@@ -15,6 +15,7 @@ for (const locale of ["zh-CN", "en"] as const) {
     const name = "e2e-search-policy-" + locale;
     const credential = name + "-connection";
     let id = "";
+    const extraIDs: string[] = [];
     expect((await page.request.post(GATEWAY + "/credentials", { headers, data: { credential_name: credential, credential_info: { custom_llm_provider: "openai" }, credential_values: { api_base: UPSTREAM + "/v1", api_key: "sk-fake" } } })).status()).toBe(200);
     /** 从真实浏览器经同源代理调用 Responses，返回状态、正文及降级/账单头；参数 stream/choice 指定协议模式与工具选择，无其他副作用。 */
     const call = async (stream: boolean, choice: unknown = "auto") => page.evaluate(async ({ bearer, name, stream, choice }) => {
@@ -22,7 +23,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       return { status: response.status, raw: await response.text(), dropped: response.headers.get("x-xhub-dropped-capabilities"), callID: response.headers.get("x-litellm-call-id") };
     }, { bearer, name, stream, choice });
     try {
-      const created = await page.request.post(GATEWAY + "/model/new", { headers, data: { model_name: name, litellm_params: { model: "fake-model", custom_llm_provider: "openai", litellm_credential_name: credential, input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 }, model_info: { transport: "bypass_openai_chat", endpoint_types: ["responses"], pricing_source: "manual" } } });
+      const created = await page.request.post(GATEWAY + "/model/new", { headers, data: { model_name: name, litellm_params: { model: "fake-model", custom_llm_provider: "openai", litellm_credential_name: credential, input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 }, model_info: { transport: "bypass_openai_chat", endpoint_types: ["responses"], pricing_source: "manual", base_model: "deepseek/deepseek-v4.1-flash", supports_vision: false } } });
       expect(created.status(), await created.text()).toBe(200);
       id = (await created.json()).model_info.id;
       await stableGoto(page, "/models-and-endpoints?model=" + id);
@@ -66,6 +67,34 @@ for (const locale of ["zh-CN", "en"] as const) {
       expect(native.blocked.status, native.blocked.raw).toBe(400);
       expect(native.blocked.raw).toContain("unsupported_capability");
       expect(native.ordinary.status, native.ordinary.raw).toBe(200);
+      // 市场目录支持视觉不代表此连接已测通；公开列表与模型卡片均应尊重部署显式关闭。
+      const available = await page.request.get(GATEWAY + "/model/available", { headers });
+      expect(available.ok()).toBeTruthy();
+      const visible = (await available.json()).data.find((model: { id: string }) => model.id === name);
+      expect(visible?.capabilities).not.toContain("vision");
+      await stableGoto(page, "/mine-models");
+      const card = page.getByTestId("my-model-" + name);
+      await expect(card).toBeVisible();
+      await expect(card.getByText(tr("priceCatalog.vision"), { exact: true })).toHaveCount(0);
+      // 同名模型若会路由到未验证图片能力的连接，模型卡不能按首个连接作出整体支持承诺。
+      const mixed = name + "-mixed";
+      for (const supportsVision of [true, false]) {
+        const createdMixed = await page.request.post(GATEWAY + "/model/new", { headers, data: {
+          model_name: mixed,
+          litellm_params: { model: "fake-model", custom_llm_provider: "openai", litellm_credential_name: credential, input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 },
+          model_info: { transport: "bypass_openai_chat", endpoint_types: ["chat"], pricing_source: "manual", base_model: "deepseek/deepseek-v4.1-flash", supports_vision: supportsVision },
+        } });
+        expect(createdMixed.status(), await createdMixed.text()).toBe(200);
+        extraIDs.push((await createdMixed.json()).model_info.id);
+      }
+      const mixedList = await page.request.get(GATEWAY + "/model/available", { headers });
+      const mixedCard = (await mixedList.json()).data.find((model: { id: string }) => model.id === mixed);
+      expect(mixedCard?.capabilities).not.toContain("vision");
+      await page.reload();
+      await expect(page.getByTestId("my-model-" + mixed)).toBeVisible();
+      await expect(page.getByTestId("my-model-" + mixed).getByText(tr("priceCatalog.vision"), { exact: true })).toHaveCount(0);
+      const mixedCall = await page.request.post(GATEWAY + "/v1/chat/completions", { headers, data: { model: mixed, messages: [{ role: "user", content: "Hello" }] } });
+      expect(mixedCall.status(), await mixedCall.text()).toBe(200);
       let lastCall = "";
       for (const stream of [false, true]) {
         const result = await call(stream);
@@ -90,6 +119,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       await page.getByRole("row").filter({ hasText: lastCall }).click();
       await expect(page.getByRole("dialog").getByRole("status")).toHaveText(tr("providerGuideUI.searchDropped").replace("{capabilities}", "web_search"));
     } finally {
+      for (const extraID of extraIDs) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: extraID } })).status()).toBe(200);
       if (id) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
       expect((await page.request.delete(GATEWAY + "/credentials/" + credential, { headers })).status()).toBe(200);
     }
