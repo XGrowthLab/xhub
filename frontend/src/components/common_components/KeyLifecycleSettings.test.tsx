@@ -57,9 +57,11 @@ describe("KeyLifecycleSettings", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the expiry and auto-rotation sections", () => {
+  /** 创建模式只显示一个期限标签并保留轮换说明；组件测试不写数据，DOM 自动清理。 */
+  it("renders one expiry label and the rotation notice", () => {
     renderWithProviders(<Harness />);
-    expect(screen.getByText("Key Expiry Settings")).toBeInTheDocument();
+    expect(screen.queryByText("Key Expiry Settings")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Expire Key")).toHaveLength(1);
     expect(screen.getByText(/Automatic rotation is not supported/)).toBeInTheDocument();
     expect(getDurationInput()).toBeInTheDocument();
   });

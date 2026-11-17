@@ -22,8 +22,8 @@ const Sidebar = React.forwardRef<HTMLElement, React.ComponentPropsWithoutRef<"as
         data-slot="sidebar"
         data-collapsed={collapsed}
         className={cn(
-          "group/sidebar flex h-full flex-none flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-in-out",
-          collapsed ? "w-[72px]" : "w-[280px]",
+          "group/sidebar flex h-full flex-none flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-in-out motion-reduce:transition-none",
+          collapsed ? "w-[64px]" : "w-[224px]",
           className,
         )}
         {...props}
@@ -139,7 +139,7 @@ SidebarMenuBadge.displayName = "SidebarMenuBadge";
 
 const sidebarMenuButtonVariants = cva(
   [
-    "group/menu-btn relative flex w-full items-center gap-2.5 overflow-hidden rounded-sm px-3 text-left text-sm font-medium no-underline",
+    "group/menu-btn relative flex w-full items-center gap-2.5 overflow-hidden rounded-lg px-3 text-left text-sm font-medium no-underline",
     "text-sidebar-foreground outline-none transition-colors",
     "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
     "focus-visible:ring-2 focus-visible:ring-sidebar-ring",

@@ -9,6 +9,16 @@ const addonOf = (container: HTMLElement) =>
   container.querySelector<HTMLElement>("[data-slot=input-group-addon]") as HTMLElement;
 
 describe("ChatComposer", () => {
+  /** 示例按钮只回填英文提示词，用户中文原文保持不变；禁用提交仍生效，DOM 自动清理。 */
+  it("keeps original input while selecting an English example", () => {
+    const onChange = vi.fn(), onSuggestionSelect = vi.fn(), onSubmit = vi.fn();
+    renderComposer({ value: "用户自己的内容", suggestions: ["Write me a poem"], showSuggestions: true, onChange, onSuggestionSelect, onSubmit, submitDisabled: true });
+    expect(screen.getByRole("textbox")).toHaveValue("用户自己的内容");
+    fireEvent.click(screen.getByRole("button", { name: "Write me a poem" }));
+    expect(onSuggestionSelect).toHaveBeenCalledWith("Write me a poem");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
   it("should submit on Enter", () => {
     const onSubmit = vi.fn();
     renderComposer({ onSubmit });

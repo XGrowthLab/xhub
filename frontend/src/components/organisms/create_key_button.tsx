@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
+import { HelpDisclosure } from "@/components/console/ConsolePrimitives";
 import { Info } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -125,7 +126,6 @@ export const fetchUserModels = async (
  * 参数包含团队上下文、已有密钥、新增回调及预填配置；返回创建表单和一次性密钥展示。
  * 读取个人预算快照，空金额共享；显式团队上下文保留模型/额度校验，失败保留后台错误分类。
  * 成功刷新列表，关闭重置表单；明文不持久化到浏览器。 */
-/** 创建Key弹窗；参数提供团队、已有数据与成功回调，沿既有权限/预算流程提交并一次性显示明文；失败展示错误，关闭清理表单状态。 */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOpenCreate, prefillData }) => {
   const t = useT();
   const { accessToken, userId: userID, userRole } = useAuthorized();
@@ -427,7 +427,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 <div className="mb-8 space-y-6">
                   <div>
                     <h3 className="mb-4 text-lg font-medium text-foreground">{t("Budget and Routing")}</h3>
-                    <p className="mb-4 text-sm text-muted-foreground">{t("hardBudget.contract")}</p>
                     <PersonalBudgetSummary />
                     <div className="grid gap-5 rounded-lg border p-4 sm:grid-cols-2">
                       <MountedFormField
@@ -444,7 +443,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           </span>
                         }
                         name="max_budget"
-                        help={t("quotaGuide.key")}
                         rules={ceilingRule(selectedCreateKeyTeam?.max_budget, (limit) => t("Budget cannot exceed team max budget: ${value0}", { value0: limit }))}
                       >
                         {(control) => (
@@ -458,7 +456,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         )}
                       </MountedFormField>
 
-                      <p className="text-sm text-muted-foreground sm:col-span-2">{t("quotaGuide.rates")}</p>
+                      <div className="sm:col-span-2"><HelpDisclosure title={t("consoleUi.budgetHelp")}><p>{t("quotaGuide.key")}</p><p>{t("quotaGuide.rates")}</p><p>{t("hardBudget.contract")}</p></HelpDisclosure></div>
                       {(["rpm_limit", "tpm_limit"] as const).map((name) => (
                         <MountedFormField key={name} name={name} label={t(name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)")}
                           rules={{ validate: (value) => isBlank(value) || (Number.isInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 2147483647) || t("Must be a non-negative whole number") }}>

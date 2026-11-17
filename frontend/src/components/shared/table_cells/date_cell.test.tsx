@@ -1,5 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render as rawRender, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
+import { setActiveLocale } from "@/i18n/runtime";
+beforeEach(() => { setActiveLocale("en"); localStorage.removeItem(LOCALE_COOKIE); document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`; });
+/** 提供真实语言上下文，避免无 Provider 回退语言影响时间；返回渲染结果供重渲染验证。 */
+const render: typeof rawRender = (ui, options) => rawRender(ui, { wrapper: ({children}) => <I18nProvider initialLocale="en">{children}</I18nProvider>, ...options });
 
 import { DateCell, formatCellDate, formatFullTimestamp } from "./date_cell";
 
@@ -54,4 +60,13 @@ describe("DateCell", () => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
     expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
   });
+});
+
+/** 中英文日期与完整时间使用当前语言，非法时间不伪造有效日期；没有外部数据，DOM 自动清理。 */
+it("localizes dates and preserves the original timestamp", () => {
+  setActiveLocale("zh-CN");
+  rawRender(<I18nProvider initialLocale="zh-CN"><DateCell value={localIso} precision="date" /></I18nProvider>);
+  const date = screen.getByText("2026年7月7日");
+  expect(date.closest("time")).toHaveAttribute("dateTime", localIso);
+  expect(formatCellDate(new Date("invalid"), "date", "zh-CN")).toBe("—");
 });

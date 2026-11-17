@@ -14,6 +14,7 @@ import { UserBanner } from "@/components/UserBanner";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
+import { DashboardPageTransition } from "@/components/console/DashboardPageTransition";
 import { useT } from "@/i18n";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
@@ -97,13 +98,14 @@ export function AgentControlPlaneView() {
   );
 }
 
+/** 渲染网关工作区；children 为路由内容，窄屏自动折叠导航，保持已有权限与插件边界。 */
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const t = useT();
   const { accessToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
   useEffect(() => {
-    const narrow = window.matchMedia("(max-width: 767px)");
+    const narrow = window.matchMedia("(max-width: 1023px)");
     const update = () => setSidebarCollapsed(narrow.matches);
     update();
     narrow.addEventListener("change", update);
@@ -141,8 +143,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <NoRedisWarningBanner accessToken={accessToken} />
         <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
-        <main data-testid="admin-content" className="min-w-0 flex-1 overflow-y-auto bg-canvas p-3 sm:p-6">
-          {children}
+        <main data-testid="admin-content" className="min-w-0 flex-1 overflow-y-auto bg-canvas p-4 lg:p-6">
+          <DashboardPageTransition>{children}</DashboardPageTransition>
         </main>
       </div>
     </div>

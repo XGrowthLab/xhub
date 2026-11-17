@@ -194,7 +194,8 @@ const findParentKey = (route: string): string | null => {
   return null;
 };
 
-const findMenuItemKey = (route: string): string => {
+/** 按实际路由定位导航项；消息中心等菜单外页面返回空，避免错误高亮首页。 */
+const findMenuItemKey = (route: string): string | null => {
   for (const group of menuGroups) {
     for (const item of group.items) {
       if (routeOf(item) === route) return item.key;
@@ -202,7 +203,7 @@ const findMenuItemKey = (route: string): string => {
       if (child) return child.key;
     }
   }
-  return HOME_ROUTE;
+  return null;
 };
 
 const prettify = (key: string): string =>
@@ -346,6 +347,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
         href={uiHref(routeOf(item))}
         title={collapsed ? labelText(item, t) : undefined}
         data-active={active || undefined}
+        aria-current={active ? "page" : undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
         {item.icon}
@@ -394,7 +396,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const darkLogoSrc = reachableDarkLogo || logoUrl;
 
   return (
-    <Sidebar collapsed={collapsed} className="border-r-0 shadow-[2px_0_8px_rgba(0,0,0,0.15)]">
+    <Sidebar collapsed={collapsed} className="border-sidebar-border">
       <SidebarHeader className="h-16 justify-center border-b border-sidebar-border bg-sidebar px-4 group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">

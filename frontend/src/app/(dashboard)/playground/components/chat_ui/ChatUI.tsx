@@ -122,6 +122,7 @@ const NO_VECTOR_STORES: string[] = [];
 /** ChatUI 提供模型调试工作区；参数为会话、权限及可选固定模型，返回 React 界面。
  * 先选择模型与端点，连接和标签配置按需展开；原生任务交给独立面板执行。
  * 调用：Playground 与 Agent Builder；切换端点保持原有能力校验和请求清理行为。 */
+/** 调试台保留现有端点、会话和发送行为；统一设置区宽度，示例提示词固定英文，用户输入原样传递。 */
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
   token,
@@ -1269,11 +1270,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         : !inputMessage.trim());
 
   return (
-    <div className={`min-h-0 min-w-0 bg-card ${simplified ? "flex h-full w-full flex-col" : "h-full w-full p-3"}`}>
+    <div className={`min-h-0 min-w-0 bg-card ${simplified ? "flex h-full w-full flex-col" : "h-full w-full"}`}>
       <div className="flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-xl bg-card ring-1 ring-border">
         <div className="flex h-full min-h-0 min-w-0 w-full flex-col lg:flex-row">
           {!simplified && (
-            <div className="max-h-[42%] w-full shrink-0 overflow-y-auto border-b border-border bg-sidebar p-4 lg:max-h-none lg:w-64 lg:border-r lg:border-b-0 xl:w-72">
+            <div className="max-h-[42%] w-full shrink-0 overflow-y-auto border-b border-border bg-sidebar p-4 lg:max-h-none lg:w-[300px] lg:border-r lg:border-b-0 xl:w-[320px]">
               <h2 className="mb-4 text-sm font-semibold">{t("myModels.modelsAndEndpoints")}</h2>
               <div className="space-y-4">
                 {endpointType !== EndpointType.A2A_AGENTS && endpointType !== EndpointType.MCP && (
@@ -1680,7 +1681,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
                               <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
                             </div>
-                            <strong className="text-sm capitalize">{t("Assistant")}</strong>
+                            <strong className="text-sm">{t("consoleUi.roles.assistant")}</strong>
                           </div>
                           <MCPEventsDisplay events={mcpEvents} />
                         </div>
@@ -1896,14 +1897,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     suggestions={
                       endpointType === EndpointType.A2A_AGENTS
                         ? [
-                            t("What can you help me with?"),
-                            t("Tell me about yourself"),
-                            t("What tasks can you perform?"),
+                            t("consoleUi.examples.help"),
+                            t("consoleUi.examples.about"),
+                            t("consoleUi.examples.tasks"),
                           ]
                         : [
-                            t("Write me a poem"),
-                            t("Explain quantum computing"),
-                            t("Draft a polite email requesting a meeting"),
+                            t("consoleUi.examples.poem"),
+                            t("consoleUi.examples.quantum"),
+                            t("consoleUi.examples.email"),
                           ]
                     }
                     onSuggestionSelect={setInputMessage}

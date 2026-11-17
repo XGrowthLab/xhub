@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
@@ -8,6 +8,7 @@ import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from 
  * 使用真实推理、持久化与扫描验证提醒、跨账号隔离和已读，结束删除资源，外层回收 schema。 */
 export function registerNotificationsScenario(locale: "en" | "zh-CN") {
   test("personal budget notifications are private " + locale, async ({ page }) => {
+    test.setTimeout(120_000);
     await loginAdmin(page);
     const admin = { Authorization: "Bearer " + await sessionBearer(page) };
     const suffix = Date.now() + "-" + locale;
@@ -52,6 +53,17 @@ export function registerNotificationsScenario(locale: "en" | "zh-CN") {
       const tr = (key: string) => translate(locale, key);
       await expect(page.getByRole("heading", { name: tr("notifications.budgetTitle") })).toBeVisible();
       await expect(page.getByText(translate(locale, "notifications.budgetMessage", { threshold: 80 }))).toBeVisible();
+      // 真实预算提醒在双语桌面/窄屏均可读，截图只包含本测试用户的夹具数据。
+      const screenshots = join(process.env.E2E_RUN_DIR!, "screenshots");
+      mkdirSync(screenshots, { recursive: true });
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+        if (width === 390) await expect(page.getByRole("complementary").first()).toHaveCSS("width", "64px");
+        await page.screenshot({ path: join(screenshots, `inbox-${locale}-${width}.png`), animations: "disabled" });
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expect(page.getByRole("link", { name: tr("nav.apiKeys"), exact: true })).not.toHaveAttribute("data-active");
       const firstToken = await sessionBearer(page);
       const list = await page.request.get(GATEWAY + "/notifications?limit=20&offset=0", { headers: { Authorization: "Bearer " + firstToken } });
       expect(list.status(), await list.text()).toBe(200); const result = await list.json();

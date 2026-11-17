@@ -36,6 +36,25 @@ afterEach(() => {
 });
 
 describe("personal notifications", () => {
+  /** 收件箱切换只加载选中详情且不会自动标已读；迟到的原始报价不得出现在另一条消息中，DOM 和请求替身自动清理。 */
+  it("selects messages without marking read and discards stale detail responses", async () => {
+    let resolveDetail!: (value: unknown) => void;
+    const delayed = new Promise(resolve => { resolveDetail = resolve; });
+    get.mockImplementation((path: string) => path === "/notifications/market-detail" ? delayed : Promise.resolve({
+      items: [budget, { ...budget, id: "market", type: "market_update", data: { changes: [{ kind: "price_changed", model: "visible-model" }] } }], total: 2,
+    }));
+    view("en", <NotificationCenter />);
+    const list = await screen.findByRole("list", { name: "All messages" });
+    expect(within(list).getByRole("button", { pressed: true })).toHaveAccessibleName(/Personal budget/);
+    fireEvent.click(within(list).getByRole("button", { name: /Model marketplace update/ }));
+    expect(screen.queryByText("Recorded balance")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View full changes" }));
+    fireEvent.click(within(list).getByRole("button", { name: /Personal budget/ }));
+    resolveDetail({ text: "OLD_DETAIL_DO_NOT_RENDER", next_offset: null });
+    await waitFor(() => expect(screen.queryByText("OLD_DETAIL_DO_NOT_RENDER")).not.toBeInTheDocument());
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.getByText("Recorded balance")).toBeVisible();
+  });
   /** 两种语言均清晰展示已知模型变化和固定广场链接；未知项与外部地址不能注入链接。 */
   it.each([
     ["zh-CN", "模型广场更新", "价格变化: example-model", "查看模型广场"],
@@ -99,7 +118,8 @@ describe("personal notifications", () => {
     view("zh-CN", <NotificationCenter />);
     fireEvent.click(await screen.findByText("展开其余 2 项变化"));
     expect(screen.getByText("新上架: model-8")).toBeVisible();
-    expect(screen.getByText("此类消息暂不支持展示。")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /查看此类消息暂不支持展示/ }));
+    expect(screen.getByRole("heading", { name: "此类消息暂不支持展示。" })).toBeVisible();
   });
   /** 有限预算快照显示中文账面数，标已读只提交自己的消息 ID，顶栏随后刷新。 */
   it("shows the budget snapshot and marks one message read", async () => {
@@ -121,7 +141,8 @@ describe("personal notifications", () => {
       </>,
     );
     expect(await screen.findByText("你的个人预算已记账消费达到 80%。")).toBeVisible();
-    expect(screen.getByText(/账面剩余/)).toHaveTextContent("$100");
+    expect(screen.getByText("账面剩余").parentElement).toHaveTextContent("$100");
+    fireEvent.click(screen.getByText("提醒说明"));
     expect(screen.getByText(/待结算费用/)).toBeVisible();
     expect(screen.getByText(/系统约每分钟检查一次/)).toHaveTextContent("账面数可能有延迟");
     expect(screen.getByRole("link", { name: "查看用量" })).toHaveAttribute("href", "/ui/usage");
@@ -150,9 +171,10 @@ describe("personal notifications", () => {
     });
     view("en", <NotificationCenter />);
     expect(await screen.findByText("Your recorded spending reached 95% of your personal budget.")).toBeVisible();
-    expect(screen.getByText(/estimated balance/)).toHaveTextContent("$25");
+    expect(screen.getByText("Recorded balance").parentElement).toHaveTextContent("$25");
+    fireEvent.click(screen.getByText("About this reminder"));
     expect(screen.getByText(/checks approximately once a minute/)).toHaveTextContent("Recorded amounts may lag");
-    expect(screen.getByText("This notification type is not supported yet.")).toBeVisible();
+    expect(screen.getByText("System update")).toBeVisible();
     expect(screen.queryByText("DO_NOT_SHOW")).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "View usage" })).toHaveLength(1);
   });

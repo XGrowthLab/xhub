@@ -62,9 +62,8 @@ test("my models exposes prices, access, executable API examples and call guide",
     expect(cardData.endpoints.some((item: { path: string }) => item.path === "/v1/chat/completions")).toBe(true);
     await page.getByRole("textbox", { name: t("Search"), exact: true }).fill(name);
     const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
-    for (const title of ["模型价格", "接入信息", "API 接入", "调用文档"])
-      await expect(card.getByRole("button", { name: title, exact: true })).toBeVisible();
-    await card.getByRole("button", { name: "模型价格", exact: true }).click();
+    // 精简卡片入口后，完整四项信息仍在详情标签中，权限和示例执行链不变。
+    await card.getByRole("button", { name: "模型详情", exact: true }).click();
     const dialog = page.getByRole("dialog", { name, exact: true });
     const prices = dialog.getByRole("table", { name: "模型价格" });
     await expect(prices.getByText("$1", { exact: true })).toBeVisible();
@@ -120,7 +119,7 @@ test("my models exposes prices, access, executable API examples and call guide",
     await page.screenshot({ path: (process.env.MINE_MODEL_REPORT || "../.e2e/mine-models") + "/api-detail.png" });
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
-    await expect(card.getByRole("button", { name: "模型价格", exact: true })).toBeFocused();
+    await expect(card.getByRole("button", { name: "模型详情", exact: true })).toBeFocused();
     expect(schemaRequests, "模型详情应直接使用模型绑定，不请求已移除的公共接口定义").toEqual([]);
     await stableGoto(page, "/playground");
     await page.getByPlaceholder(t("Select a Model"), { exact: true }).click();
@@ -173,7 +172,8 @@ test("my models explains unavailable endpoint configuration", async ({ page }) =
     .getByRole("article")
     .filter({ has: page.getByRole("heading", { name: "e2e-unbound", exact: true }) });
   await expect(card).toContainText("待配置");
-  await card.getByRole("button", { name: "如何调用", exact: true }).click();
+  await card.getByRole("button", { name: "模型详情", exact: true }).click();
+  await page.getByRole("tab", { name: "API 接入", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "e2e-unbound", exact: true });
   await expect(dialog.getByRole("alert")).toContainText("暂未提供可调用接口");
   await expect(dialog.getByRole("combobox")).toHaveCount(0);

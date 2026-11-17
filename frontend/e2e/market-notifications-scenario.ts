@@ -42,7 +42,7 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       await expect(page.getByText(`${tr("notifications.marketKind.price_changed")}: e2e-market-chat`).first()).toBeVisible();
       await expect(page.getByText(tr("notifications.marketPriceHelp")).first()).toBeVisible();
       await expect(page.getByRole("link", { name: tr("notifications.marketLink") }).first()).toHaveAttribute("href", "/ui/price-data");
-      const message = page.getByRole("listitem").filter({ hasText: `${tr("notifications.marketKind.added")}: ${newModel}`, has: page.getByRole("button", { name: tr("notifications.marketDetailsOpen") }) }).first();
+      const message = page.getByRole("article", { name: tr("consoleUi.messageDetails") });
       const detailResponse = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith("/notifications/market-detail"));
       await message.getByRole("button", { name: tr("notifications.marketDetailsOpen") }).click();
       expect((await detailResponse).status()).toBe(200);

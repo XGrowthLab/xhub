@@ -1,10 +1,14 @@
 /** @vitest-environment jsdom */
-import { render, screen, within } from "@testing-library/react";
+import { render as rawRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
 import { setActiveLocale } from "@/i18n/runtime";
 import { grantedModelCards } from "./grantedModelCards";
 import { MyModels } from "./MyModels";
+
+/** 提供真实语言上下文以验证卡片数值格式；不写后端，DOM 自动清理。 */
+const render: typeof rawRender = (ui, options) => rawRender(ui, { wrapper: ({children}) => <I18nProvider initialLocale="en">{children}</I18nProvider>, ...options });
 
 const cards = grantedModelCards(
   ["gpt-allowed", "eye-allowed", "unpriced", "fennoai", "gpt-allowed", " "],
@@ -24,7 +28,7 @@ const cards = grantedModelCards(
 );
 
 describe("MyModels", () => {
-  beforeEach(() => setActiveLocale("en"));
+  beforeEach(() => { setActiveLocale("en"); localStorage.removeItem(LOCALE_COOKIE); document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`; });
 
   it("only lists granted model ids, removing duplicates and provider shells", () => {
     expect(cards.map((card) => card.id)).toEqual(["gpt-allowed", "eye-allowed", "unpriced"]);
@@ -36,7 +40,7 @@ describe("MyModels", () => {
     expect(screen.queryByText("fennoai")).not.toBeInTheDocument();
     expect(within(screen.getByTestId("my-model-gpt-allowed")).getByText("Available")).toBeInTheDocument();
     expect(
-      within(screen.getByTestId("my-model-gpt-allowed")).getByRole("link", { name: /Use in Playground/ }),
+      within(screen.getByTestId("my-model-gpt-allowed")).getByRole("link", { name: /Open playground/ }),
     ).toHaveAttribute("href", "/ui/playground");
   });
 
@@ -78,8 +82,8 @@ describe("MyModels", () => {
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("Cache Read $0.5")).toBeInTheDocument();
     expect(screen.getByText("Cache Write $6.25")).toBeInTheDocument();
-    expect(screen.getByText("128,000 tokens")).toBeInTheDocument();
-    expect(screen.getByText("16,000 tokens")).toBeInTheDocument();
+    expect(screen.getByText("128K tokens")).toBeInTheDocument();
+    expect(screen.getByText("16K tokens")).toBeInTheDocument();
   });
 
   it("renders granted ids even when optional model info cannot be loaded", () => {

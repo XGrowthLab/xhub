@@ -54,8 +54,6 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
     <TooltipProvider>
       <div className="space-y-6">
         <div className="space-y-4">
-          <span className="text-sm font-medium text-foreground">{t("keyEditor.expiryTitle")}</span>
-
           <div className="space-y-2">
             <div className="flex items-center space-x-1 text-sm font-medium text-foreground">
               <label htmlFor={durationId}>{t("keyEditor.expire")}</label>

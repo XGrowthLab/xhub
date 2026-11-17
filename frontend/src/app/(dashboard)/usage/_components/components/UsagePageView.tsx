@@ -1,5 +1,8 @@
 /** 用量页面读取真实账单的费用、Token 与请求结果；日期及用户筛选需在所有统计中保持一致。 */
 
+import { ConsolePageHeader } from "@/components/console/ConsolePrimitives";
+import { formatConsoleMoney } from "@/components/console/money";
+import UsageBudgetSummary from "./UsageBudgetSummary";
 import { ChevronDown, ChevronRight, Download, Info } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +21,7 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles } from "@/utils/roles";
-import { useT } from "@/i18n";
+import { useI18n } from "@/i18n";
 import { formatClosedRangeLabel } from "@/components/shared/advanced_date_picker";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -59,7 +62,7 @@ interface UsagePageProps {
 
 /** 用量路由调用的页面组件；参数为可见团队及组织，返回按日期与身份隔离的统计视图；读取失败回退分页，全部失败显示持续错误，部分失败提示不完整；禁用未知/不完整导出，禁止沿用旧筛选或旧数据源。 */
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
-  const t = useT();
+  const { t, locale } = useI18n();
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   // Aggregated endpoint: try first, fall back to paginated if unavailable
   const [gatewayFailure, setGatewayFailure] = useState<string | null>(null);
@@ -377,16 +380,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
 
   return (
-    <div className="relative w-full space-y-8">
-      <div className="flex flex-wrap items-end justify-between gap-6">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("nav.usage")}</h1>
-          {dateValue.from && dateValue.to ? (
-            <p className="mt-2 text-sm text-muted-foreground">{formatClosedRangeLabel(dateValue.from, dateValue.to)}</p>
-          ) : null}
-        </div>
-        <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
-      </div>
+    <div className="relative w-full space-y-5">
+      <ConsolePageHeader
+        title={t("nav.usage")}
+        description={t("consoleUi.usageDescription")}
+        actions={<AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />}
+      />
       <UsageViewSelect
         value={usageView}
         onChange={(value) => setUsageView(value)}
@@ -410,18 +409,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               </div>
             </div>
           )}
-          {showPersonalBudget && <section aria-label={t("usageBudget.title")} className="rounded-lg border bg-card px-4 py-4 space-y-2">
-            <h2 className="font-semibold">{t("usageBudget.title")}</h2>
-            {userBudgetLoading || userBudgetError || !currentUser || currentUser.user_id !== userID || !Number.isFinite(currentUser.spend) || (currentUser.max_budget !== null && !Number.isFinite(currentUser.max_budget)) ? (
-              <p role="status">{t(userBudgetLoading ? "quotaGuide.personalLoading" : "quotaGuide.personalUnavailable")}</p>
-            ) : <>
-              <p>{t("usageBudget.amounts", { spent: `$${formatNumberWithCommas(currentUser.spend, 4)}`, limit: currentUser.max_budget === null ? t("quotaGuide.personalUnlimited") : `$${formatNumberWithCommas(currentUser.max_budget, 4)}`, remaining: currentUser.max_budget === null ? t("quotaGuide.personalUnlimited") : `$${formatNumberWithCommas(Math.max(0, currentUser.max_budget - currentUser.spend), 4)}` })}</p>
-              {currentUser.max_budget !== null && currentUser.spend > currentUser.max_budget && <p>{t("usageBudget.exceeded", { amount: `$${formatNumberWithCommas(currentUser.spend - currentUser.max_budget, 4)}` })}</p>}
-              <p>{currentUser.budget_reset_day === 0 ? t("userBudgetReset.none") : currentUser.budget_reset_day ? t("userBudgetReset.day", { day: currentUser.budget_reset_day }) : t("usageBudget.resetUnknown")}</p>
-              {currentUser.budget_reset_day && currentUser.budget_reset_at && !Number.isNaN(Date.parse(currentUser.budget_reset_at)) ? <p>{t("userBudgetReset.next", { date: new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short", hour12: false }).format(new Date(currentUser.budget_reset_at)) })}</p> : null}
-              <p className="text-sm text-muted-foreground">{t("usageBudget.note")}</p>
-            </>}
-          </section>}
+          {showPersonalBudget && <UsageBudgetSummary
+            data={currentUser} userID={userID} loading={userBudgetLoading} error={userBudgetError}
+          />}
           {!paginatedResult.hasData && (paginatedResult.error ? (
             <div role="alert" className="rounded-lg border border-destructive p-4 space-y-3">
               <p>{t("usageLoad.failed")}</p><Button variant="outline" onClick={retryUsage}>{t("usageLoad.retry")}</Button>
@@ -437,7 +427,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           </div>}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <TabsList>
+              <TabsList className="max-w-full overflow-x-auto justify-start">
                     <TabsTrigger value="cost" className="flex-none px-3">
                       {t("pages.usage.cost")}
                     </TabsTrigger>
@@ -466,7 +456,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         {t("usageBudget.rangeSpend")}
                         {dateValue.from && dateValue.to ? ` · ${formatClosedRangeLabel(dateValue.from, dateValue.to)}` : ""}
                       </p>
-                      <p className="text-2xl font-semibold tabular-nums">${formatNumberWithCommas(totalSpend, 4)}</p>
+                      <p className="text-2xl font-semibold tabular-nums">{formatConsoleMoney(totalSpend, locale)}</p>
                     </div>
 
                     <div className="lg:col-span-2">
@@ -526,10 +516,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         <div className="rounded-lg border bg-card px-4 py-3">
                           <h3 className="text-sm font-medium text-muted-foreground">{t("Average Cost per Request")}</h3>
                           <p className="mt-1 text-2xl font-semibold tabular-nums">
-                            $
-                            {formatNumberWithCommas(
-                              (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
-                              4,
+                            {formatConsoleMoney(
+                              (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1), locale,
                             )}
                           </p>
                         </div>
@@ -593,6 +581,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           ) : (
                             <div data-testid="daily-spend-settled">
                             <BarChart
+                              maxBarSize={48}
                               data={sortedDailyResults}
                               index="date"
                               categories={["metrics.spend"]}
@@ -607,7 +596,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   <div className="bg-card p-4 shadow-lg rounded-lg border">
                                     <p className="font-bold">{data.date}</p>
                                     <p className="text-info">
-                                      {t("Spend")}: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                      {t("Spend")}: {formatConsoleMoney(data.metrics.spend, locale)}
                                     </p>
                                     <p className="text-muted-foreground">
                                       {t("Requests")}: {data.metrics.api_requests}
@@ -695,7 +684,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               value={String(topModelsLimit)}
                               onValueChange={(value: string) => setTopModelsLimit(Number(value))}
                             >
-                              <TabsList>
+                              <TabsList className="max-w-full overflow-x-auto justify-start">
                                 {TOP_MODEL_LIMITS.map((limit) => (
                                   <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
                                     {limit}

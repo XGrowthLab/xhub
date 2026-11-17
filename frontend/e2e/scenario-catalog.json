@@ -3595,5 +3595,19 @@
     "title": "personal budget notifications are private zh-CN",
     "kind": "implemented",
     "environment": "default offline"
+  },
+  {
+    "id": "REG-console-layout-en",
+    "file": "e2e/scenarios/regression/console-layout-en.test.ts",
+    "title": "console layout and real user flows en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-console-layout-zh-CN",
+    "file": "e2e/scenarios/regression/console-layout-zh-CN.test.ts",
+    "title": "console layout and real user flows zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
   }
 ]

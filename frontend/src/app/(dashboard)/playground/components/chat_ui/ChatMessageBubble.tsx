@@ -33,6 +33,8 @@ interface ChatMessageBubbleProps {
   accessToken: string;
 }
 
+/** 展示调试台的一条消息；参数包含原始消息、端点及可选工具结果，返回本地化角色与原文。
+ * 仅翻译已知角色标签，保留正文、协议字段和用户输入；附件读取仍走原鉴权流程。 */
 function ChatMessageBubble({
   message,
   isLastMessage,
@@ -44,6 +46,9 @@ function ChatMessageBubble({
   const t = useT();
   const syntaxTheme = useSyntaxTheme(coy);
   const isUser = message.role === "user";
+  const role = ["user", "assistant", "system", "developer", "tool"].includes(message.role)
+    ? t(`consoleUi.roles.${message.role}`)
+    : message.role;
 
   return (
     <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
@@ -67,7 +72,7 @@ function ChatMessageBubble({
               <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
             )}
           </div>
-          <strong className="text-sm capitalize">{message.role}</strong>
+          <strong className="text-sm">{role}</strong>
           {message.role === "assistant" && message.model && (
             <span className="max-w-48 truncate rounded-sm bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground sm:max-w-80">
               {message.model}

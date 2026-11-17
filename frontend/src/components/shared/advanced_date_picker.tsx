@@ -4,7 +4,7 @@ import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useT, getActiveLocale, t } from "@/i18n";
+import { useI18n, getActiveLocale } from "@/i18n";
 
 // Closed trigger label. zh-CN must not use moment's "D MMM" order, which renders "21 9月".
 export function formatClosedRangeLabel(from: Date, to: Date, locale: string = getActiveLocale()): string {
@@ -26,14 +26,14 @@ interface AdvancedDatePickerProps {
 }
 
 interface RelativeTimeOption {
-  label: string;
+  labelKey: string;
   shortLabel: string;
   getValue: () => { from: Date; to: Date };
 }
 
 const relativeTimeOptions: RelativeTimeOption[] = [
   {
-    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("Today"); },
+    labelKey: "consoleUi.date.today",
     shortLabel: "today",
     getValue: () => ({
       from: moment().startOf("day").toDate(),
@@ -41,7 +41,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     }),
   },
   {
-    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("Last 7 days"); },
+    labelKey: "consoleUi.date.last7",
     shortLabel: "7d",
     getValue: () => ({
       from: moment().subtract(7, "days").startOf("day").toDate(),
@@ -49,7 +49,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     }),
   },
   {
-    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("Last 30 days"); },
+    labelKey: "consoleUi.date.last30",
     shortLabel: "30d",
     getValue: () => ({
       from: moment().subtract(30, "days").startOf("day").toDate(),
@@ -57,7 +57,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     }),
   },
   {
-    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("Month to date"); },
+    labelKey: "consoleUi.date.month",
     shortLabel: "MTD",
     getValue: () => ({
       from: moment().startOf("month").toDate(),
@@ -65,7 +65,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     }),
   },
   {
-    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("Year to date"); },
+    labelKey: "consoleUi.date.year",
     shortLabel: "YTD",
     getValue: () => ({
       from: moment().startOf("year").toDate(),
@@ -79,12 +79,14 @@ const relativeTimeOptions: RelativeTimeOption[] = [
 const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   value,
   onValueChange,
-  label = t("Select Time Range"),
+  label,
   className,
   showTimeRange = true,
   align = "right",
 }) => {
-  const t = useT();
+  const { t, locale } = useI18n();
+  const resolvedLabel = label ?? t("Select Time Range");
+  const timestampFormat = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" });
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -172,8 +174,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const formatDisplayRange = useCallback((from: Date | undefined, to: Date | undefined) => {
     if (!from || !to) return t("Select date range");
-    return formatClosedRangeLabel(from, to);
-  }, [t]);
+    return formatClosedRangeLabel(from, to, locale);
+  }, [t, locale]);
 
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
@@ -284,16 +286,16 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   };
 
   return (
-    <div className={cn("flex items-center gap-3", className)}>
-      {label && <p className="text-sm font-medium text-foreground whitespace-nowrap">{label}</p>}
-      <div className="relative" ref={dropdownRef}>
+    <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-3", className)}>
+      {resolvedLabel && <p className="text-sm font-medium text-foreground whitespace-nowrap">{resolvedLabel}</p>}
+      <div className="relative min-w-0 max-w-full" ref={dropdownRef}>
         {/* Main input display */}
         <button
           type="button"
           data-slot="advanced-date-picker-trigger"
-          aria-label={label}
+          aria-label={resolvedLabel}
           aria-expanded={isOpen}
-          className="w-[300px] px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring"
+          className="w-[300px] max-w-full px-3 py-2 text-sm text-left border border-border rounded-md bg-card cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring"
           onClick={() => setIsOpen(!isOpen)}
         >
           <span className="flex items-center justify-between">
@@ -318,22 +320,22 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             data-slot="advanced-date-picker-panel"
             data-align={align}
             className={cn(
-              "absolute top-full z-floating min-w-[600px] mt-1 bg-card border border-border rounded-lg shadow-xl",
+              "absolute top-full z-floating w-[600px] max-w-[calc(100vw-96px)] max-h-[70vh] overflow-y-auto mt-1 bg-card border border-border rounded-lg shadow-xl",
               align === "left" ? "left-0" : "right-0",
             )}
           >
-            <div className="flex">
+            <div className="flex flex-col sm:flex-row">
               {/* Left side - Relative time options */}
-              <div className="w-1/2 border-r border-border">
+              <div className="w-full border-b border-border sm:w-1/2 sm:border-r sm:border-b-0">
                 <div className="p-3 border-b border-border">
                   <span className="text-sm font-semibold text-foreground">{t("Relative time")}</span>
                 </div>
-                <div className="h-[350px] overflow-y-auto">
+                <div className="h-40 overflow-y-auto sm:h-[350px]">
                   {relativeTimeOptions.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
                       <button
-                        key={option.label}
+                        key={option.shortLabel}
                         type="button"
                         data-slot="advanced-date-picker-preset"
                         aria-pressed={isSelected}
@@ -343,15 +345,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         onClick={() => handleRelativeTimeSelect(option)}
                       >
                         <span className={`text-sm ${isSelected ? "text-info font-medium" : "text-foreground"}`}>
-                          {option.label}
+                          {t(option.labelKey)}
                         </span>
-                        <span
-                          className={`text-xs px-2 py-1 rounded capitalize ${
-                            isSelected ? "text-info bg-info/15" : "text-muted-foreground bg-muted"
-                          }`}
-                        >
-                          {option.shortLabel}
-                        </span>
+
                       </button>
                     );
                   })}
@@ -359,7 +355,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               </div>
 
               {/* Right side - Custom date selection */}
-              <div className="w-1/2 relative">
+              <div className="relative w-full sm:w-1/2">
                 <div className="p-3.5 border-b border-border">
                   <div className="flex items-center gap-2">
                     <Calendar className="size-4 text-muted-foreground" />
@@ -376,7 +372,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                       aria-label={t("Start date")}
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={`w-full min-w-0 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
                           : "border-border"
@@ -392,7 +388,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                       aria-label={t("End date")}
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
-                      className={`w-65 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
+                      className={`w-full min-w-0 px-3 py-2 text-sm border rounded-md cursor-pointer hover:border-ring focus:border-info focus:ring-1 focus:ring-ring ${
                         !validation.isValid
                           ? "border-destructive/30 focus:border-destructive focus:ring-red-200"
                           : "border-border"
@@ -421,12 +417,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {tempValue.from && tempValue.to && validation.isValid && (
                     <div className="bg-info/10 p-3 rounded-md space-y-1">
                       <div className="text-xs text-info">
-                        <span className="font-medium">{t("From:")}</span>{" "}
-                        {moment(tempValue.from).format(t("MMM D, YYYY [at] HH:mm:ss"))}
+                        <span className="font-medium">{t("consoleUi.date.from")}</span>{" "}
+                        {timestampFormat.format(tempValue.from)}
                       </div>
                       <div className="text-xs text-info">
-                        <span className="font-medium">{t("To:")}</span>{" "}
-                        {moment(tempValue.to).format(t("MMM D, YYYY [at] HH:mm:ss"))}
+                        <span className="font-medium">{t("consoleUi.date.to")}</span>{" "}
+                        {timestampFormat.format(tempValue.to)}
                       </div>
                     </div>
                   )}

@@ -2,8 +2,20 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { ArrowDownUp, ArrowRight, Boxes, Search, SlidersHorizontal } from "lucide-react";
-import { t, useT } from "@/i18n";
+import {
+  ArrowDownUp,
+  ArrowRight,
+  Search,
+  SlidersHorizontal,
+  Wrench,
+  Braces,
+  Brain,
+  ImageIcon,
+  Database,
+} from "lucide-react";
+import { ConsolePageHeader, HelpDisclosure } from "@/components/console/ConsolePrimitives";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { t, useT, useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,23 +52,32 @@ function categoryLabel(category: string): string {
   return labels[category] ?? category;
 }
 
-/** 展示授权模型摘要和四类详情入口；参数为模型及打开回调，返回卡片。
+/** 展示授权模型摘要及详情、调试两个入口；参数为模型及打开回调，返回卡片。
  * 供我的模型列表调用；只按实际绑定展示可用状态，不因目录分类推断接口。 */
 function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelDetailTab) => void }) {
-  const t = useT();
+  const { t, locale } = useI18n();
+  const capabilityIcons: Record<string, typeof Wrench> = {
+    tools: Wrench,
+    structured: Braces,
+    reasoning: Brain,
+    vision: ImageIcon,
+    caching: Database,
+  };
   const unavailable = Boolean(model.unavailable_reason) || model.endpoints?.length === 0;
   return (
     <article
       data-testid={"my-model-" + model.id}
-      className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-5 transition-colors hover:border-cyan-500/50 sm:p-6"
+      className="flex min-w-0 flex-col rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex items-start gap-3">
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300">
-          <Boxes className="size-5" aria-hidden="true" />
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background">
+          <ProviderLogo provider={model.provider ?? "unknown"} className="size-6 object-contain" />
         </div>
         <div className="min-w-0 flex-1">
-          <h2 className="break-all text-lg font-semibold leading-snug">{model.id}</h2>
-          <p className="mt-1 break-all text-sm text-muted-foreground">
+          <h2 title={model.id} className="truncate text-base font-semibold leading-6">
+            {model.id}
+          </h2>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">
             {model.provider ?? t("myModels.unknownProvider")}
           </p>
         </div>
@@ -75,24 +96,40 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
         <Badge variant="outline" className="font-mono text-xs">
           {categoryLabel(model.category)}
         </Badge>
-        {model.capabilities.map((capability) => (
-          <Badge key={capability} variant="secondary">
-            {t("priceCatalog." + capability)}
-          </Badge>
-        ))}
+        {model.capabilities.map((capability) => {
+          const Icon = capabilityIcons[capability] ?? Braces;
+          return (
+            <span key={capability} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Icon className="size-3.5" aria-hidden />
+              {t("priceCatalog." + capability)}
+            </span>
+          );
+        })}
       </div>
       {(model.max_input_tokens || model.max_output_tokens) && (
         <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
           {model.max_input_tokens != null && (
             <span>
               {t("priceCatalog.maxInput")}{" "}
-              <strong className="font-medium text-foreground">{model.max_input_tokens.toLocaleString()} tokens</strong>
+              <strong className="font-medium text-foreground">
+                {t("consoleUi.tokenLimit", {
+                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                    model.max_input_tokens,
+                  ),
+                })}
+              </strong>
             </span>
           )}
           {model.max_output_tokens != null && (
             <span>
               {t("priceCatalog.maxOutput")}{" "}
-              <strong className="font-medium text-foreground">{model.max_output_tokens.toLocaleString()} tokens</strong>
+              <strong className="font-medium text-foreground">
+                {t("consoleUi.tokenLimit", {
+                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                    model.max_output_tokens,
+                  ),
+                })}
+              </strong>
             </span>
           )}
         </div>
@@ -105,10 +142,10 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           <div key={label} className="min-w-0">
             <dt className="text-xs text-muted-foreground">{label}</dt>
             <dd className="mt-1 flex flex-wrap items-baseline gap-1.5">
-              <span className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold sm:text-2xl"}>
+              <span className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold tabular-nums"}>
                 {priceText(value)}
               </span>
-              {value != null && <span className="text-xs text-muted-foreground">/ 1M tokens</span>}
+              {value != null && <span className="sr-only">{t("consoleUi.units")}</span>}
             </dd>
           </div>
         ))}
@@ -127,22 +164,12 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           )}
         </div>
       )}
-      <div className="mt-auto space-y-3 pt-5">
-        <nav
-          aria-label={model.id + " " + t("myModels.howToCall")}
-          className="grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-1"
-        >
-          {(["pricing", "access", "api", "docs"] as const).map((tab) => (
-            <Button key={tab} variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onOpen(tab)}>
-              {t("myModels." + tab)}
-            </Button>
-          ))}
-        </nav>
-        <Button className="w-full" onClick={() => onOpen("api")}>
-          {t("myModels.howToCall")} <ArrowRight aria-hidden="true" />
+      <div className="mt-5 flex items-center gap-2 border-t pt-4">
+        <Button variant="outline" className="min-w-0 flex-1" onClick={() => onOpen("pricing")}>
+          {t("consoleUi.modelDetails")}
         </Button>
-        <Link href={uiHref("playground")} className={cn(buttonVariants({ variant: "outline" }), "w-full")}>
-          {t("myModels.useInPlayground")} <ArrowRight aria-hidden="true" />
+        <Link href={uiHref("playground")} className={cn(buttonVariants({ variant: "default" }), "min-w-0 flex-1")}>
+          {t("consoleUi.tryModel")} <ArrowRight aria-hidden="true" />
         </Link>
       </div>
     </article>
@@ -212,17 +239,9 @@ export function MyModels({
   }
 
   return (
-    <div className="min-h-full bg-background text-foreground">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-12 lg:px-10">
-        <header className="mb-9 max-w-2xl">
-          <p className="mb-4 flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-cyan-700 dark:text-cyan-300">
-            <span className="size-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
-            {t("myModels.eyebrow")}
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl lg:text-5xl">{t("myModels.title")}</h1>
-          <p className="mt-4 text-sm leading-7 text-muted-foreground sm:text-base">{t("myModels.description")}</p>
-          <p className="mt-3 text-xs text-cyan-700 dark:text-cyan-300">{t("myModels.guideHint")}</p>
-        </header>
+    <div className="min-h-full text-foreground">
+      <div className="mx-auto max-w-[1600px] space-y-5">
+        <ConsolePageHeader title={t("myModels.title")} description={t("consoleUi.modelsDescription")} />
         <section aria-label={t("myModels.title")}>
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3 sm:flex-row">
             <div className="relative min-w-0 flex-1">
@@ -242,7 +261,7 @@ export function MyModels({
               <ArrowDownUp aria-hidden="true" className="size-4 text-muted-foreground" />
               <select
                 aria-label={t("myModels.sort")}
-                className="min-w-0 flex-1 bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="min-w-0 flex-1 border-0 bg-transparent py-0 pl-0 text-sm shadow-none outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 value={sort}
                 onChange={(event) => setSort(event.target.value as SortOrder)}
               >
@@ -314,9 +333,10 @@ export function MyModels({
               </Button>
             )}
           </div>
-          <p className="mb-5 border-l-2 border-cyan-500/40 pl-3 text-xs leading-relaxed text-muted-foreground">
-            {t("myModels.units")}
-          </p>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{t("consoleUi.units")}</span>
+            <HelpDisclosure title={t("consoleUi.priceHelp")}>{t("myModels.units")}</HelpDisclosure>
+          </div>
           {isError && (
             <div
               role="alert"
@@ -334,7 +354,7 @@ export function MyModels({
             </div>
           )}
           {!isLoading && visible.length > 0 && (
-            <div className="space-y-10">
+            <div className="space-y-6">
               {Array.from(
                 visible.reduce((groups, model) => {
                   const key = model.category || "other";
@@ -343,10 +363,8 @@ export function MyModels({
                 }, new Map<string, MyModelCard[]>()),
               ).map(([group, items]) => (
                 <section key={group} aria-label={categoryLabel(group)}>
-                  <h2 className="mb-4 text-sm font-semibold tracking-wide text-muted-foreground">
-                    {categoryLabel(group)}
-                  </h2>
-                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{categoryLabel(group)}</h2>
+                  <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
                     {items.map((model) => (
                       <ModelCard key={model.id} model={model} onOpen={(tab) => setDetail({ model, tab })} />
                     ))}

@@ -1,3 +1,4 @@
+import { consoleUi } from "./consoleUi.en";
 import { notifications } from "./notifications.en";
 import { marketSync } from "./marketSync.en";
 import { protocolProbeEn } from "./protocolProbe.en";
@@ -19,6 +20,7 @@ export const en = {
   },
   playgroundAttachment: { expired: "An earlier attachment is no longer available after refreshing. Clear the conversation and upload it again to continue." },
   notifications,
+  consoleUi,
   marketSync,
   protocolProbe: protocolProbeEn,
   logsUX: {
