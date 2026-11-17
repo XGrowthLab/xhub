@@ -4,6 +4,7 @@ import { translate } from "@/i18n/translate";
 import PersonalBudgetSummary from "./PersonalBudgetSummary";
 const state = vi.hoisted(() => ({ locale: "en" as "en" | "zh-CN", result: {} as any }));
 vi.mock("@/i18n", () => ({
+  useI18n: () => ({ locale: state.locale, t: (key: string, values?: Record<string, unknown>) => translate(state.locale, key, values as any) }),
   useT: () => (key: string, values?: Record<string, unknown>) => translate(state.locale, key, values as any),
 }));
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({ useCurrentUser: () => state.result }));
@@ -14,9 +15,9 @@ it.each(["en", "zh-CN"] as const)("personal budget states %s", (locale) => {
   for (const limit of [500, 0, null]) {
     state.result = { data: { max_budget: limit, spend: 10 }, isLoading: false, isError: false };
     const view = render(<PersonalBudgetSummary />);
-    expect(screen.getByRole("status").textContent).toContain("$10.00");
-    expect(screen.getByRole("status").textContent).toContain(
-      limit === null ? translate(locale, "quotaGuide.personalUnlimited") : `$${(limit - 10).toFixed(2)}`,
+    expect(screen.getByRole("region").textContent).toContain("$10.00");
+    expect(screen.getByRole("region").textContent).toContain(
+      limit === null ? translate(locale, "quotaGuide.personalUnlimited") : new Intl.NumberFormat(locale, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" }).format(limit - 10),
     );
     view.unmount();
   }

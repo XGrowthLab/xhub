@@ -308,3 +308,10 @@ it("includes model monitor in observability", () => {
   expect(menuGroups.find(group => group.groupLabel === "nav.groups.observability")?.items.some(item => item.key === "model-monitor")).toBe(true);
   expect(getBreadcrumb("/ui/model-monitor").title).toBe(t("nav.modelMonitor"));
 });
+
+/** 消息中心不属于密钥菜单；前置真实路由匹配，未知路由不得伪造当前页，DOM 自动清理。 */
+it("does not highlight keys when viewing the notification center", () => {
+  navState.pathname = "/ui/message-center";
+  renderWithProviders(<Sidebar collapsed={false} />);
+  expect(screen.getByRole("link", { name: t("nav.apiKeys") })).not.toHaveAttribute("data-active");
+});

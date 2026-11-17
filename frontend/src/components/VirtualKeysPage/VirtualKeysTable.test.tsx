@@ -212,6 +212,17 @@ it("should render VirtualKeysTable component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
+/** 同名密钥仅显示一次，别名不同的原名称仍可查看；模拟两种已存在数据，渲染不修改密钥，DOM 自动清理。 */
+it("deduplicates equal key labels without dropping distinct names", () => {
+  mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, key_name: mockKey.key_alias }]));
+  const view = renderWithProviders(<VirtualKeysTable />);
+  expect(screen.getAllByText("Test Key Alias", { exact: true })).toHaveLength(1);
+  mockUseKeys.mockReturnValue(keysResult([mockKey]));
+  view.rerender(<VirtualKeysTable />);
+  expect(screen.getByText("test-key", { exact: true })).toBeInTheDocument();
+  expect(screen.getByText("Test Key Alias", { exact: true })).toBeInTheDocument();
+});
+
 /** 默认精简列隐藏重置时间；主动打开后仍显示原信息，测试框架清理 DOM。 */
 it("shows Budget Reset only when enabled", async () => {
   renderWithProviders(<VirtualKeysTable />);

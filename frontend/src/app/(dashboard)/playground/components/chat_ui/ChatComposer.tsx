@@ -23,6 +23,7 @@ interface ChatComposerProps {
   className?: string;
 }
 
+/** 调试台输入区；回调接收原始输入或英文示例，支持输入法、取消和禁用状态，布局不更改发送协议。 */
 export function ChatComposer({
   value,
   onChange,
@@ -40,12 +41,14 @@ export function ChatComposer({
   className,
 }: ChatComposerProps) {
   const t = useT();
+  /** 键盘和按钮共用提交入口；正在请求或未通过表单条件时不触发调用。 */
   const submitIfAllowed = () => {
     if (!submitDisabled && !isLoading) {
       onSubmit();
     }
   };
 
+  /** Enter 提交，Shift+Enter 换行；输入法组合事件不触发请求。 */
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
@@ -56,12 +59,12 @@ export function ChatComposer({
   return (
     <div className={cn("relative flex w-full flex-col gap-3", className)}>
       {showSuggestions && suggestions.length > 0 && (
-        <div className="flex w-full flex-col gap-1.5" data-testid="chat-suggested-actions">
+        <div className="flex w-full flex-wrap gap-2" data-testid="chat-suggested-actions">
           {suggestions.map((suggestion) => (
             <button
               key={suggestion}
               type="button"
-              className="w-full truncate rounded-lg border border-border/50 bg-card/30 px-3 py-1.5 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
+              className="max-w-full truncate rounded-full border bg-background px-3 py-1.5 text-left text-xs leading-5 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
               onClick={() => onSuggestionSelect?.(suggestion)}
             >
               {suggestion}
@@ -74,10 +77,10 @@ export function ChatComposer({
         <InputGroup
           className={cn(
             "h-auto min-h-[7.5rem] flex-col overflow-hidden rounded-2xl border border-border bg-card",
-            "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.08)] ring-1 ring-black/5",
-            "transition-[box-shadow,border-color,ring] duration-200",
+            "shadow-sm",
+            "transition-[box-shadow,border-color] duration-150 motion-reduce:transition-none",
             "has-[[data-slot=input-group-control]:focus-visible]:border-ring",
-            "has-[[data-slot=input-group-control]:focus-visible]:shadow-[0_2px_8px_rgba(0,0,0,0.08),0_12px_32px_rgba(0,0,0,0.12)]",
+            "has-[[data-slot=input-group-control]:focus-visible]:shadow-sm",
             "has-[[data-slot=input-group-control]:focus-visible]:ring-2 has-[[data-slot=input-group-control]:focus-visible]:ring-ring/40",
           )}
         >
@@ -90,7 +93,7 @@ export function ChatComposer({
               disabled={disabled}
               placeholder={placeholder}
               rows={1}
-              className="min-h-24 max-h-48 resize-none overflow-y-auto border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-[13px] leading-relaxed shadow-none placeholder:text-muted-foreground/50 focus-visible:ring-0 [field-sizing:content]"
+              className="min-h-24 max-h-48 resize-none overflow-y-auto border-0 bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-relaxed shadow-none placeholder:text-muted-foreground/50 focus-visible:ring-0 [field-sizing:content]"
               onChange={(event) => onChange(event.target.value)}
               onKeyDown={handleKeyDown}
             />

@@ -109,7 +109,9 @@ export function registerAccessGroupConfigService(locale: Locale) {
     await expect(page.getByTestId("my-model-gpt-4o-mini")).toBeVisible();
     await expect(page.getByTestId("my-model-not-a-granted-model")).toHaveCount(0);
     await stableGoto(page, "/usage");
-    await expect(page.getByRole("region", { name: tr("usageBudget.title") })).toContainText("$500.0000");
+    // 预算卡按指标展示；明确核对上限，避免把同值余额或旧整段文案当成预算契约。
+    const budget = page.getByRole("region", { name: tr("usageBudget.title") });
+    await expect(budget.getByText(tr("consoleUi.limit"), { exact: true }).locator("..").getByRole("definition")).toHaveText("$500.00");
     await stableGoto(page, "/playground");
     await page.getByPlaceholder(tr("Select a Model"), { exact: true }).click();
     await page.getByRole("option", { name: /gpt-4o-mini/ }).click();

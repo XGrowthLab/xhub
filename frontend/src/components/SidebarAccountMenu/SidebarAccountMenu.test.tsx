@@ -165,13 +165,14 @@ describe("SidebarAccountMenu", () => {
     expect(screen.queryByLabelText("Toggle hide new feature indicators")).not.toBeInTheDocument();
   });
 
-  it("should render the version as text without an outbound link", async () => {
+  /** 账户菜单不重复顶栏版本信息；前置已登录，保留身份与退出入口，DOM 自动清理。 */
+  it("does not repeat the version already shown in the console header", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SidebarAccountMenu onLogout={mockOnLogout} />);
 
     await openMenu(user);
 
-    expect(screen.getByText("v1.99.0")).toBeInTheDocument();
+    expect(screen.queryByText("v1.99.0")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /v1\.99\.0/ })).not.toBeInTheDocument();
     expect(screen.getByText("XHub")).toBeInTheDocument();
   });

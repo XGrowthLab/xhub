@@ -13,15 +13,11 @@ describe("UsageViewSelect", () => {
     mockOnChange.mockClear();
   });
 
-  it("should render", async () => {
-    const user = userEvent.setup();
-    const { container } = render(<UsageViewSelect value="my-usage" onChange={mockOnChange} userRole="Internal User" />);
-
-    expect(screen.getByText(translate("en", "pages.usage.viewTitle"))).toBeInTheDocument();
-    expect(screen.getByText(translate("en", "pages.usage.viewDescription"))).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: translate("en", "pages.usage.yours"), selected: true })).toBeInTheDocument();
-    expect(offers(translate("en", "pages.usage.yours"))).toBe(true);
-    void user;
+  /** 普通用户只有个人范围时不显示无效切换器；既不扩权也不触发范围变化，DOM 自动清理。 */
+  it("hides a single-option selector without changing scope", () => {
+    render(<UsageViewSelect value="my-usage" onChange={mockOnChange} userRole="Internal User" />);
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(mockOnChange).not.toHaveBeenCalled();
   });
 
   it("should call onChange when value changes", async () => {
@@ -89,7 +85,7 @@ describe("UsageViewSelect", () => {
     render(<UsageViewSelect value="my-usage" onChange={mockOnChange} userRole="Internal User" />);
     expect(offers(translate("en", "pages.usage.team"))).toBe(false);
     expect(offers(translate("en", "pages.usage.user"))).toBe(false);
-    expect(offers(translate("en", "pages.usage.yours"))).toBe(true);
+    expect(offers(translate("en", "pages.usage.yours"))).toBe(false);
   });
 
   it("shows only the localized view name on the closed control", async () => {
@@ -107,7 +103,7 @@ describe("UsageViewSelect", () => {
     setActiveLocale("zh-CN");
     const user = userEvent.setup();
     render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
-    expect(screen.getByText(translate("zh-CN", "pages.usage.viewTitle"))).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: translate("zh-CN", "pages.usage.viewTitle") })).toBeInTheDocument();
     expect(screen.queryByText(translate("en", "pages.usage.viewTitle"))).not.toBeInTheDocument();
     expect(offers(translate("zh-CN", "pages.usage.global"))).toBe(true);
     expect(offers(translate("en", "pages.usage.global"))).toBe(false);

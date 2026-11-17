@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatCellDate } from "@/components/shared/table_cells";
+import { I18nProvider } from "@/i18n";
 import { Tag } from "@/components/tag_management/types";
 
 import TagTable from "./TagTable";
@@ -77,10 +77,13 @@ describe("TagTable", () => {
     expect(screen.getByText("All Models")).toBeInTheDocument();
   });
 
-  it("should display formatted created date", () => {
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
-    const formattedDate = formatCellDate(new Date(mockTag.created_at), "date");
-    expect(screen.getByText(formattedDate)).toBeInTheDocument();
+  /** 前置真实中英文语言上下文与日期夹具；验证日期按界面语言显示且保留 ISO 时间，DOM 自动清理，不写业务数据。 */
+  it.each(["en", "zh-CN"] as const)("should display the created date in %s", (locale) => {
+    render(<I18nProvider initialLocale={locale}><TagTable {...defaultProps} data={[mockTag]} /></I18nProvider>);
+    const formattedDate = new Intl.DateTimeFormat(locale, {
+      year: "numeric", month: "short", day: "numeric",
+    }).format(new Date(mockTag.created_at));
+    expect(screen.getByText(formattedDate)).toHaveAttribute("datetime", new Date(mockTag.created_at).toISOString());
   });
 
   it("should sort by created date descending by default", () => {

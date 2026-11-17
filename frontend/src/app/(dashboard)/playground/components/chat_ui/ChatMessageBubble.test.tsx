@@ -3,6 +3,8 @@ import { describe, it, expect, vi } from "vitest";
 import ChatMessageBubble from "./ChatMessageBubble";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
+import { translate } from "@/i18n/translate";
 
 // Mock child components to isolate bubble rendering logic
 vi.mock("react-markdown", () => ({
@@ -76,15 +78,28 @@ describe("ChatMessageBubble", () => {
   it("should render a user message with right-aligned text", () => {
     render(<ChatMessageBubble {...defaultProps} message={{ role: "user", content: "Hello" }} />);
 
-    expect(screen.getByText("user")).toBeInTheDocument();
+    expect(screen.getByText("User")).toBeInTheDocument();
     expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
   it("should render an assistant message with left-aligned text", () => {
     render(<ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "Hi there" }} />);
 
-    expect(screen.getByText("assistant")).toBeInTheDocument();
+    expect(screen.getByText("Assistant")).toBeInTheDocument();
     expect(screen.getByText("Hi there")).toBeInTheDocument();
+  });
+
+  /** 中英文角色标签切换不改用户正文，未知协议角色保留原值；DOM 自动卸载，无持久化。 */
+  it.each(["en", "zh-CN"] as const)("localizes roles but preserves message content in %s", (locale) => {
+    localStorage.removeItem(LOCALE_COOKIE);
+    document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`;
+    const original = "你好，Keep my input unchanged.";
+    for (const role of ["user", "assistant", "system", "developer", "tool", "extension_role"]) {
+      const view = render(<I18nProvider initialLocale={locale}><ChatMessageBubble {...defaultProps} message={{ role, content: original }} /></I18nProvider>);
+      expect(screen.getByText(role === "extension_role" ? role : translate(locale, `consoleUi.roles.${role}`))).toBeVisible();
+      expect(screen.getByTestId("react-markdown")).toHaveTextContent(original);
+      view.unmount();
+    }
   });
 
   it.each([

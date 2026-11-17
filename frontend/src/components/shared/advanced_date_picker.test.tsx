@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
+import { I18nProvider, LOCALE_COOKIE, setActiveLocale, translate } from "@/i18n";
 
 // Polyfill requestIdleCallback for test environment
 beforeAll(() => {
@@ -27,6 +28,9 @@ describe("AdvancedDatePicker", () => {
 
   beforeEach(() => {
     mockOnValueChange.mockClear();
+    setActiveLocale("en");
+    localStorage.removeItem(LOCALE_COOKIE);
+    document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`;
   });
 
   const getTrigger = (container: HTMLElement) => container.querySelector('[data-slot="advanced-date-picker-trigger"]');
@@ -43,13 +47,41 @@ describe("AdvancedDatePicker", () => {
     expect(screen.getByText("Select Time Range")).toBeInTheDocument();
   });
 
+  /** 日期预设与完整时间均随中英文显示，选择仍提交实际 Date；独立回调与 DOM 随测试清理。 */
+  it.each(["en", "zh-CN"] as const)("localizes the range choices and preview in %s", async (locale) => {
+    render(<I18nProvider initialLocale={locale}><AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: translate(locale, "Select Time Range") }));
+    expect(screen.getByRole("button", { name: translate(locale, "consoleUi.date.last7"), exact: true })).toBeVisible();
+    const startOfDay = new Date(defaultValue.from);
+    startOfDay.setHours(0, 0, 0, 0);
+    expect(screen.getByText(new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }).format(startOfDay), { exact: false })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: translate(locale, "consoleUi.date.last30"), exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: translate(locale, "Apply"), exact: true }));
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenCalledWith(expect.objectContaining({ from: expect.any(Date), to: expect.any(Date) })));
+  });
+
   it("should render with custom label", () => {
     render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} label="Custom Label" />);
     expect(screen.getByText("Custom Label")).toBeInTheDocument();
   });
 
+  /** 紧凑布局仍可完全用键盘选择日期及取消；参数自定义标签不丢失，取消不触发查询，DOM 自动回收。 */
+  it("keeps the labeled range control and cancellation accessible", async () => {
+    const user = userEvent.setup();
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} label="Report period" />);
+    const trigger = screen.getByRole("button", { name: "Report period" });
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Enter}");
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2025-01-02" } });
+    await user.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+  });
+
+  /** 显式提供英文环境，验证关闭态时间格式不依赖其他用例的语言状态；DOM 随测试清理。 */
   it("should display formatted date range", () => {
-    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    const { container } = render(<I18nProvider initialLocale="en"><AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} /></I18nProvider>);
     expect(getTrigger(container)).toHaveTextContent(/\w{3} \d{1,2}, \d{2}:\d{2} - \w{3} \d{1,2}, \d{2}:\d{2}/);
   });
 

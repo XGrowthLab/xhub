@@ -41,15 +41,17 @@ const model: MyModelCard = {
 };
 beforeEach(() => setActiveLocale("zh-CN"));
 
-/** 前置授权聊天模型；验证卡片四入口、默认 API、协议切换、复制及关闭焦点；DOM自动清理，无持久数据。 */
-it("从卡片直接打开四标签详情并复制实际接口示例", async () => {
+/** 前置授权聊天模型；从精简卡片进入价格详情，验证四标签、协议切换、复制及关闭焦点；DOM 自动清理，无持久数据。 */
+it("从卡片详情入口打开四标签并复制实际接口示例", async () => {
   const user = userEvent.setup();
   render(<MyModels models={[model]} />);
-  for (const name of ["模型价格", "接入信息", "API 接入", "调用文档"])
-    expect(screen.getByRole("button", { name })).toBeInTheDocument();
-  const trigger = screen.getByRole("button", { name: "如何调用" });
+  const trigger = screen.getByRole("button", { name: "模型详情" });
   await user.click(trigger);
   const dialog = screen.getByRole("dialog", { name: "my-chat" });
+  for (const name of ["模型价格", "接入信息", "API 接入", "调用文档"])
+    expect(within(dialog).getByRole("tab", { name })).toBeInTheDocument();
+  expect(within(dialog).getByRole("tab", { name: "模型价格" })).toHaveAttribute("aria-selected", "true");
+  await user.click(within(dialog).getByRole("tab", { name: "API 接入" }));
   expect(within(dialog).getByRole("tab", { name: "API 接入" })).toHaveAttribute("aria-selected", "true");
   expect(within(dialog).queryByRole("link", { name: "查看 API 接口定义" })).not.toBeInTheDocument();
   expect(within(dialog).getByRole("link", { name: "管理虚拟密钥" })).toHaveAttribute("href", expect.stringContaining("api-keys"));

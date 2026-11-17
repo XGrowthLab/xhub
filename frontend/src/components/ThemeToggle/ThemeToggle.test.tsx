@@ -2,6 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider } from "next-themes";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { I18nProvider } from "@/i18n";
+import { setActiveLocale } from "@/i18n/runtime";
 import ThemeToggle from "./ThemeToggle";
 
 const renderToggle = () =>
@@ -14,6 +16,7 @@ const renderToggle = () =>
 const toggle = () => screen.getByRole("button", { name: /Switch to (light|dark) mode/ });
 
 beforeEach(() => {
+  setActiveLocale("en");
   localStorage.clear();
   document.documentElement.classList.remove("dark", "light");
 });
@@ -45,7 +48,7 @@ describe("ThemeToggle", () => {
 
   it("names the mode the click will switch to, so the button says what it does", async () => {
     renderToggle();
-    expect(screen.getByRole("button", { name: "Switch to dark mode (beta)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch to dark mode" })).toBeInTheDocument();
 
     await userEvent.click(toggle());
 
@@ -68,4 +71,12 @@ describe("ThemeToggle", () => {
     expect(toggle()).not.toHaveTextContent("Beta");
     expect(toggle()).toHaveAccessibleName("Switch to light mode");
   });
+});
+
+/** 中文按钮明确告知目标主题；点击仍使用真实主题持久化，结束由公共清理还原 DOM。 */
+it("localizes the theme action in Chinese", async () => {
+  render(<I18nProvider initialLocale="zh-CN"><ThemeProvider attribute="class" defaultTheme="light"><ThemeToggle /></ThemeProvider></I18nProvider>);
+  await userEvent.click(screen.getByRole("button", { name: "切换深色模式" }));
+  expect(await screen.findByRole("button", { name: "切换浅色模式" })).toBeVisible();
+  expect(localStorage.getItem("theme")).toBe("dark");
 });

@@ -81,6 +81,7 @@ interface KeyTableColumnsDeps {
   onSelectKey: (key: KeyResponse) => void;
 }
 
+/** 为虚拟密钥表生成本地化列；依赖团队、组织和选择回调，重复名称仅显示一次，状态与权限原样保留。 */
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
@@ -109,7 +110,7 @@ export const getKeyTableColumns = ({
       return (
         <IdentityCell
           title={row.original.key_alias || "-"}
-          subtitle={row.original.key_name}
+          subtitle={row.original.key_name !== row.original.key_alias ? row.original.key_name : undefined}
           badge={
             <StatusBadge
               tone={status.tone}

@@ -12,6 +12,7 @@ import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
 import { translate } from "@/i18n/translate";
+import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -407,7 +408,8 @@ describe("UsagePage", () => {
     mockUseAuthorized.mockReturnValue(nonAdminSession as any);
     mockUseCurrentUser.mockReturnValue({data:{user_id:"user-123",max_budget:0,spend:0,budget_reset_day:0},isLoading:false,isError:false} as any);
     renderWithProviders(<UsagePage {...defaultProps} />);
-    expect(await screen.findByText(/limit: \$0\.0000/)).toBeVisible();
+    const budget = await screen.findByRole("region", { name: "Personal budget" });
+    expect(budget.querySelector("dl")).toHaveTextContent("Budget limit$0.00");
     expect(screen.getByText("No automatic reset")).toBeVisible();
   });
 
@@ -432,11 +434,13 @@ describe("UsagePage", () => {
 
   // 指定刷新日与下次刷新时间来自用户接口，以北京时间展示；测试框架清理 DOM。
   it("shows the real monthly schedule in Beijing time", async () => {
+    localStorage.removeItem(LOCALE_COOKIE);
+    document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`;
     mockUseAuthorized.mockReturnValue(nonAdminSession as any);
     mockUseCurrentUser.mockReturnValue({data:{user_id:"user-123",max_budget:500,spend:10,budget_reset_day:15,budget_reset_at:"2026-11-14T16:00:00Z"},isLoading:false,isError:false} as any);
-    renderWithProviders(<UsagePage {...defaultProps} />);
+    renderWithProviders(<I18nProvider initialLocale="en"><UsagePage {...defaultProps} /></I18nProvider>);
     expect(await screen.findByText("Day 15 of each month")).toBeVisible();
-    expect(screen.getByText(/2026-11-15 00:00/)).toBeVisible();
+    expect(screen.getByText(/Nov 15, 2026, 00:00/)).toBeVisible();
   });
 
   // 预算接口失败不能显示无限额或用区间消费代替；测试框架清理 DOM。
@@ -453,7 +457,9 @@ describe("UsagePage", () => {
     mockUseAuthorized.mockReturnValue(nonAdminSession as any);
     mockUseCurrentUser.mockReturnValue({data:{user_id:"user-123",max_budget:null,spend:10,budget_reset_day:0},isLoading:false,isError:false} as any);
     renderWithProviders(<UsagePage {...defaultProps} />);
-    expect(await screen.findByText(/limit: No personal cap/)).toBeVisible();
+    const budget = await screen.findByRole("region", { name: "Personal budget" });
+    expect(budget.querySelector("dl")).toHaveTextContent("Budget limitNo personal cap");
+    expect(screen.queryByRole("progressbar", { name: "Budget usage" })).not.toBeInTheDocument();
   });
 
   it("keeps the daily spend loader up until the activity request resolves", async () => {
@@ -586,6 +592,7 @@ describe("UsagePage", () => {
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
+  /** 单日费用柱保持有限宽度和费用色，避免铺满图表；使用真实图表组件，DOM 由测试框架回收。 */
   it("should render the daily spend and top models charts with cyan bars", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -608,9 +615,23 @@ describe("UsagePage", () => {
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
     expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    const dailyBar = screen.getByTestId("daily-spend-settled").querySelector("path.recharts-rectangle");
+    expect(Number(dailyBar?.getAttribute("width"))).toBeGreaterThan(0);
+    expect(Number(dailyBar?.getAttribute("width"))).toBeLessThanOrEqual(48);
 
     expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+  });
+
+  /** 微量费用仍有可读值，不能显示为零；前置两次已计费请求，仅验证显示，不改账单，DOM 自动清理。 */
+  it("retains small charges in period spending and average cost", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, total_spend: 0.000024, total_api_requests: 2 },
+    });
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    expect(await screen.findByText("$0.000024")).toBeVisible();
+    expect(screen.getByText("$0.000012")).toBeVisible();
   });
 
   it("should switch between usage views correctly", async () => {

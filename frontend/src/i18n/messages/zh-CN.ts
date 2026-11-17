@@ -1,3 +1,4 @@
+import { consoleUi } from "./consoleUi.zh-CN";
 import { notifications } from "./notifications.zh-CN";
 import { marketSync } from "./marketSync.zh-CN";
 import { protocolProbeZhCN } from "./protocolProbe.zh-CN";
@@ -20,6 +21,7 @@ export const zhCN = {
   },
   playgroundAttachment: { expired: "刷新后之前的附件已不可用，请清空对话并重新上传附件后继续。" },
   notifications,
+  consoleUi,
   marketSync,
   protocolProbe: protocolProbeZhCN,
   logsUX: {

@@ -43,10 +43,10 @@ export function EndpointPicker({
   }));
   return (
     <section
-      className="min-w-0 space-y-3 rounded-xl border bg-card p-4"
+      className="min-w-0 space-y-3"
       aria-label={label ?? t("protocolProbe.select")}
     >
-      <div className="flex w-fit gap-1 rounded-lg bg-muted p-1" role="group" aria-label={t("protocolProbe.select")}>
+      <div className="flex w-full gap-1 rounded-lg bg-muted p-1" role="group" aria-label={t("protocolProbe.select")}>
         {[false, true].map((mode) => (
           <button
             type="button"
@@ -54,7 +54,7 @@ export function EndpointPicker({
             aria-pressed={mode === bypass}
             disabled={disabled || !endpoints.some((e) => isBypass(e) === mode)}
             onClick={() => onChange(endpoints.find((e) => isBypass(e) === mode)?.path ?? null)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 ${mode === bypass ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            className={`flex-1 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 ${mode === bypass ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
           >
             {t(mode ? "protocolProbe.bypass" : "protocolProbe.standard")}
           </button>

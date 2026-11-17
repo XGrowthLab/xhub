@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { HelpDisclosure } from "@/components/console/ConsolePrimitives";
 import { useT, t } from "@/i18n";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -18,14 +19,7 @@ const scopeName = (scope: EffectiveRouteTemplate["scope_type"]) => {
   return "";
 };
 
-/**
- * Picks one named template, or inherits.
- *
- * The dropdown is the choice. The line under it is what this scope will
- * actually route by, and which level that came from. A team that selected
- * nothing and a team whose organization selected a template look the same
- * without that line.
- */
+/** 路由模板选择器；接收当前绑定与变更回调，显示实际生效范围。继承规则按需展开，获取失败保持未知，不改变权限或绑定。 */
 const RouteTemplateSelect: React.FC<{
   accessToken: string | null;
   value: string;
@@ -119,7 +113,7 @@ const RouteTemplateSelect: React.FC<{
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{status}</p>
+      {status === t("pages.routeTemplates.inheritHint") ? <HelpDisclosure title={t("consoleUi.routeHelp")}>{status}</HelpDisclosure> : <p className="text-sm leading-6 text-muted-foreground">{status}</p>}
     </div>
   );
 };

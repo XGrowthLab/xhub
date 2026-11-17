@@ -107,13 +107,11 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
     });
   };
   const filteredOptions = getFilteredOptions();
+  // 仅有本人视图时无需占据一整块选择区；权限过滤与选中值保持不变。
+  if (filteredOptions.length <= 1) return null;
   return (
     <div className="w-full" data-id={dataId}>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <h2 className="text-sm font-medium text-muted-foreground">{title ?? t("pages.usage.viewTitle")}</h2>
-        <p className="text-sm text-muted-foreground">{description ?? t("pages.usage.viewDescription")}</p>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label={title ?? t("pages.usage.viewTitle")}>
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label={title ?? t("pages.usage.viewTitle")}>
         {filteredOptions.map((option) => {
           const selected = option.value === value;
           return (

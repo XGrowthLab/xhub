@@ -6,7 +6,7 @@ import {GATEWAY,UPSTREAM,MASTER,login,loginAdmin,sessionBearer,stableGoto} from 
 import {isSuccessfulGatewayGet} from "./gateway-response";
 
 /** 注册用量失败恢复闭环；locale 为界面语言，前置真实浏览器、网关和隔离数据库。
- * 真实推理后删除旧库列制造 HTTP 500，验证失败非零值、迁移后重试、聚合回退及实际跨日分页不完整；finally 恢复故障并删除资源，运行器删 schema。 */
+ * 真实推理后删除旧库列制造 HTTP 500，验证失败非零值、迁移后重试、聚合回退及实际跨日分页不完整；按指标核对真实预算金额，finally 恢复故障并删除资源，运行器删 schema。 */
 export function registerUsageErrorScenario(locale:"en"|"zh-CN"){
  test("usage errors fallback partial pages and retry "+locale,async({page},info)=>{
   test.setTimeout(150000);
@@ -32,7 +32,15 @@ export function registerUsageErrorScenario(locale:"en"|"zh-CN"){
    await stableGoto(page,"/usage");await expect(page.getByTestId("daily-spend-settled")).toBeVisible();
    // 真正推理后的预算消费不因统计范围改变；后续使用空历史范围核对同一用户与实际额度。
    const budget=page.getByRole("region",{name:tr("usageBudget.title")});
-   await expect(budget).toContainText("500.0000");
+   /** 用实际账户数核对三个预算指标；参数为美元消费与上限，返回断言完成信号；允许本地化格式，不复用产品计算函数，无写入副作用。 */
+   const expectBudgetAmounts=async(spent:number,limit:number)=>{
+    for(const [label,amount] of [["consoleUi.spent",spent],["consoleUi.limit",limit],["consoleUi.balance",Math.max(0,limit-spent)]] as const){
+     const value=budget.getByText(tr(label),{exact:true}).locator("..").getByRole("definition");
+     await expect(value).toHaveText(/\$[\d,]+(?:\.\d+)?/);
+     await expect.poll(async()=>Number((await value.innerText()).replace(/[^\d.-]/g,"")),{message:`${label} must match the real account balance`}).toBeCloseTo(amount,4);
+    }
+   };
+   await expectBudgetAmounts(0.10,500);
    const budgetBefore=await budget.textContent();
    expect((await page.request.post(control+"/usage/legacy")).status()).toBe(200);legacy=true;
    const failed=page.waitForResponse(r=>r.url().includes("/user/daily/activity")&&!r.url().includes("aggregated")&&r.status()===500);
@@ -50,8 +58,7 @@ export function registerUsageErrorScenario(locale:"en"|"zh-CN"){
    await create("/user/update",{user_id:userID,budget_reset_day:15});
    await page.reload();
    await expect(budget).toContainText(translate(locale,"userBudgetReset.day",{day:15}));
-   await expect(budget).toContainText("500.0000");
-   await expect(budget).toContainText("499.9000");
+   await expectBudgetAmounts(0.10,500);
    await fault("aggregated");await page.reload();await expect(page.getByTestId("daily-spend-settled")).toBeVisible();
    await expect(page.getByText(tr("usageLoad.failed"),{exact:true})).toHaveCount(0);
    expect((await page.request.post(control+"/usage/seed-pages",{data:{user_id:userID}})).status()).toBe(200);
@@ -79,11 +86,10 @@ export function registerUsageErrorScenario(locale:"en"|"zh-CN"){
    const userInfo=(await account.json()).user_info;
    expect(userInfo.spend).toBeGreaterThan(0);
    expect(userInfo.max_budget).toBe(500);
-   const expectedAmounts=translate(locale,"usageBudget.amounts",{spent:`$${userInfo.spend.toFixed(4)}`,limit:`$${userInfo.max_budget.toFixed(4)}`,remaining:`$${Math.max(0,userInfo.max_budget-userInfo.spend).toFixed(4)}`});
-   await expect(budget).toContainText(expectedAmounts);
+   await expectBudgetAmounts(userInfo.spend,userInfo.max_budget);
    const budgetBeforeEmpty=await budget.textContent();
    const rangeSpend=page.getByText(tr("usageBudget.rangeSpend"),{exact:false}).filter({visible:true}).locator("..").locator("p").last();
-   await expect(rangeSpend).not.toHaveText("$0.0000");
+   await expect(rangeSpend).not.toHaveText("$0.00");
    // 成功空范围才允许展示空统计，不沿用刚才的 52 日数据；预算余额不随查询窗口变化。
    await page.getByRole("button",{name:tr("Select Time Range"),exact:true}).click();
    await page.getByLabel(tr("Start date"),{exact:true}).fill("2020-01-01");await page.getByLabel(tr("End date"),{exact:true}).fill("2020-01-02");
@@ -94,9 +100,9 @@ export function registerUsageErrorScenario(locale:"en"|"zh-CN"){
    expect((await emptyRange.json()).metadata.total_spend).toBe(0);
    await expect(page.getByTestId("daily-spend-settled")).toBeVisible();
    await expect(page.getByText(tr("usageLoad.failed"),{exact:true})).toHaveCount(0);
-   await expect(rangeSpend).toHaveText("$0.0000");
+   await expect(rangeSpend).toHaveText("$0.00");
    expect(await budget.textContent()).toBe(budgetBeforeEmpty);
-   await expect(budget).toContainText(expectedAmounts);
+   await expectBudgetAmounts(userInfo.spend,userInfo.max_budget);
    // 管理员实体视图同样不能将失败显示为零，筛选入口应保持可用以便修复范围。
    await login(page,"admin",MASTER,locale);
    await expect(page.getByText(tr("nav.apiKeys"),{exact:true}).first()).toBeVisible();

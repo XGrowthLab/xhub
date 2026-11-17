@@ -6,6 +6,7 @@ import * as networking from "@/components/networking";
 import * as roles from "@/utils/roles";
 import SearchTools from "./SearchTools";
 import { SearchTool } from "./types";
+import { I18nProvider } from "@/i18n";
 
 vi.mock("@/components/networking", () => ({
   fetchSearchTools: vi.fn(),
@@ -54,11 +55,14 @@ const providers = [
   { provider_name: "tavily", ui_friendly_name: "Tavily Search" },
 ];
 
+/** 用真实英文语言上下文与独立查询客户端渲染搜索工具页面，返回测试句柄；不替换日期组件，DOM 卸载后回收缓存。 */
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SearchTools accessToken="test-token" userRole="Admin" userID="user-1" />
+      <I18nProvider initialLocale="en">
+        <SearchTools accessToken="test-token" userRole="Admin" userID="user-1" />
+      </I18nProvider>
     </QueryClientProvider>,
   );
 };
@@ -179,11 +183,4 @@ describe("SearchTools edit payload", () => {
       search_tool_info: undefined,
     });
   });
-});
-
-/** 固定导入期英文翻译，验证表单和接口契约；本组不测试语言切换，DOM 由框架自动清理。 */
-vi.mock("@/i18n", async () => {
-  const { translate } = await import("@/i18n/translate");
-  const t = (key: string, params?: Record<string, string | number>) => translate("en", key, params);
-  return { getActiveLocale: () => "en", t, useT: () => t };
 });

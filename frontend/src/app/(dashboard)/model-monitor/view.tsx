@@ -1,7 +1,7 @@
 "use client";
 import React, { useEffect, useMemo, useState } from "react";
 import { parseAsString, useQueryStates } from "nuqs";
-import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend } from "recharts";
+import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useI18n } from "@/i18n";
 import { Input } from "@/components/ui/input";
@@ -253,8 +253,8 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
               <p className="text-sm text-muted-foreground">{t("monitor.chartLimit", { count: 8 })}</p>
             )}
             {rows.length > 0 ? (
-              <div className="h-80 mt-4">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="mt-4 h-auto">
+                <ResponsiveContainer width="100%" height={288}>
                   <LineChart data={plot} accessibilityLayer>
                     <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                     <XAxis
@@ -280,7 +280,6 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
                       }}
                       formatter={(value) => format(typeof value === "number" ? value : null, metric === "cost")}
                     />
-                    <Legend wrapperStyle={{ paddingTop: 16, fontSize: 12 }} />
                     {shown.map((row, i) => (
                       <Line
                         key={keys[i]}
@@ -295,13 +294,16 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
+                <ul aria-label={t("consoleUi.legend")} className="mt-4 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+                  {shown.map((row, i) => <li key={keys[i]} className="flex min-w-0 items-center gap-2" title={label(row)}><span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: colors[i] }} aria-hidden /><span className="truncate text-muted-foreground">{label(row)}</span></li>)}
+                </ul>
               </div>
             ) : (
               <p className="py-16 text-center text-sm text-muted-foreground">{t("monitor.empty")}</p>
             )}
           </section>
-          <section className="overflow-auto rounded-lg border bg-card">
-            <table className="w-full text-sm">
+          <section className="min-w-0 overflow-x-auto rounded-xl border bg-card">
+            <table className="w-full min-w-[1200px] text-sm">
               <caption className="px-5 py-4 text-left text-base font-semibold">
                 {t("monitor.detail", { count: rows.length })}
               </caption>
@@ -335,10 +337,10 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
               <tbody>
                 {rows.map((row) => (
                   <tr key={seriesKey(row)} className="transition-colors hover:bg-muted/30">
-                    <td className="border-b px-4 py-3 text-sm text-muted-foreground">
+                    <td className="border-b px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">
                       {row.supplier || t("monitor.unassigned")}
                     </td>
-                    <th className="border-b px-4 py-3 text-left text-sm font-medium" scope="row">
+                    <th className="border-b px-4 py-3 text-left text-sm font-medium whitespace-nowrap" scope="row">
                       {row.model || t("monitor.unknownModel")}
                     </th>
                     {(
