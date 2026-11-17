@@ -3,7 +3,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文软预算闭环：页面创建微小额度Key，真实调用允许超支后拒绝下一次，页面调额恢复。
- * 前置隔离PG、生产前端和本地供应商；验证实测扣费/无预占/文案及零额度，finally删除自建Key和模型。 */
+ * 前置隔离PG、生产前端和本地供应商；展开预算说明后验证文案及实测扣费/无预占，finally删除自建Key和模型。 */
 export function registerSoftBudgetScenario(locale: "en" | "zh-CN") {
   test("soft budget completes requests and stops after exhaustion " + locale, async ({ page }) => {
     await loginAdmin(page);
@@ -22,7 +22,12 @@ export function registerSoftBudgetScenario(locale: "en" | "zh-CN") {
       await page.getByTestId("create-key-button").click();
       await page.getByLabel(tr("Key Name")).fill("软预算-test-" + locale);
       await page.getByLabel(tr("Max Budget (USD)"), {exact: true}).fill("0.000001");
-      await expect(page.getByText(tr("hardBudget.contract"))).toBeVisible();
+      const dialog = page.getByRole("dialog");
+      const budgetContract = dialog.getByText(tr("hardBudget.contract"), { exact: true });
+      await expect(budgetContract).toBeHidden();
+      // 创建页的补充说明默认收起；通过真实点击验证可展开，不绕过交互直接读取隐藏内容。
+      await dialog.getByText(tr("consoleUi.budgetHelp"), { exact: true }).click();
+      await expect(budgetContract).toBeVisible();
       const minted = page.waitForResponse(r => r.url().includes("/key/generate") && r.request().method() === "POST");
       await page.getByRole("button", {name: tr("pages.apiKeys.createSubmit"), exact:true}).click();
       const response = await minted; expect(response.status()).toBe(200);
