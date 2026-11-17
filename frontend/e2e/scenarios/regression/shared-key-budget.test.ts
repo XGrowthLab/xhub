@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { GATEWAY, login, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
 import { translate } from "../../../src/i18n/translate";
 
-// 双语完整流程：普通用户未建 Key 时看到个人预算，创建固定及两个空预算 Key，真实推理及控制台共享余额。
+// 双语完整流程：普通用户未建 Key 时看到独立预算上限指标，创建固定及两个空预算 Key，真实推理及控制台共享余额。
 // 前置独立后台与离线上游；不触及生产账户，finally 删除用户及其 Key，运行器回收 schema。
 for (const locale of ["en", "zh-CN"] as const)
   test("shared personal key budget " + locale, async ({ page }) => {
@@ -23,7 +23,8 @@ for (const locale of ["en", "zh-CN"] as const)
       await expect(page.getByTestId("create-key-button")).toBeVisible();
       const session = { Authorization: "Bearer " + (await sessionBearer(page)) };
       await stableGoto(page, "/usage");
-      await expect(page.getByRole("region", { name: tr("usageBudget.title") })).toContainText("$500.0000");
+      const budget = page.getByRole("region", { name: tr("usageBudget.title") });
+      await expect(budget.getByText(tr("consoleUi.limit"), { exact: true }).locator("..").getByRole("definition")).toHaveText("$500.00");
       const tokens: string[] = [];
       const ids: string[] = [];
       for (const [name, budget] of [
