@@ -70,6 +70,8 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
+/** 渲染公开模型目录；参数提供已有会话和嵌入模式，保留服务端目录与管理员自定义说明。
+ * 内部构建版本只留在原 API 契约中，不作为面向用户的品牌说明；读取与权限行为保持不变。 */
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const t = useT();
   const anchor = useComboboxAnchor();
@@ -78,7 +80,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
   const [pageTitle, setPageTitle] = useState<string>("XHub");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
-  const [litellmVersion, setLitellmVersion] = useState<string>("");
   const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -127,7 +128,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         setCustomDocsDescription(
           publicModelHubInfo.custom_docs_description ? publicModelHubInfo.custom_docs_description : null,
         );
-        setLitellmVersion(publicModelHubInfo.litellm_version);
         setUsefulLinks(publicModelHubInfo.useful_links || {});
       };
 
@@ -322,9 +322,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     ? customDocsDescription
                     : t("Proxy Server to call 100+ LLMs in the OpenAI format.")}
                 </p>
-                {litellmVersion ? (
-                  <p className="text-sm text-muted-foreground">v{litellmVersion}</p>
-                ) : null}
               </Card>
             )}
 
