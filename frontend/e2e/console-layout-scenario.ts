@@ -16,6 +16,62 @@ async function recordLayout(page: Page, name: string) {
   await page.screenshot({ path: join(directory, `${name}.png`), fullPage: false, animations: "disabled" });
 }
 
+/** 检查真实排版的同排卡片；page 为已加载列表，prefix 限定本测试模型。
+ * 比较外框、价格和操作区的实际坐标，覆盖不同元数据长度；不依赖类名、不写数据。 */
+async function expectAlignedModelCards(page: Page, prefix: string) {
+  const cards = page
+    .getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: new RegExp("^" + prefix) }) });
+  await expect(cards).toHaveCount(3);
+  const positions = await cards.evaluateAll((elements) =>
+    elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      const price = element.querySelector('[data-testid="model-price-summary"]')!.getBoundingClientRect();
+      const actions = element.querySelector('[data-testid="model-actions"]')!.getBoundingClientRect();
+      return { top: bounds.top, bottom: bounds.bottom, price: price.top, actions: actions.top };
+    }),
+  );
+  for (let index = 1; index < positions.length; index++) {
+    const first = positions[index - 1],
+      next = positions[index];
+    if (Math.abs(first.top - next.top) > 1) continue;
+    for (const key of ["bottom", "price", "actions"] as const) {
+      expect(Math.abs(first[key] - next[key]), `同排卡片 ${key} 必须对齐`).toBeLessThanOrEqual(1);
+    }
+  }
+  expect(
+    positions.some((entry, index) => index > 0 && Math.abs(entry.top - positions[index - 1].top) <= 1),
+    "桌面必须实际验证至少一对并排卡片",
+  ).toBe(true);
+}
+
+/** 检查用量工具栏无意外纵向滚动及按钮文字挤压；page 为真实用量页，locale 控制可访问名称。
+ * 断言真实 DOM 尺寸，控件组可换行但标签保持完整；不改变预算或筛选规则。 */
+async function expectReadableUsageControls(page: Page, locale: "en" | "zh-CN") {
+  for (const tablist of await page.getByRole("tablist").all()) {
+    if (!(await tablist.isVisible())) continue;
+    expect(
+      await tablist.evaluate((element) => element.scrollHeight - element.clientHeight),
+      "切换条不能产生竖向滚动条",
+    ).toBeLessThanOrEqual(1);
+  }
+  for (const key of ["Table View", "Chart View", "Public Model Name", "Litellm Model Name"]) {
+    const button = page.getByRole("button", { name: translate(locale, key), exact: true }).first();
+    await expect(button).toBeVisible();
+    const size = await button.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return {
+        textHeight: range.getBoundingClientRect().height,
+        lineHeight: parseFloat(getComputedStyle(element).lineHeight),
+        overflow: element.scrollWidth - element.clientWidth,
+      };
+    });
+    expect(size.textHeight, `${key} 不应挤成多行或竖排`).toBeLessThanOrEqual(size.lineHeight + 1);
+    expect(size.overflow, `${key} 不应截断文字`).toBeLessThanOrEqual(1);
+  }
+}
+
 /** 控制台双语真实闭环；locale 指定语言，独立用户/模型由真实管理接口创建。
  * 验证浏览器创建密钥、调用、结算、预算展示、模型详情、监控、账户复制及窄屏；finally 删除本场景资源，外层回收 schema。 */
 export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
@@ -28,6 +84,7 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
     const model = `gpt-console-layout-${locale}`;
     const tr = (key: string) => translate(locale, key);
     const alias = "My desktop key";
+    const extraModelIDs: string[] = [];
     let userID = "",
       modelID = "",
       keyID = "";
@@ -55,6 +112,40 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       });
       expect(deployment.status(), await deployment.text()).toBe(200);
       modelID = (await deployment.json()).model_info.id;
+      // 与稀疏模型并排放置最长能力说明，避免只测同构卡片漏掉线上错位。
+      for (const variant of ["brief", "features"]) {
+        const detailed = variant === "features";
+        const extra = await page.request.post(GATEWAY + "/model/new", {
+          headers: admin,
+          data: {
+            model_name: model + "-" + variant,
+            litellm_params: {
+              model: "e2e-layout-no-metadata",
+              custom_llm_provider: "openai",
+              api_base: UPSTREAM + "/v1",
+              api_key: "sk-fake",
+              input_cost_per_token: 0.000001,
+              output_cost_per_token: 0.000003,
+              ...(detailed
+                ? { cache_read_input_token_cost: 0.0000001, cache_creation_input_token_cost: 0.000002 }
+                : {}),
+            },
+            model_info: {
+              transport: "bypass_openai_chat",
+              endpoint_types: ["chat"],
+              pricing_source: "manual",
+              supports_function_calling: detailed,
+              supports_response_schema: detailed,
+              supports_reasoning: detailed,
+              supports_vision: detailed,
+              supports_prompt_caching: detailed,
+              ...(detailed ? { max_input_tokens: 1000000, max_output_tokens: 384000 } : {}),
+            },
+          },
+        });
+        expect(extra.status(), await extra.text()).toBe(200);
+        extraModelIDs.push((await extra.json()).model_info.id);
+      }
       const account = await page.request.post(GATEWAY + "/user/new", {
         headers: admin,
         data: { user_email: email, password: "fixture-password", max_budget: 500, budget_reset_day: 0 },
@@ -113,7 +204,14 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await page.getByRole("textbox", { name: tr("Search"), exact: true }).fill(model);
       const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: model, exact: true }) });
       await expect(card).toBeVisible();
-      expect((await card.boundingBox())!.height).toBeLessThan(560);
+      expect((await card.boundingBox())!.height).toBeLessThan(600);
+      for (const width of [1280, 1920, 1440]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expectAlignedModelCards(page, model);
+      }
+      await page.evaluate(() => (document.documentElement.style.fontSize = "20px"));
+      await expectAlignedModelCards(page, model);
+      await page.evaluate(() => document.documentElement.style.removeProperty("font-size"));
       await recordLayout(page, `models-${locale}`);
       await page.getByRole("button", { name: tr("consoleUi.darkMode"), exact: true }).click();
       await expect(page.locator("html")).toHaveClass(/dark/);
@@ -178,6 +276,17 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
         .evaluateAll((bars) => bars.map((bar) => Number(bar.getAttribute("width"))));
       expect(barWidths.length).toBeGreaterThan(0);
       expect(barWidths.every((width) => width > 0 && width <= 48)).toBe(true);
+      const modelChart = page.getByTestId("top-models-spend");
+      const modelLabel = modelChart.getByText(model, { exact: true });
+      await expect(modelLabel).toBeVisible();
+      expect(
+        (await modelLabel.boundingBox())!.x - (await modelChart.boundingBox())!.x,
+        "模型排行短标签左侧不能固定留出大块空白",
+      ).toBeLessThan(24);
+      await expectReadableUsageControls(page, locale);
+      await page.evaluate(() => (document.documentElement.style.fontSize = "20px"));
+      await expectReadableUsageControls(page, locale);
+      await page.evaluate(() => document.documentElement.style.removeProperty("font-size"));
       await recordLayout(page, `usage-${locale}`);
 
       await stableGoto(page, "/model-monitor");
@@ -198,6 +307,7 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
         await recordLayout(page, `models-${locale}-${width}`);
         await stableGoto(page, "/usage");
         await expect(page.getByRole("region", { name: tr("usageBudget.title"), exact: true })).toBeVisible();
+        await expectReadableUsageControls(page, locale);
         await recordLayout(page, `usage-${locale}-${width}`);
         await page.getByRole("button", { name: tr("Select Time Range"), exact: true }).click();
         await recordLayout(page, `date-picker-${locale}-${width}`);
@@ -216,6 +326,10 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       const after = await page.request.get(GATEWAY + "/user/info?user_id=" + userID, { headers: admin });
       expect((await after.json()).user_info).toMatchObject({ max_budget: 500, budget_reset_day: 0 });
     } finally {
+      for (const id of extraModelIDs)
+        expect((await page.request.post(GATEWAY + "/model/delete", { headers: admin, data: { id } })).status()).toBe(
+          200,
+        );
       if (keyID)
         expect(
           (await page.request.post(GATEWAY + "/key/delete", { headers: admin, data: { keys: [keyID] } })).status(),

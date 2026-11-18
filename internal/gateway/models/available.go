@@ -75,11 +75,11 @@ func sharedCapabilities(first, next []string) []string {
 	return shared
 }
 
-// availableCard 把部署转换为可选模型卡片；优先使用部署价格，其次按base_model绑定读取目录，避免改名丢价。
+// availableCard 把部署转换为可选模型卡片；完整展示已确认分档或费率快照，旧部署按 base_model 绑定目录。
 // 参数 entry（config.ModelEntry）：一条模型部署，含对外名、供应商参数和价格覆盖。
 // 返回 map[string]any（map[string]any）：可用卡片的字段表。缺键表示上游或库里没有这个字段。
 // 调用：仅在 available.go 内使用
-// 测试：available_pricing_test.go覆盖绑定、手工覆盖、免费和缺失；无持久化副作用。
+// 测试：available_pricing_test.go 与 available_prices_test.go 覆盖绑定、分档、手工覆盖、免费和缺失；无持久化副作用。
 func availableCard(entry config.ModelEntry) map[string]any {
 	info := entry.ModelInfo
 	// 展示按明确价格绑定取目录，不能用可修改的公开别名替代 base_model。
@@ -112,6 +112,7 @@ func availableCard(entry config.ModelEntry) map[string]any {
 		"cache_read_price":  firstPrice(priceInfo, priceRow, "cache_read_price", "cache_read_input_token_cost"),
 		"cache_write_price": firstPrice(priceInfo, priceRow, "cache_write_price", "cache_creation_input_token_cost"),
 	}
+	addAvailablePrices(entry, card)
 	if err := providerdeployment.ValidateDeployment(entry); err != nil {
 		card["unavailable_reason"] = err.Error()
 	}

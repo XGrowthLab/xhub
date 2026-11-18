@@ -33,7 +33,10 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
   const cost = async () => {
     const response = await page.request.post(GATEWAY + "/v1/chat/completions", {
       headers,
-      data: { model: "e2e-tier-deployment", messages: [{ role: "user", content: `Verify tier billing ${++sequence}.` }] },
+      data: {
+        model: "e2e-tier-deployment",
+        messages: [{ role: "user", content: `Verify tier billing ${++sequence}.` }],
+      },
     });
     expect(response.status(), await response.text()).toBe(200);
     return Number(response.headers()["x-litellm-response-cost"]);
@@ -61,6 +64,24 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     await expect(page.getByRole("row").filter({ hasText: "e2e-tier-deployment" })).toContainText(
       "Input tokens: 0 < amount ≤ 5",
     );
+    // 真实授权卡片必须显示当前已确认档位，不再将分档部署标为缺价；语言切换不影响账单。
+    await stableGoto(page, "/mine-models");
+    await page.getByRole("textbox", { name: "Search", exact: true }).fill("e2e-tier-deployment");
+    const card = page.getByRole("article").filter({ hasText: "e2e-tier-deployment" });
+    await expect(card).toContainText("$1–$2");
+    await expect(card).toContainText("$2–$3");
+    await expect(card).not.toContainText("Price unavailable");
+    await card.getByRole("button", { name: "Model details", exact: true }).click();
+    const detail = page.getByRole("dialog");
+    await expect(detail.getByRole("table", { name: "Input tokens: 0 < amount ≤ 5", exact: true })).toBeVisible();
+    await expect(
+      detail.getByRole("table", { name: "Input tokens: 5 < amount ≤ 99,999,999", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "中文", exact: true }).click();
+    await card.getByRole("button", { name: "模型详情", exact: true }).click();
+    await expect(detail.getByRole("table", { name: "输入 Token：5 < 数量 ≤ 99,999,999", exact: true })).toBeVisible();
+    expect(await cost()).toBeCloseTo(0.000022, 10);
   } finally {
     expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
   }

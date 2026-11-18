@@ -60,7 +60,9 @@ interface UsagePageProps {
   organizations: Organization[];
 }
 
-/** 用量路由调用的页面组件；参数为可见团队及组织，返回按日期与身份隔离的统计视图；读取失败回退分页，全部失败显示持续错误，部分失败提示不完整；禁用未知/不完整导出，禁止沿用旧筛选或旧数据源。 */
+/** 用量路由展示已授权的统计、预算与排行；teams/organizations 来自权限上下文，返回响应式用量页。
+ * 读取失败回退分页，部分失败提示不完整并禁用导出；禁止沿用旧筛选或旧数据源。
+ * 切换控件按组换行，图表按标签宽度布局；沿用既有请求及计费数据，不改变预算或权限。 */
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { t, locale } = useI18n();
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
@@ -427,17 +429,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           </div>}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <TabsList className="max-w-full overflow-x-auto justify-start">
-                    <TabsTrigger value="cost" className="flex-none px-3">
+              <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
+                    <TabsTrigger value="cost" className="h-9 flex-none px-3">
                       {t("pages.usage.cost")}
                     </TabsTrigger>
-                    <TabsTrigger value="models" className="flex-none px-3">
+                    <TabsTrigger value="models" className="h-9 flex-none px-3">
                       {t("pages.usage.modelActivity")}
                     </TabsTrigger>
-                    <TabsTrigger value="keys" className="flex-none px-3">
+                    <TabsTrigger value="keys" className="h-9 flex-none px-3">
                       {t("pages.usage.keyActivity")}
                     </TabsTrigger>
-                    <TabsTrigger value="endpoints" className="flex-none px-3">
+                    <TabsTrigger value="endpoints" className="h-9 flex-none px-3">
                       {t("pages.usage.endpointActivity")}
                     </TabsTrigger>
                   </TabsList>
@@ -679,14 +681,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           <h3 className="text-lg font-medium text-foreground">
                             {modelViewType === "groups" ? t("Top Public Model Names") : t("Top Litellm Models")}
                           </h3>
-                          <div className="flex justify-between items-center mb-4">
+                          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                             <Tabs
+                              className="shrink-0"
                               value={String(topModelsLimit)}
                               onValueChange={(value: string) => setTopModelsLimit(Number(value))}
                             >
-                              <TabsList className="max-w-full overflow-x-auto justify-start">
+                              <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
                                 {TOP_MODEL_LIMITS.map((limit) => (
-                                  <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
+                                  <TabsTrigger key={limit} value={String(limit)} className="h-9 flex-none px-3">
                                     {limit}
                                   </TabsTrigger>
                                 ))}
@@ -697,7 +700,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           {loading ? (
                             <ChartLoader isDateChanging={isDateChanging} />
                           ) : (
-                            <div className="relative max-h-[600px] overflow-y-auto">
+                            <div data-testid="top-models-spend" className="relative max-h-[600px] min-w-0 overflow-x-hidden overflow-y-auto">
                               {(() => {
                                 const modelData = modelViewType === "groups" ? topModelGroups : topModels;
                                 return (
@@ -710,7 +713,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     colors={["cyan"]}
                                     valueFormatter={valueFormatterSpend}
                                     layout="vertical"
-                                    yAxisWidth={200}
+                                    yAxisWidth="auto"
                                     showLegend={false}
                                     customTooltip={({ payload, active }) => {
                                       if (!active || !payload?.[0]) return null;

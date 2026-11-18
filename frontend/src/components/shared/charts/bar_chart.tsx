@@ -18,7 +18,7 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   valueFormatter?: (value: number) => string;
   stack?: boolean;
   layout?: "horizontal" | "vertical";
-  yAxisWidth?: number;
+  yAxisWidth?: number | "auto";
   tickGap?: number;
   showLegend?: boolean;
   showXAxis?: boolean;
@@ -30,6 +30,9 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
+/** 展示分类柱状图；参数包含真实数据、维度、交互与轴宽，返回图表或无数据状态。
+ * vertical + auto 由 Recharts 按实际标签测量轴宽，避免排行短名称预留数百像素空白；不改变数据和费用。
+ */
 export function BarChart<TDatum extends Record<string, unknown>>({
   data,
   index,

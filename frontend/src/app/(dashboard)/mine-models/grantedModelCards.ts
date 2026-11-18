@@ -1,6 +1,24 @@
 import type { ModelEndpoint } from "@/components/llm_calls/fetch_models";
 
+/** 授权模型接口公开的已确认费率；usd 按基础单位计价，不含供应商凭据。 */
+export type ModelPriceRate = {
+  measure: string;
+  side: string;
+  variant?: string;
+  window: string;
+  usd: number;
+};
+
+/** 已确认的输入长度档位；输入和输出边界采用左开右闭语义。 */
+export type ModelPriceTier = {
+  input_range: [number, number];
+  output_range: [number, number];
+  rates: ModelPriceRate[];
+};
+
 export type MyModelCard = {
+  price_tiers?: ModelPriceTier[];
+  rates?: ModelPriceRate[];
   endpoints?: ModelEndpoint[];
   unavailable_reason?: string;
   id: string;

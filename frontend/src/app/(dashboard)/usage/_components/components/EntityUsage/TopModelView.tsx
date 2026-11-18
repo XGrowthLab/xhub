@@ -22,6 +22,8 @@ interface TopModelViewProps {
 
 export const TOP_MODEL_LIMITS = [5, 10, 25, 50];
 
+/** 展示模型排行；参数为授权统计及条数回调，返回表格或图表，无后台写操作。
+ * 条数与视图控件按组换行，避免窄卡片将标签压为竖排；图表按实际名称计算轴宽。 */
 export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
   const t = useT();
   const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
@@ -61,22 +63,30 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
 
   return (
     <>
-      <div className="mb-4 flex justify-between items-center">
-        <Tabs value={String(topModelsLimit)} onValueChange={(value: string) => setTopModelsLimit(Number(value))}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Tabs
+          className="shrink-0"
+          value={String(topModelsLimit)}
+          onValueChange={(value: string) => setTopModelsLimit(Number(value))}
+        >
           <TabsList aria-label={t("Number of models to show")}>
             {TOP_MODEL_LIMITS.map((limit) => (
-              <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
+              <TabsTrigger key={limit} value={String(limit)} className="h-8 flex-none px-3">
                 {limit}
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
-        <Tabs value={modelViewMode} onValueChange={(value: string) => setModelViewMode(value as "chart" | "table")}>
+        <Tabs
+          className="shrink-0"
+          value={modelViewMode}
+          onValueChange={(value: string) => setModelViewMode(value as "chart" | "table")}
+        >
           <TabsList aria-label={t("Top model view mode")}>
-            <TabsTrigger value="table" className="flex-none px-3">
+            <TabsTrigger value="table" className="h-8 flex-none px-3">
               {t("Table View")}
             </TabsTrigger>
-            <TabsTrigger value="chart" className="flex-none px-3">
+            <TabsTrigger value="chart" className="h-8 flex-none px-3">
               {t("Chart View")}
             </TabsTrigger>
           </TabsList>
@@ -93,7 +103,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
             colors={["cyan"]}
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
             layout="vertical"
-            yAxisWidth={200}
+            yAxisWidth="auto"
             tickGap={5}
             showLegend={false}
           />

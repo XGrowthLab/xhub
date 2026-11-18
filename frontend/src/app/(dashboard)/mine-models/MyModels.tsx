@@ -23,16 +23,11 @@ import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { MyModelCard } from "./grantedModelCards";
 import { MyModelDetail, type ModelDetailTab } from "./MyModelDetail";
+import { formatModelPrice, modelPriceRange } from "./modelPriceSummary";
 
 export type { MyModelCard };
 
 type SortOrder = "name" | "input" | "output";
-
-/** 格式化卡片费率；参数为每百万 Token 单价，返回金额或缺价提示；供模型卡片使用，无副作用。 */
-function priceText(value: number | null): string {
-  if (value == null) return t("Price unavailable");
-  return "$" + new Intl.NumberFormat("en-US", { maximumSignificantDigits: 8 }).format(value);
-}
 
 /** 返回模型类别的展示名称；参数为后台类别，返回本地化名称，未知类别原样展示；供列表分组使用。 */
 function categoryLabel(category: string): string {
@@ -53,7 +48,8 @@ function categoryLabel(category: string): string {
 }
 
 /** 展示授权模型摘要及详情、调试两个入口；参数为模型及打开回调，返回卡片。
- * 供我的模型列表调用；只按实际绑定展示可用状态，不因目录分类推断接口。 */
+ * 供我的模型列表调用；五个子网格行按相邻卡片的真实内容共同伸展，使价格与操作对齐而不写死高度。
+ * 只按实际绑定展示可用状态，不因目录分类推断接口；分档价只读已确认快照。 */
 function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelDetailTab) => void }) {
   const { t, locale } = useI18n();
   const capabilityIcons: Record<string, typeof Wrench> = {
@@ -63,11 +59,13 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
     vision: ImageIcon,
     caching: Database,
   };
+  const cacheRead = modelPriceRange(model, "cache_read");
+  const cacheWrite = modelPriceRange(model, "cache_write");
   const unavailable = Boolean(model.unavailable_reason) || model.endpoints?.length === 0;
   return (
     <article
       data-testid={"my-model-" + model.id}
-      className="flex min-w-0 flex-col rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
+      className="row-span-5 grid min-w-0 grid-rows-subgrid gap-y-0 rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex items-start gap-3">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background">
@@ -92,7 +90,8 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           {t(unavailable ? "myModels.needsConfiguration" : "myModels.available")}
         </Badge>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap content-start gap-2">
+        {model.price_tiers?.length ? <Badge variant="secondary">{t("consoleUi.tieredPrice")}</Badge> : null}
         <Badge variant="outline" className="font-mono text-xs">
           {categoryLabel(model.category)}
         </Badge>
@@ -106,65 +105,71 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           );
         })}
       </div>
-      {(model.max_input_tokens || model.max_output_tokens) && (
-        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-          {model.max_input_tokens != null && (
-            <span>
-              {t("priceCatalog.maxInput")}{" "}
-              <strong className="font-medium text-foreground">
-                {t("consoleUi.tokenLimit", {
-                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
-                    model.max_input_tokens,
-                  ),
-                })}
-              </strong>
-            </span>
-          )}
-          {model.max_output_tokens != null && (
-            <span>
-              {t("priceCatalog.maxOutput")}{" "}
-              <strong className="font-medium text-foreground">
-                {t("consoleUi.tokenLimit", {
-                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
-                    model.max_output_tokens,
-                  ),
-                })}
-              </strong>
-            </span>
-          )}
-        </div>
-      )}
-      <dl className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4">
-        {[
-          { label: t("Input"), value: model.input_price },
-          { label: t("Output"), value: model.output_price },
-        ].map(({ label, value }) => (
-          <div key={label} className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{label}</dt>
-            <dd className="mt-1 flex flex-wrap items-baseline gap-1.5">
-              <span className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold tabular-nums"}>
-                {priceText(value)}
+      <div data-testid="model-limits" className="min-w-0">
+        {(model.max_input_tokens || model.max_output_tokens) && (
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            {model.max_input_tokens != null && (
+              <span>
+                {t("priceCatalog.maxInput")}{" "}
+                <strong className="font-medium text-foreground">
+                  {t("consoleUi.tokenLimit", {
+                    count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                      model.max_input_tokens,
+                    ),
+                  })}
+                </strong>
               </span>
-              {value != null && <span className="sr-only">{t("consoleUi.units")}</span>}
-            </dd>
+            )}
+            {model.max_output_tokens != null && (
+              <span>
+                {t("priceCatalog.maxOutput")}{" "}
+                <strong className="font-medium text-foreground">
+                  {t("consoleUi.tokenLimit", {
+                    count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                      model.max_output_tokens,
+                    ),
+                  })}
+                </strong>
+              </span>
+            )}
           </div>
-        ))}
-      </dl>
-      {(model.cache_read_price != null || model.cache_write_price != null) && (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {model.cache_read_price != null && (
-            <span>
-              {t("Cache Read")} {priceText(model.cache_read_price)}
-            </span>
-          )}
-          {model.cache_write_price != null && (
-            <span>
-              {t("Cache Write")} {priceText(model.cache_write_price)}
-            </span>
-          )}
-        </div>
-      )}
-      <div className="mt-5 flex items-center gap-2 border-t pt-4">
+        )}
+      </div>
+      <div data-testid="model-price-summary" className="mt-5 border-t border-border pt-4">
+        <dl className="grid grid-cols-2 gap-3">
+          {[
+            { label: t("Input"), value: modelPriceRange(model, "input") },
+            { label: t("Output"), value: modelPriceRange(model, "output") },
+          ].map(({ label, value }) => (
+            <div key={label} className="min-w-0">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                <span
+                  className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold tabular-nums"}
+                >
+                  {formatModelPrice(value) || t("Price unavailable")}
+                </span>
+                {value != null && <span className="sr-only">{t("consoleUi.units")}</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {(cacheRead || cacheWrite) && (
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {cacheRead != null && (
+              <span>
+                {t("Cache Read")} {formatModelPrice(cacheRead)}
+              </span>
+            )}
+            {cacheWrite != null && (
+              <span>
+                {t("Cache Write")} {formatModelPrice(cacheWrite)}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+      <div data-testid="model-actions" className="mt-5 flex items-center gap-2 border-t pt-4">
         <Button variant="outline" className="min-w-0 flex-1" onClick={() => onOpen("pricing")}>
           {t("consoleUi.modelDetails")}
         </Button>
@@ -224,9 +229,15 @@ export function MyModels({
       })
       .sort((a, b) => {
         if (sort === "input")
-          return (a.input_price ?? Infinity) - (b.input_price ?? Infinity) || a.id.localeCompare(b.id);
+          return (
+            (modelPriceRange(a, "input")?.min ?? Infinity) - (modelPriceRange(b, "input")?.min ?? Infinity) ||
+            a.id.localeCompare(b.id)
+          );
         if (sort === "output")
-          return (a.output_price ?? Infinity) - (b.output_price ?? Infinity) || a.id.localeCompare(b.id);
+          return (
+            (modelPriceRange(a, "output")?.min ?? Infinity) - (modelPriceRange(b, "output")?.min ?? Infinity) ||
+            a.id.localeCompare(b.id)
+          );
         return a.id.localeCompare(b.id);
       });
   }, [category, models, provider, query, sort]);
@@ -364,7 +375,7 @@ export function MyModels({
               ).map(([group, items]) => (
                 <section key={group} aria-label={categoryLabel(group)}>
                   <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{categoryLabel(group)}</h2>
-                  <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
                     {items.map((model) => (
                       <ModelCard key={model.id} model={model} onOpen={(tab) => setDetail({ model, tab })} />
                     ))}

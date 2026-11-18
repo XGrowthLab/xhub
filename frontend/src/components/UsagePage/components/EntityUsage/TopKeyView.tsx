@@ -24,6 +24,8 @@ interface TopKeyViewProps {
   setTopKeysLimit: (limit: number) => void;
 }
 
+/** 展示密钥排行及表格/图表切换；参数为已授权用量与数量回调，返回视图。
+ * 工具栏不足一行时按控件组换行；读取密钥详情的既有权限与调用行为保持不变。 */
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
   const t = useT();
   const { accessToken } = useAuthorized();
@@ -171,12 +173,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
   return (
     <>
-      <div className="mb-4 flex justify-between items-center">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <RadioGroup
           aria-label={t("Number of top keys to show")}
           value={String(topKeysLimit)}
           onValueChange={(limit: unknown) => setTopKeysLimit(Number(limit))}
-          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-[3px]"
+          className="inline-flex w-fit shrink-0 items-center gap-1 rounded-lg bg-muted p-[3px]"
         >
           {TOP_KEYS_LIMITS.map((limit) => (
             <Label
@@ -188,16 +190,18 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             </Label>
           ))}
         </RadioGroup>
-        <div className="flex space-x-2">
+        <div className="flex shrink-0 gap-1 rounded-lg bg-muted p-1">
           <button
             onClick={() => setViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
+            aria-pressed={viewMode === "table"}
+            className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             {t("Table View")}
           </button>
           <button
             onClick={() => setViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
+            aria-pressed={viewMode === "chart"}
+            className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             {t("Chart View")}
           </button>
@@ -213,7 +217,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             index="display_key_alias"
             categories={["spend"]}
             colors={["cyan"]}
-            yAxisWidth={120}
+            yAxisWidth="auto"
             tickGap={5}
             layout="vertical"
             showLegend={false}

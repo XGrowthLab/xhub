@@ -62,7 +62,8 @@ describe("BarChart", () => {
     expect(onValueChange).toHaveBeenCalledWith(expectedClickItem);
   });
 
-  it("renders category labels on the y axis in vertical layout", () => {
+  // 数字轴宽与自动轴宽均须保留完整分类名称和真实柱子；使用 Recharts DOM，结束自动清理。
+  it.each([120, "auto"] as const)("renders category labels with %s axis width in vertical layout", (width) => {
     render(
       <BarChart
         data={[
@@ -73,7 +74,7 @@ describe("BarChart", () => {
         categories={["spend"]}
         colors={["cyan"]}
         layout="vertical"
-        yAxisWidth={120}
+        yAxisWidth={width}
       />,
     );
 
