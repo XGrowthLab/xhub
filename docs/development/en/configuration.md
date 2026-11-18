@@ -23,6 +23,10 @@ rg 'SelectRouteTemplate|Compile' internal/iam internal/router internal/gateway
 
 OverlayDB replaces top-level values, including null/0/false/arrays. MergePatch recursively merges maps and replaces arrays. iam.SelectRouteTemplate selects one whole document, not a field merge. Failed identity/template reads must not silently grant access.
 
+## PostgreSQL connection pools
+
+The gateway reads `XHUB_DATABASE_MAX_OPEN_CONNS` at startup. Set a nonnegative integer to limit the number of open connections **per pool**. The IAM and framework storage pools are independent. A value of 25 allows up to 50 pooled connections per gateway process. Additional replicas and other database clients use their own connections. When a pool is full, a query waits until a connection is returned or its context expires. Leaving the variable empty or setting it to 0 preserves the default unlimited pool size. Invalid values stop startup.
+
 ## Source and verification
 
 [internal/config/config.go](../../../internal/config/config.go)

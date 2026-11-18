@@ -21,6 +21,10 @@ rg 'SelectRouteTemplate|Compile' internal/iam internal/router internal/gateway
 
 OverlayDB 替换顶层值，保留 null、0、false 和数组。MergePatch 递归合并 map、替换数组。iam.SelectRouteTemplate 选择一整份模板，不做逐字段继承。身份或模板读取失败不能变成放行。
 
+## PostgreSQL 连接池
+
+网关启动时读取 `XHUB_DATABASE_MAX_OPEN_CONNS`。填写非负整数可设置**每个连接池**的最大打开连接数。IAM 与框架存储各有一个独立池，例如设为 25 时，单个网关进程的两个池合计最多使用 50 条连接。其他副本和数据库客户端各自占用连接。池满时查询等待连接归还，等待期间可以取消或超时。留空或设为 0 时沿用默认的无限制连接池。非法值会阻止启动。
+
 ## 源码与验证
 
 [配置解析](../../../internal/config/config.go) · [部署字段](model-endpoints.md) · [模板 JSON](routing.md)

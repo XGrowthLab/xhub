@@ -24,8 +24,8 @@ fi
 export E2E_RESPONSES_CONTINUATION=1
 # 浏览器验收默认覆盖压缩历史，可显式设为 0 验证旧写入格式；仅影响隔离测试进程。
 export XHUB_COMPACT_HISTORY="${XHUB_COMPACT_HISTORY:-1}"
-# HTTPS 身份与官方 Kodo SDK 协议夹具仅编入测试程序。
-export E2E_ENTERPRISE_FIXTURE=1
+# 完整套件默认加载企业协议夹具。验证网关启动参数时，非企业用例可设为 0 直接运行发布入口。
+export E2E_ENTERPRISE_FIXTURE="${E2E_ENTERPRISE_FIXTURE:-1}"
 export XHUB_GATEWAY_ORIGIN="$E2E_GATEWAY"
 # 发布兼容模式与正式镜像一样不注入浏览器后台地址，实际验证 /gw 自举。
 if [[ "${E2E_PORTABLE_CONSOLE:-0}" == 1 ]]; then
