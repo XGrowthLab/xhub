@@ -107,6 +107,15 @@ func verifyConcurrentChatBills(t *testing.T) {
 		(SELECT sum(cost) FROM usage_events WHERE key_id=?)`, scope.keyID, scope.keyID).Get(&monitorMatches); err != nil || !monitorMatches {
 		t.Fatalf("并发后监控金额与原始账本的精确金额不一致: %v", err)
 	}
+	// 每层都是本测试创建的独立账户。直接在 PG 使用 NUMERIC 比较，能发现浮点近似断言忽略的末位差额。
+	var allScopesMatch bool
+	if _, err := h.db.Engine.SQL(`SELECT total = ALL(ARRAY[
+		(SELECT spend FROM organizations WHERE id=?),(SELECT spend FROM teams WHERE id=?),
+		(SELECT spend FROM projects WHERE id=?),(SELECT spend FROM users WHERE id=?),(SELECT spend FROM api_keys WHERE id=?)])
+		FROM (SELECT SUM(cost) AS total FROM usage_events WHERE key_id=?) bills`,
+		scope.orgID, scope.teamID, scope.projectID, scope.userID, scope.keyID, scope.keyID).Get(&allScopesMatch); err != nil || !allScopesMatch {
+		t.Fatalf("密钥、用户、项目、团队或组织消费与账单明细的精确总额不符: %v", err)
+	}
 	var inserts int
 	if _, err := h.db.Engine.SQL("SELECT last_value FROM billed_attempts").Get(&inserts); err != nil || inserts != succeeded {
 		t.Errorf("结算发生冗余写入：成功=%d 实际INSERT尝试=%d err=%v", succeeded, inserts, err)

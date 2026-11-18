@@ -138,6 +138,9 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await expect(page.getByRole("dialog").getByRole("note")).toContainText(t("logsUX.captureStorageFailed"));
       // 恢复后的一批交错普通/SSE请求验证前台结算、并发准入和恢复者可以共享同一账单确认。
       // 每个请求都产生独立 ID，下面逐笔验证费用、Token 与监控汇总。
+      const beforeBatch = await page.request.get(GATEWAY + "/user/info", { headers });
+      expect(beforeBatch.status()).toBe(200);
+      const startingSpend = Number((await beforeBatch.json()).user_info.spend);
       const concurrentIDs = await Promise.all(
         Array.from({ length: 8 }, async (_, index) => {
           const stream = index % 2 === 1;
@@ -182,6 +185,10 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
           total_tokens: expectedCalls * 10,
           cost: expect.closeTo(expectedCalls * 0.12, 8),
         });
+      // 监控到账后再读取准入使用的个人消费，核对用户可见余额与本批次的真实账单。
+      const afterBatch = await page.request.get(GATEWAY + "/user/info", { headers });
+      expect(afterBatch.status()).toBe(200);
+      expect(Number((await afterBatch.json()).user_info.spend) - startingSpend).toBeCloseTo(concurrentIDs.length * 0.12, 8);
       for (const id of concurrentIDs) {
         const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
         expect(log.status()).toBe(200);
