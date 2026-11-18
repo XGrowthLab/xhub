@@ -28,6 +28,10 @@ const (
 	DefaultBytes int64 = 1 << 30
 	// DefaultEntries 限制待结算文件及在途请求数量，防止无界目录扫描。
 	DefaultEntries = 8192
+	// DefaultGroupSize 限制一批并行文件同步占用的文件描述符，不额外等待凑批。
+	DefaultGroupSize = 16
+	// MaxGroupSize 限制并行暂存文件占用的文件描述符，一批最多同时打开 64 份。
+	MaxGroupSize = 64
 	// DefaultRecordBytes 为每次准入保守预留的最大记录空间；完整正文不得静默截断以适应上限。
 	DefaultRecordBytes int64 = 16 << 20
 )
@@ -40,8 +44,10 @@ var (
 	ErrPending     = errors.New("usage spool batch still has unsettled records")
 )
 
-// Config 为启动时固定的目录和容量；目录必须专属于一个网关实例，多个实例应挂不同持久卷。
+// Config 为启动时固定的磁盘目录、容量及合并策略；目录必须专属于一个网关实例，多个实例应挂不同持久卷。
 type Config struct {
+	// GroupSize 为每批操作上限；0 使用默认值，1 逐笔执行，Open 拒绝其他超出 1–64 的值。
+	GroupSize      int
 	Dir            string
 	MaxBytes       int64
 	MaxEntries     int
@@ -83,7 +89,8 @@ type replayFailure struct {
 
 // Spool 独占本机目录；mu 保护文件更新、容量预留、重放批次及失败重试时间。
 type Spool struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	writes mutationQueue
 	// admissionTicket 在等待 mu 前分配。probedThrough 只覆盖开始实写探针前已经取票的调用。
 	admissionTicket atomic.Uint64
 	probedThrough   uint64
@@ -102,6 +109,12 @@ type Spool struct {
 // Open 创建或打开专用目录并取得非阻塞进程锁，返回可恢复队列或错误；网关启动调用。
 // 参数容量零值采用默认值；禁止根目录、最终路径符号链接和宽松权限，目录0700/文件0600，失败关闭已打开资源。
 func Open(config Config) (*Spool, error) {
+	if config.GroupSize == 0 {
+		config.GroupSize = DefaultGroupSize
+	}
+	if config.GroupSize < 1 || config.GroupSize > MaxGroupSize {
+		return nil, fmt.Errorf("%w: invalid group size", ErrUnavailable)
+	}
 	if config.MaxBytes == 0 {
 		config.MaxBytes = DefaultBytes
 	}
@@ -556,9 +569,7 @@ func (s *Spool) Put(record iam.UsageRecord) (err error) {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.finishLocked(&err)
-	return s.putLocked(record, raw)
+	return s.submitMutation(putSnapshot, record, raw)
 }
 
 // putLocked 写入已编码快照；调用方持有队列锁，返回完整持久化、容量或快照冲突错误。
@@ -628,8 +639,11 @@ func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.finishLocked(&err)
+	return s.submitMutation(beginMarker, record, raw)
+}
+
+// beginLocked 持锁保存已校验输入的未确认标记。仅成功持久化后设置在途所有权，并继续持有原预留。
+func (s *Spool) beginLocked(record iam.UsageRecord, raw []byte) error {
 	name := basename(record.RequestID)
 	if s.activeDelivery[name] {
 		return ErrConflict
@@ -658,22 +672,35 @@ func (s *Spool) CompleteDelivery(record iam.UsageRecord) (err error) {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.finishLocked(&err)
+	return s.submitMutation(completeMarker, record, raw)
+}
+
+// markerSizeLocked 校验当前在途标记及账单归属，返回原始文件长度用于容量核算；单笔与合并提交共用。
+func (s *Spool) markerSizeLocked(record iam.UsageRecord) (int64, error) {
 	name := basename(record.RequestID)
 	if s.closed || !s.activeDelivery[name] {
-		return ErrUnavailable
+		return 0, ErrUnavailable
 	}
 	oldRaw, err := s.readLocked(name)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	old, err := decode(oldRaw, name)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !old.DeliveryUnconfirmed || !sameDeliveryOwner(old, record) {
-		return ErrConflict
+		return 0, ErrConflict
+	}
+	return int64(len(oldRaw)), nil
+}
+
+// completeLocked 持锁逐笔发布已确认终态；文件或目录同步失败时保留在途归属及预留。
+func (s *Spool) completeLocked(record iam.UsageRecord, raw []byte) error {
+	name := basename(record.RequestID)
+	oldSize, err := s.markerSizeLocked(record)
+	if err != nil {
+		return err
 	}
 	status, err := s.statusLocked()
 	if err != nil {
@@ -683,7 +710,7 @@ func (s *Spool) CompleteDelivery(record iam.UsageRecord) (err error) {
 	if s.reserved[record.RequestID] {
 		reservedBytes -= s.config.MaxRecordBytes
 	}
-	if int64(len(raw)) > s.config.MaxRecordBytes || status.Bytes-int64(len(oldRaw))+int64(len(raw))+reservedBytes > s.config.MaxBytes {
+	if int64(len(raw)) > s.config.MaxRecordBytes || status.Bytes-oldSize+int64(len(raw))+reservedBytes > s.config.MaxBytes {
 		return ErrFull
 	}
 	s.generation++
@@ -736,22 +763,31 @@ func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	return s.syncSettledRemovalLocked(name)
 }
 
-// writeLocked 将完整字节原子发布到根内指定名字；持mu调用，任何同步失败保留临时或已发布文件供恢复。
-func (s *Spool) writeLocked(raw []byte, name string) error {
+// stageFile 在专用目录创建独立 v1 临时文件，写入完整快照并同步内容，返回文件名及错误。
+// 单笔和合并写入使用同样的恢复格式；失败留下的完整或部分文件由启动扫描恢复或隔离。
+func (s *Spool) stageFile(raw []byte) (string, error) {
 	suffix, err := token()
 	if err != nil {
-		return err
+		return "", err
 	}
 	temporary := ".pending-" + suffix + ".tmp"
 	file, err := s.root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		s.lastErr = err
-		return err
+		return "", err
 	}
 	_, writeErr := file.Write(raw)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err = errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return "", err
+	}
+	return temporary, nil
+}
+
+// writeLocked 在本笔临时文件同步成功后才改名，再同步所有变更目录；持锁返回持久化或文件系统错误。
+func (s *Spool) writeLocked(raw []byte, name string) error {
+	temporary, err := s.stageFile(raw)
+	if err != nil {
 		s.lastErr = err
 		return err
 	}
@@ -787,11 +823,16 @@ func (s *Spool) syncSettledRemovalLocked(name string) error {
 	if err := s.syncDirectoryLocked("."); err != nil {
 		return err
 	}
+	s.noteSettledLocked(name)
+	return nil
+}
+
+// noteSettledLocked 在账单精确匹配、磁盘删除及目录同步全部成功后更新内存恢复状态；调用方持有 mu。
+func (s *Spool) noteSettledLocked(name string) {
 	delete(s.retry, name)
 	if s.replaying != nil {
 		delete(s.replaying.pending, name)
 	}
-	return nil
 }
 
 // acknowledgeLocked 由请求结算及队列重放持锁调用，仅在 name 的当前内容与已入账 raw 相同后删除。
@@ -819,12 +860,7 @@ func (s *Spool) Acknowledge(record iam.UsageRecord) (err error) {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.finishLocked(&err)
-	if s.closed {
-		return ErrUnavailable
-	}
-	return s.acknowledgeLocked(basename(record.RequestID), raw)
+	return s.submitMutation(acknowledgeSnapshot, record, raw)
 }
 
 // Replay 至多提交limit条快照；commit只负责本地数据库结算，成功才确认，失败保留并至少30秒后再试。

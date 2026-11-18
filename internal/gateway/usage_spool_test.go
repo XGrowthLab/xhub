@@ -12,13 +12,14 @@ import (
 	"github.com/sunqirui1987/xhub/internal/iam"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// TestUsageSpoolConfiguration 验证省略配置保持兼容，显式错误容量不静默关闭；环境由t.Setenv恢复，无外部依赖。
+// TestUsageSpoolConfiguration 验证省略配置保持兼容，显式错误容量及超出 1–64 的合并上限均被拒绝；环境由t.Setenv恢复，无外部依赖。
 func TestUsageSpoolConfiguration(t *testing.T) {
-	for _, name := range []string{"XHUB_USAGE_SPOOL_DIR", "XHUB_USAGE_SPOOL_MAX_BYTES", "XHUB_USAGE_SPOOL_RECORD_BYTES", "XHUB_USAGE_SPOOL_MAX_ENTRIES"} {
+	for _, name := range []string{"XHUB_USAGE_SPOOL_DIR", "XHUB_USAGE_SPOOL_MAX_BYTES", "XHUB_USAGE_SPOOL_RECORD_BYTES", "XHUB_USAGE_SPOOL_MAX_ENTRIES", "XHUB_USAGE_SPOOL_GROUP_SIZE"} {
 		t.Setenv(name, "")
 	}
 	if _, enabled, err := usageSpoolConfig(); enabled || err != nil {
@@ -39,6 +40,16 @@ func TestUsageSpoolConfiguration(t *testing.T) {
 			}
 		})
 	}
+	for _, raw := range []string{"-1", "0", "65", "invalid", "1", "16", "64"} {
+		t.Setenv("XHUB_USAGE_SPOOL_GROUP_SIZE", raw)
+		cfg, enabled, err := usageSpoolConfig()
+		want, parseErr := strconv.Atoi(raw)
+		valid := parseErr == nil && want >= 1 && want <= usagespool.MaxGroupSize
+		if !enabled || (err == nil) != valid || valid && cfg.GroupSize != want {
+			t.Fatalf("合并写盘配置解析错误: 输入=%s 结果=%d err=%v", raw, cfg.GroupSize, err)
+		}
+	}
+
 }
 
 // TestUsageSpoolAdmissionFailure 验证初始化失败明确阻止新付费请求，关闭安全幂等；前置临时目录，结束自动删除。

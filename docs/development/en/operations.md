@@ -74,13 +74,14 @@ exclusive process lock rejects shared use. Preserve the entire directory during
 migration or shutdown, not just the database. Remove an old volume only after its
 queue has drained.
 
-Startup capacity settings accept positive integers:
+When the spool is enabled, its capacity settings accept positive integers and its group size accepts integers from 1 to 64. An invalid value prevents spool initialization and paid requests receive HTTP 503.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `XHUB_USAGE_SPOOL_MAX_BYTES` | `1073741824` | Pending/quarantine bytes plus inflight reservations |
 | `XHUB_USAGE_SPOOL_RECORD_BYTES` | `16777216` | Complete record limit and conservative inflight reservation |
 | `XHUB_USAGE_SPOOL_MAX_ENTRIES` | `8192` | Pending records plus inflight calls |
+| `XHUB_USAGE_SPOOL_GROUP_SIZE` | `16` | Maximum spool operations per group, including writes and acknowledgments. Each new file is synced before rename. Overlapping operations can share a directory sync. Set to 1 to sync the directory separately for each change. |
 
 Default byte limits allow at most 64 simultaneous inflight reservations, fewer
 with pending records. Admission tests actual writing and sync before upstream

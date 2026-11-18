@@ -18,9 +18,24 @@ import (
 )
 
 // TestUsageSpoolConcurrentChatBilling 使用工单中的压测客户端，验证启用磁盘队列时普通 Chat 与 SSE 均能并发完成。
-// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；核对每笔用量、五层费用及重放幂等。
+// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对每笔用量、五层费用及重放幂等。
 // t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
 func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
+	for _, size := range []string{"1", "16"} {
+		t.Run("group="+size, func(t *testing.T) {
+			t.Setenv("XHUB_USAGE_SPOOL_GROUP_SIZE", size)
+			// 对比使用完全相同的容量和数据，16 个并发在途预留旁仍给已持久化的标记留出空间。
+			t.Setenv("XHUB_USAGE_SPOOL_RECORD_BYTES", "65536")
+			t.Setenv("XHUB_USAGE_SPOOL_MAX_BYTES", "1179648")
+			t.Setenv("XHUB_USAGE_SPOOL_MAX_ENTRIES", "48")
+			verifyConcurrentChatBills(t)
+		})
+	}
+}
+
+// verifyConcurrentChatBills 在调用方指定的磁盘写入模式下发起真实的普通及流式并发请求。
+// 独立上游、PG schema 与 Redis 由测试清理；以计费触发器及五层账本证明没有漏记或重复提交。
+func verifyConcurrentChatBills(t *testing.T) {
 	const model = "spool-concurrent-chat"
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
 	isolatedSpendRedis(t)

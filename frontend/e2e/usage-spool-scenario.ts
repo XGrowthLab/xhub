@@ -6,7 +6,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送普通与流式对话并从监控核对费用与用量。
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量。
  * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
@@ -139,7 +139,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       // 恢复后的一批交错普通/SSE请求验证前台结算、并发准入和恢复者可以共享同一账单确认。
       // 每个请求都产生独立 ID，下面逐笔验证费用、Token 与监控汇总。
       const concurrentIDs = await Promise.all(
-        Array.from({ length: 8 }, async (_, index) => {
+        Array.from({ length: 16 }, async (_, index) => {
           const stream = index % 2 === 1;
           const reply = await page.request.post(GATEWAY + "/v1/chat/completions", {
             headers,
@@ -163,6 +163,12 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
           return id;
         }),
       );
+      // 普通与 SSE 完成后，实际扣费和本机快照确认都必须收敛，合并写盘不能遗留待确认或隔离证据。
+      await expect.poll(async () => {
+        const snapshot = await page.request.post(control + "/usage-spool/state", { data: { model } });
+        expect(snapshot.status(), await snapshot.text()).toBe(200);
+        return await snapshot.json();
+      }).toEqual({ pending: 0, quarantined: 0 });
       const expectedCalls = 1 + concurrentIDs.length;
       expect(new Set([callID, ...concurrentIDs]).size).toBe(expectedCalls);
       await expect
