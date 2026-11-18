@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sunqirui1987/xhub/cmd/regression/testsupport"
 	"github.com/sunqirui1987/xhub/internal/config"
 	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
@@ -136,5 +137,37 @@ func TestUsageSpoolMaintenanceFailsClosed(t *testing.T) {
 	}
 	if _, err := s.HasPendingLocalUsage(ctx); !errors.Is(err, usagespool.ErrUnavailable) {
 		t.Fatalf("关闭的队列不能被视为空: %v", err)
+	}
+}
+
+// TestBrowserSpoolConstraintUsesIAMContract 用真实隔离 PostgreSQL 模拟账单约束失败，检查控制端接受 IAM 的规范化错误。
+// 前置专属 e2e_ schema 及临时磁盘，验证待结准入报错及清理后的零费入账；测试退出释放连接、schema 与快照。
+func TestBrowserSpoolConstraintUsesIAMContract(t *testing.T) {
+	dsn := testsupport.Postgres(t, "e2e_spool_control")
+	db, err := iam.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	dir := t.TempDir()
+	sp, err := usagespool.Open(usagespool.Config{Dir: filepath.Join(dir, "usage-spool")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Cfg: &config.Config{GeneralSettings: config.GeneralSettings{DatabaseURL: dsn}}, IAM: db, Client: &http.Client{}, usageSpoolEnabled: true, usageSpool: sp}
+	handle, cleanup := newBrowserUsageSpoolControl(s, dir)
+	t.Cleanup(cleanup)
+	w := httptest.NewRecorder()
+	if !handle(w, httptest.NewRequest("POST", "/usage-spool/defer", strings.NewReader(`{"model":"spool-browser-contract"}`))) || w.Code != http.StatusOK {
+		t.Fatalf("已触发的私有约束未被控制夹具识别: %d %s", w.Code, w.Body)
+	}
+	if err := s.flushLocalUsage(t.Context(), true); !errors.Is(err, iam.ErrInvalid) {
+		t.Fatalf("数据库约束退避中准入放行: %v", err)
+	}
+	cleanup()
+	var event iam.UsageEvent
+	ok, err := db.Engine.Where("request_id=?", "e2e-spool-admission-spool-browser-contract").Get(&event)
+	if err != nil || !ok || event.Cost != 0 {
+		t.Fatalf("恢复后专属零费账单未严格结清: 存在=%v 费用=%g err=%v", ok, event.Cost, err)
 	}
 }
