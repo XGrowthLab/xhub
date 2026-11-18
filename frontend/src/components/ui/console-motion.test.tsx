@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
 
-/** 页签过渡不重置显式保留的表单；输入后切换再返回应原样保留，全部 DOM 由测试框架清理。 */
+/** 页签切换时旧面板应立即停用且保留草稿。输入后切走再返回，核对交互状态和原值，DOM 由测试框架清理。 */
 it("keeps mounted tab drafts intact while changing tabs", async () => {
   const user = userEvent.setup();
   render(
@@ -14,10 +14,14 @@ it("keeps mounted tab drafts intact while changing tabs", async () => {
       <TabsContent value="details">Details content</TabsContent>
     </Tabs>,
   );
+  const draftPanel = screen.getByRole("tabpanel", { name: "Draft", exact: true });
   await user.type(screen.getByRole("textbox", { name: "Draft text" }), "保留原始输入");
   await user.click(screen.getByRole("tab", { name: "Details" }));
+  expect(draftPanel).toHaveAttribute("inert");
+  expect(screen.getByRole("tabpanel", { name: "Details", exact: true })).not.toHaveAttribute("inert");
   expect(screen.queryByRole("textbox", { name: "Draft text" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "Draft" }));
+  expect(draftPanel).not.toHaveAttribute("inert");
   expect(screen.getByRole("textbox", { name: "Draft text" })).toHaveValue("保留原始输入");
 });
 

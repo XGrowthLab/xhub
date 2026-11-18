@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "../../helpers";
+import { selectMonitorOption } from "../../monitor-select-helper";
 
 /** 前置无 Redis 的真实网关、私有数据库和本地供应商；从 Playground 发起唯一推理，暂时拒绝账单写入后恢复。
  * 验证页面成功、待结算快照、日志和模型监控唯一入账；finally 移除故障并删除模型，运行器回收账单/schema。 */
@@ -84,7 +85,7 @@ test("pending billing survives database transaction failure without Redis", asyn
     await row.click();
     await expect(page.getByRole("dialog")).toContainText(model);
     await stableGoto(page, "/model-monitor");
-    await page.getByLabel(t("monitor.model"), { exact: true }).selectOption(model);
+    await selectMonitorOption(page, t("monitor.model"), model);
     await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
     await expect(page.getByRole("region", { name: t("monitor.requests"), exact: true })).toContainText("1");
   } finally {

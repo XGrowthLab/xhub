@@ -325,7 +325,11 @@ body:has([data-dashboard-shell]) {
   from { opacity: 0.55; }
   to { opacity: 1; }
 }
-.console-tab-panel:not([hidden]) {
+/* Base UI 在切换时会短暂保留退出的面板。立即移出布局，让旧表单保留状态，同时只显示当前页签。 */
+.console-tab-panel[inert] {
+  display: none;
+}
+.console-tab-panel:not([hidden], [inert]) {
   animation: console-panel-enter 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 

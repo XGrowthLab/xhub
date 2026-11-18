@@ -77,11 +77,12 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       guardID = "";
       await stableGoto(page, "/logs");
       await page.getByRole("tab", { name: t("Error Logs"), exact: true }).click();
-      await page
-        .getByPlaceholder(/按 ID 搜索日志|Search logs by ID/)
-        .filter({ visible: true })
-        .fill(failedID);
-      await expect(page.getByRole("row").filter({ hasText: failedID })).toHaveCount(1);
+      const errorPanel = page.getByRole("tabpanel", { name: t("Error Logs"), exact: true });
+      // 两个日志面板共用搜索提示；切换后只应显示一个输入框，并从错误日志核对真实失败记录。
+      const searchLabel = t("Search logs by ID…");
+      await expect(page.getByPlaceholder(searchLabel, { exact: true }).filter({ visible: true })).toHaveCount(1);
+      await errorPanel.getByPlaceholder(searchLabel, { exact: true }).fill(failedID);
+      await expect(errorPanel.getByRole("row").filter({ hasText: failedID })).toHaveCount(1);
       await page.evaluate(() => sessionStorage.setItem("streamingEnabled", "false"));
       await stableGoto(page, "/playground");
       await page.getByPlaceholder(t("Select a Model"), { exact: true }).click();
@@ -127,8 +128,9 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect(metrics.summary.requests).toBe(1);
       expect(metrics.summary.cost).toBeCloseTo(0.12, 8);
       await stableGoto(page, "/logs");
-      await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(callID);
-      const row = page.getByRole("row").filter({ hasText: callID });
+      const logsPanel = page.getByRole("tabpanel", { name: t("Logs"), exact: true });
+      await logsPanel.getByPlaceholder(searchLabel, { exact: true }).fill(callID);
+      const row = logsPanel.getByRole("row").filter({ hasText: callID });
       await expect(row).toHaveCount(1);
       await row.click();
       await expect(page.getByRole("dialog")).toContainText(model);
