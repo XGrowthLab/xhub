@@ -39,7 +39,6 @@ describe("OrganizationsTable", () => {
   it("renders every column header", () => {
     render(<OrganizationsTable {...baseProps} organizations={[]} />);
     for (const header of [
-      "Organization ID",
       "Organization Name",
       "Created",
       "Spend (USD)",
@@ -52,7 +51,8 @@ describe("OrganizationsTable", () => {
     }
   });
 
-  it("opens the detail view when the organization ID cell is clicked", async () => {
+  /** 提供有名称的组织，验证点击名称会打开对应 ID；渲染器在测试后自动清理。 */
+  it("opens the detail view by organization name", async () => {
     const user = userEvent.setup();
     const onOrganizationClick = vi.fn();
     render(
@@ -63,9 +63,18 @@ describe("OrganizationsTable", () => {
       />,
     );
 
-    await user.click(screen.getByText("org-123"));
+    await user.click(screen.getByRole("button", { name: "Alpha" }));
 
     expect(onOrganizationClick).toHaveBeenCalledWith("org-123");
+  });
+
+  /** 缺少名称时 ID 应只出现一次并可导航；仅使用内存回调，渲染器自动清理。 */
+  it("keeps an unnamed organization accessible by ID", async () => {
+    const onOrganizationClick = vi.fn();
+    render(<OrganizationsTable {...baseProps} onOrganizationClick={onOrganizationClick}
+      organizations={[makeOrganization({ organization_alias: "", organization_id: "org-a" })]} />);
+    await userEvent.click(screen.getByRole("button", { name: "org-a" }));
+    expect(onOrganizationClick).toHaveBeenCalledWith("org-a");
   });
 
   it("edits and deletes an organization through the ⋯ actions menu (admin)", async () => {

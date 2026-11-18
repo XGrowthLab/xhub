@@ -1,3 +1,4 @@
+import { DateCell } from "@/components/shared/table_cells/date_cell";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -620,12 +621,12 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("common.created")}</p>
-                  <p>{userData.created_at ? new Date(userData.created_at).toLocaleString() : t("common.unknown")}</p>
+                  <div><DateCell value={userData.created_at} fallback="common.unknown" /></div>
                 </div>
 
                 <div>
                   <p className="font-medium">{t("pages.users.lastUpdated")}</p>
-                  <p>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : t("common.unknown")}</p>
+                  <div><DateCell value={userData.updated_at} fallback="common.unknown" /></div>
                 </div>
 
                 <div>

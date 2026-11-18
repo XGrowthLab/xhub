@@ -187,7 +187,8 @@ func (db *DB) CreateKey(ctx context.Context, by Actor, in KeyInput) (*Key, strin
 		}
 		out = &k
 		return writeAudit(s, by, Audit{Action: "key.create", ObjectType: "key", ObjectID: k.ID, TeamID: in.TeamID,
-			Detail: map[string]any{"owner_type": k.OwnerType}})
+			// 将操作当时的别名与审计事件同事务保存，改名或删除后仍能识别原记录。
+			Detail: map[string]any{"owner_type": k.OwnerType, "object_name": k.Name}})
 	})
 	if err != nil {
 		return nil, "", err
@@ -241,7 +242,7 @@ func (db *DB) RotateKey(ctx context.Context, by Actor, id string, inputs ...KeyI
 		if out, err = getKey(ctx, s, id); err != nil {
 			return err
 		}
-		return writeAudit(s, by, Audit{Action: "key.rotate", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID})
+		return writeAudit(s, by, Audit{Action: "key.rotate", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID, Detail: map[string]any{"object_name": out.Name}})
 	})
 	if err != nil {
 		return nil, "", err
@@ -263,7 +264,7 @@ func (db *DB) DeleteKey(ctx context.Context, by Actor, id string) error {
 		if err := affected(s.ID(id).Delete(&Key{})); err != nil {
 			return err
 		}
-		return writeAudit(s, by, Audit{Action: "key.delete", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID})
+		return writeAudit(s, by, Audit{Action: "key.delete", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID, Detail: map[string]any{"object_name": cur.Name}})
 	})
 }
 
@@ -286,7 +287,7 @@ func (db *DB) SetKeyStatus(ctx context.Context, by Actor, id, status string) (*K
 			return err
 		}
 		return writeAudit(s, by, Audit{Action: "key.status", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID,
-			Detail: map[string]any{"status": status}})
+			Detail: map[string]any{"status": status, "object_name": cur.Name}})
 	})
 	return out, err
 }
@@ -328,7 +329,7 @@ func (db *DB) UpdateKey(ctx context.Context, by Actor, id string, in KeyInput) (
 		if err := validateQuota(s, "key", id); err != nil {
 			return err
 		}
-		return writeAudit(s, by, Audit{Action: "key.update", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID})
+		return writeAudit(s, by, Audit{Action: "key.update", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID, Detail: map[string]any{"object_name": out.Name}})
 	})
 	return out, err
 }
@@ -772,7 +773,7 @@ func (db *DB) ResetKeySpend(ctx context.Context, by Actor, id string, to float64
 			return err
 		}
 		return writeAudit(s, by, Audit{Action: "key.reset_spend", ObjectType: "key", ObjectID: id, TeamID: cur.TeamID,
-			Detail: map[string]any{"to": to}})
+			Detail: map[string]any{"to": to, "object_name": cur.Name}})
 	})
 	return out, err
 }

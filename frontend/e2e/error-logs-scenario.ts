@@ -424,7 +424,15 @@ test("错误日志详情完整显示上游正文并可返回普通日志", async
     deploymentIds.length = 0;
     await page.getByRole("button", { name: "English", exact: true }).click();
     await openLogDetails(page, successCallId);
-    await expect(page.getByRole("dialog").getByRole("separator", { name: translate("en", "logsUX.resizeDrawer") })).toBeVisible();
+    const dialog = page.getByRole("dialog");
+    const handle = dialog.getByRole("separator", { name: translate("en", "logsUX.resizeDrawer") });
+    await expect(handle).toBeVisible();
+    // 实际比较绘制宽度，避免仅替换图标而用户看不到任何变化。
+    const originalWidth = (await dialog.boundingBox())!.width;
+    await dialog.getByRole("button", { name: translate("en", "logsUX.expandDrawer") }).click();
+    await expect.poll(async () => (await dialog.boundingBox())!.width).toBeGreaterThan(originalWidth + 1);
+    await dialog.getByRole("button", { name: translate("en", "logsUX.restoreDrawer") }).click();
+    await expect.poll(async () => (await dialog.boundingBox())!.width).toBeCloseTo(originalWidth, 0);
     await verifyUpstreamCollapse(page, headers, successCallId, 200);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: translate("en", "language.zhCN"), exact: true }).click();

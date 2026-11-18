@@ -7,6 +7,10 @@ import { translate, type Locale } from "../src/i18n/translate";
  * 验证普通单归属用户不出现冗余筛选、列菜单不开页面滚动锁，随后关闭浮层，不修改任何记录。 */
 export async function expectKeyFiltersAndColumns(page: Page, locale: Locale) {
   const tr = (key: string) => translate(locale, key);
+  const list = page.getByTestId("data-table-frame").first();
+  for (const cell of [list.getByRole("columnheader").first(), list.getByRole("cell").first()]) {
+    expect(await cell.evaluate((node) => parseFloat(getComputedStyle(node).paddingInlineStart)), "首列表头和数据应使用相同的内边距").toBeGreaterThanOrEqual(16);
+  }
   await page.getByRole("button", { name: tr("Filters"), exact: true }).click();
   const filters = page.getByRole("dialog", { name: tr("consoleDetails.keyFilters") });
   await expect(filters.getByRole("textbox", { name: tr("Key ID"), exact: true })).toBeVisible();

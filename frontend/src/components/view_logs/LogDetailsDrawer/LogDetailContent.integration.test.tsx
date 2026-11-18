@@ -423,7 +423,8 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("Response data not available")).toBeInTheDocument();
   });
 
-  it("should display Metadata section when metadata has keys", () => {
+  /** 前置含自定义字段的日志，单次展开直接读取 JSON，收起即卸载原始内容。夹具由组件测试清理。 */
+  it("reveals raw metadata with a single disclosure", async () => {
     render(
       <LogDetailContent
         logEntry={createLogEntry({
@@ -432,7 +433,12 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    expect(screen.getByText("Metadata")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Advanced metadata" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(screen.getByText(/"custom_key": "value"/)).toBeVisible();
+    await userEvent.click(toggle);
+    expect(screen.queryByText(/"custom_key": "value"/)).not.toBeInTheDocument();
   });
 
   it("should display IP address when requester_ip_address is present", () => {

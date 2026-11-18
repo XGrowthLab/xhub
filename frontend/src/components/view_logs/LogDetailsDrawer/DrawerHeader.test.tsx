@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "../../../../tests/test-utils";
 import type { LogEntry } from "../columns";
 import { DrawerHeader } from "./DrawerHeader";
-import { t } from "@/i18n";
+import { I18nProvider, t } from "@/i18n";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry =>
   ({
@@ -87,4 +87,13 @@ it("exposes the restore-width action while expanded", () => {
     environment="team" isExpanded onToggleExpanded={toggle} />);
   fireEvent.click(screen.getByRole("button", {name:t("logsUX.restoreDrawer")}));
   expect(toggle).toHaveBeenCalledOnce();
+});
+
+/** 前置中英文账户界面与固定请求时间；展示设备时区内的完整本地日期时间，卸载组件清理。 */
+it.each(["zh-CN", "en"] as const)("formats the recorded time for %s", locale => {
+  const log = logEntry({});
+  render(<I18nProvider initialLocale={locale}><DrawerHeader log={log} onClose={vi.fn()} onNext={vi.fn()} onPrevious={vi.fn()}
+    statusLabel="Success" statusColor="success" environment="team" isSidebarCollapsed={false} onToggleSidebar={vi.fn()} /></I18nProvider>);
+  const time = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(log.startTime));
+  expect(screen.getByText(time, { normalizer: value => value })).toBeVisible();
 });

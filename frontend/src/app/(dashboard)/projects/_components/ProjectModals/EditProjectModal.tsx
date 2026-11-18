@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
+import { projectBudgetLimit } from "../projectBudget";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { projectFormSchema, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { buildProjectUpdateParams } from "./projectFormUtils";
@@ -30,6 +31,7 @@ const INTERNAL_METADATA_KEYS = new Set([
   "guardrails",
 ]);
 
+/** 将项目响应映射到编辑表单；预算兼容新旧响应格式，区分零与未设置，不改写原对象。 */
 export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
   const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
   const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
@@ -62,7 +64,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
     team_id: project.team_id ?? null,
     description: project.description ?? "",
     models: project.models ?? [],
-    max_budget: project.litellm_budget_table?.max_budget ?? undefined,
+    max_budget: projectBudgetLimit(project) ?? undefined,
     isBlocked: project.blocked,
     guardrails: guardrails.length > 0 ? guardrails : undefined,
     modelLimits: modelLimits.length > 0 ? modelLimits : undefined,
@@ -88,7 +90,7 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const params: ProjectUpdateParams = {
-      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
+      ...buildProjectUpdateParams(submitted, projectBudgetLimit(project)),
       team_id: submitted.team_id,
     };
 

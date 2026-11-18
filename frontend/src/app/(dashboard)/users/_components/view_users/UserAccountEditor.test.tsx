@@ -19,6 +19,10 @@ describe("UserAccountEditor", () => {
   it.each(["en", "zh-CN"] as const)("explains unlimited personal budgets in %s", async (locale) => {
     setActiveLocale(locale);
     render(<UserAccountEditor user={{ ...account, teams: [], max_budget: null }} accessToken="session" onSaved={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByRole("group", { name: translate(locale, "Basic Information") })).toContainElement(screen.getByLabelText(translate(locale, "pages.users.email")));
+    expect(screen.getByRole("group", { name: translate(locale, "directoryForm.limits") })).toContainElement(screen.getByLabelText(translate(locale, "pages.users.maxBudget")));
+    await userEvent.setup().click(screen.getByText(translate(locale, "directoryForm.limitHelp")));
+    expect(screen.getByText(translate(locale, "quotaGuide.rates"))).toBeVisible();
     expect(screen.getByLabelText(translate(locale, "pages.users.maxBudget"))).toHaveAccessibleDescription(translate(locale, "quotaGuide.personalBillingHelp"));
     expect(screen.getByLabelText(translate(locale, "pages.users.maxBudget"))).toHaveAttribute("placeholder", translate(locale, "pages.users.unlimited"));
     await userEvent.setup().click(screen.getByRole("button", { name: translate(locale, "pages.users.saveChanges") }));

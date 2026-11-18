@@ -17,82 +17,64 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl } from "@/utils/returnUrlUtils";
-import { Activity, Boxes, CircleAlert, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ArrowRight, CircleAlert, TriangleAlert } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { z } from "zod/v4";
 import { useWorker } from "@/hooks/useWorker";
-import { useT, useI18n } from "@/i18n";
+import { useT } from "@/i18n";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import EnterpriseLogin from "@/components/EnterpriseLogin";
+import { XHubMark } from "@/components/console/XHubMark";
+import styles from "./login-stage.module.css";
 
 type LoginFormValues = { username: string; password: string };
 
+/** 登录页品牌区；使用与控制台相同的品牌标记，名称由当前语言提供。 */
 function LoginLogo() {
   const t = useT();
   return (
-    <div data-testid="login-logo" className="flex shrink-0 flex-col items-start gap-4">
-      <svg role="img" aria-label={t("site.logoAlt")} width="56" height="56" viewBox="0 0 84 84">
-        <rect width="84" height="84" rx="18" fill="#3c8dbc" />
-        <text x="42" y="54" textAnchor="middle" fontSize="36" fontWeight="700" fill="#ffffff">
-          X
-        </text>
-      </svg>
-      <div className="text-3xl font-semibold tracking-tight text-primary-foreground">{t("site.product")}</div>
+    <div data-testid="login-logo" className="relative z-raised inline-flex items-center gap-2.5 text-2xl font-semibold tracking-tight text-white">
+      <XHubMark role="img" aria-hidden={undefined} aria-label={t("site.logoAlt")} className="size-9 rounded-xl ring-1 ring-white/20" />
+      <span>{t("site.product")}</span>
     </div>
   );
 }
 
+/** 登录各状态共用的布局；children 是当前表单或状态提示。装饰线条不进入无障碍树，
+ * 窄屏压缩封面以优先展示输入框；正确设置减少动态效果的设备直接显示静止构图。 */
 function LoginStage({ children }: { children: ReactNode }) {
   const t = useT();
   return (
-    <div data-testid="login-stage" className="relative flex h-dvh min-h-dvh w-full overflow-y-auto bg-canvas">
-      <div className="absolute top-5 right-5 z-10">
-        <LanguageSwitcher />
-      </div>
-      <div className="grid min-h-full w-full lg:grid-cols-[minmax(0,1fr)_minmax(28rem,42rem)]">
-        <section className="flex min-h-[34rem] flex-col justify-center bg-primary px-8 py-16 text-primary-foreground sm:px-14 lg:min-h-dvh lg:px-[clamp(3.5rem,8vw,9rem)]">
-          <div className="mx-auto w-full max-w-xl">
-            <LoginLogo />
-            <div className="mt-12 max-w-lg">
-              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-primary-foreground/65">
-                {t("login.brandEyebrow")}
-              </p>
-              <h2 className="mt-5 text-4xl font-semibold tracking-tight sm:text-5xl">{t("login.brandTitle")}</h2>
-              <p className="mt-6 max-w-md text-lg leading-8 text-primary-foreground/75">
-                {t("login.brandDescription")}
-              </p>
-            </div>
-            <div className="mt-12 grid max-w-sm gap-5 border-t border-primary-foreground/20 pt-8 sm:grid-cols-3 lg:grid-cols-1">
-              {[
-                { icon: Boxes, label: t("login.featureModels") },
-                { icon: ShieldCheck, label: t("login.featureAccess") },
-                { icon: Activity, label: t("login.featureObservability") },
-              ].map(({ icon: Icon, label }) => (
-                <div key={label} className="flex items-center gap-3 text-sm font-medium text-primary-foreground/85">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-foreground/12">
-                    <Icon className="size-4" />
-                  </span>
-                  <span>{label}</span>
-                </div>
+    <main data-testid="login-stage" className="h-dvh w-full overflow-y-auto bg-background text-foreground">
+      <div className={styles.layout}>
+        <section className={styles.cover} aria-labelledby="login-cover-title">
+          <LoginLogo />
+          <div className={styles.art} aria-hidden="true">
+            <div className={styles.ribbon}>
+              {Array.from({ length: 28 }, (_, index) => (
+                <i key={index} style={{ "--ring": index } as CSSProperties} />
               ))}
             </div>
           </div>
+          <div className={styles.caption}>
+            <h2 id="login-cover-title">{t("login.brandTitle")}</h2>
+            <p>{t("login.brandDescription")}</p>
+          </div>
         </section>
-        <section className="flex min-h-[38rem] items-center justify-center bg-card px-6 py-16 sm:px-12 lg:min-h-dvh lg:px-16">
-          <div
-            data-testid="login-card"
-            className="w-full max-w-md rounded-2xl border border-border bg-card px-7 py-9 text-card-foreground shadow-[0_20px_60px_rgba(15,23,42,0.12)] sm:px-10"
-          >
+        <section aria-labelledby="login-title" className={styles.formPane}>
+          <div className={styles.language}><LanguageSwitcher /></div>
+          <div data-testid="login-card" className="w-full min-w-0 max-w-sm">
             {children}
             <EnterpriseLogin />
           </div>
         </section>
       </div>
-    </div>
+    </main>
   );
 }
 
+/** 登录路由的表单主体，无参数；根据网关配置返回加载、停用或交互状态，提交后沿原认证流程跳转。 */
 function LoginPageContent() {
   const t = useT();
   const [isLoading, setIsLoading] = useState(true);
@@ -102,14 +84,13 @@ function LoginPageContent() {
   const { workers, selectWorker } = useWorker();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const workerFieldId = useId();
-  const { locale } = useI18n();
   const loginSchema = useMemo(
     () =>
       z.object({
         username: z.string().min(1, t("login.usernameRequired")),
         password: z.string().min(1, t("login.passwordRequired")),
       }),
-    [locale, t],
+    [t],
   );
   const form = useZodForm(loginSchema, { defaultValues: { username: "", password: "" } });
 
@@ -220,7 +201,7 @@ function LoginPageContent() {
     return (
       <LoginStage>
         <div className="flex w-full flex-col gap-6 text-center">
-          <h1 className="text-3xl font-semibold text-foreground">{t("login.title")}</h1>
+          <h1 id="login-title" className="text-3xl font-semibold text-foreground">{t("login.title")}</h1>
           <p className="text-lg text-muted-foreground">{t("login.subtitle")}</p>
           <LoadingScreen />
         </div>
@@ -233,8 +214,8 @@ function LoginPageContent() {
     return (
       <LoginStage>
         <div className="flex w-full flex-col gap-6">
-          <div className="text-center">
-            <h1 className="text-3xl font-semibold text-foreground">{t("login.title")}</h1>
+          <div className="text-start">
+            <h1 id="login-title" className="text-3xl font-semibold text-foreground">{t("login.title")}</h1>
           </div>
 
           <Alert variant="warning">
@@ -256,9 +237,9 @@ function LoginPageContent() {
     <LoginStage>
       <TooltipProvider>
         <div className="flex w-full flex-col gap-4">
-          <div className="text-center">
-            <h1 className="text-2xl font-semibold text-foreground">{t("login.title")}</h1>
-            <p className="mt-1 text-base text-muted-foreground">{t("login.subtitle")}</p>
+          <div className="text-start">
+            <h1 id="login-title" className="text-3xl font-semibold tracking-tight text-foreground">{t("login.title")}</h1>
+            <p className="mt-2 mb-2 text-sm text-muted-foreground">{t("login.subtitle")}</p>
           </div>
 
           {error && (
@@ -300,7 +281,7 @@ function LoginPageContent() {
                     placeholder={t("login.usernamePlaceholder")}
                     autoComplete="username"
                     disabled={isLoginLoading}
-                    className="h-11 rounded-sm border-input bg-background text-base"
+                    className="h-11 rounded-md border-input bg-background text-base"
                   />
                 )}
               </FormField>
@@ -322,10 +303,11 @@ function LoginPageContent() {
                 type="submit"
                 size="lg"
                 disabled={isLoginLoading}
-                className="h-11 w-full rounded-sm bg-primary text-base font-semibold text-primary-foreground hover:bg-primary/80"
+                className="h-11 w-full gap-2.5 rounded-md text-base font-semibold"
               >
                 {isLoginLoading && <UiLoadingSpinner className="size-4" role="img" aria-label={t("loading")} />}
                 {isLoginLoading ? t("login.submitting") : t("login.submit")}
+                {!isLoginLoading && <ArrowRight aria-hidden="true" className="size-4" />}
               </Button>
 
             </FieldGroup>

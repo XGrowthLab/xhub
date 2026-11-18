@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { LogEntry } from "../columns";
-import { AutoRouterTag } from "@/components/shared/table_cells";
+import { AutoRouterTag, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
 import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -18,7 +18,7 @@ import {
   FONT_SIZE_MEDIUM,
   FONT_FAMILY_MONO,
 } from "./constants";
-import { useT } from "@/i18n";
+import { useI18n, useT } from "@/i18n";
 
 interface DrawerHeaderProps {
   log: LogEntry;
@@ -26,7 +26,7 @@ interface DrawerHeaderProps {
   onPrevious: () => void;
   onNext: () => void;
   statusLabel: string;
-  statusColor: "error" | "success";
+  statusColor: StatusTone;
   environment: string;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
@@ -230,12 +230,12 @@ function NavigationSection({
       </Button>}
       <Button variant="ghost" size="sm" onClick={onPrevious}>
         <ChevronUp className="size-4" />
-        <span style={keyboardShortcutStyle}>K</span>
+        <kbd style={keyboardShortcutStyle}>K</kbd>
       </Button>
       <div style={splitStyle} />
       <Button variant="ghost" size="sm" onClick={onNext}>
         <ChevronDown className="size-4" />
-        <span style={keyboardShortcutStyle}>J</span>
+        <kbd style={keyboardShortcutStyle}>J</kbd>
       </Button>
       <div style={splitStyle} />
       <TooltipProvider>
@@ -250,6 +250,8 @@ function NavigationSection({
   );
 }
 
+const timestampFormat: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "medium" };
+
 /** 展示状态、团队和请求时间；参数为当前日志与格式化状态，返回可换行状态栏。
  * 抽屉标题调用；团队名称由数据决定，缺失时由调用方提供明确占位。 */
 function StatusBar({
@@ -260,21 +262,22 @@ function StatusBar({
 }: {
   log: LogEntry;
   statusLabel: string;
-  statusColor: "error" | "success";
+  statusColor: StatusTone;
   environment: string;
 }) {
-  const t = useT();
+  const { locale, t } = useI18n();
+  const started = new Date(log.startTime);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <Badge variant={statusColor === "error" ? "destructive" : "secondary"}>{statusLabel}</Badge>
+      <StatusBadge tone={statusColor} label={statusLabel} />
       <Badge variant="outline" className="max-w-full whitespace-normal break-all">{t("logsUX.team")}: {environment}</Badge>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
-          {moment(log.startTime).format(t("MMM D, YYYY h:mm:ss A"))}
+          {Number.isFinite(started.getTime()) ? new Intl.DateTimeFormat(locale, timestampFormat).format(started) : "—"}
         </span>
-        <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
-          ({moment(log.startTime).fromNow()})
-        </span>
+        {Number.isFinite(started.getTime()) && <span className="text-muted-foreground" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+          ({moment(started).locale(locale).fromNow()})
+        </span>}
       </div>
     </div>
   );

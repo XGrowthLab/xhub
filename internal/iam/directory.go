@@ -277,7 +277,7 @@ func (db *DB) provisionDirectoryUser(ctx context.Context, connectionID, external
 		if err := reconcileDirectory(ctx, s, c, ""); err != nil {
 			return err
 		}
-		return writeAudit(s, Actor{Kind: "system"}, Audit{Action: "directory.user.sync", ObjectType: "user", ObjectID: u.ID})
+		return writeAudit(s, Actor{Kind: "system"}, Audit{Action: "directory.user.sync", ObjectType: "user", ObjectID: u.ID, Detail: map[string]any{"object_name": u.Name}})
 	})
 	return &d, &u, err
 }
@@ -358,7 +358,7 @@ func (db *DB) replaceDirectoryGroup(ctx context.Context, connectionID, externalI
 		if _, err := s.Exec("UPDATE directory_connections SET revision = revision + 1 WHERE id = ?", connectionID); err != nil {
 			return err
 		}
-		return writeAudit(s, Actor{Kind: "system"}, Audit{Action: "directory.group.sync", ObjectType: "directory_group", ObjectID: g.ID})
+		return writeAudit(s, Actor{Kind: "system"}, Audit{Action: "directory.group.sync", ObjectType: "directory_group", ObjectID: g.ID, Detail: map[string]any{"object_name": g.Name}})
 	})
 	return &g, err
 }

@@ -29,6 +29,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { QuotaGuide } from "@/components/shared/QuotaGuide";
+import { DirectoryFormSection } from "@/components/shared/DirectoryFormSection";
+import { DateCell } from "@/components/shared/table_cells";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -495,6 +498,7 @@ const isParsableJson = (value: string | undefined): boolean => {
   }
 };
 
+/** 团队详情按角色展示组织、成员、模型与设置；teamId 定位后台记录，保存成功后更新当前详情。 */
 const TeamInfoView: React.FC<TeamInfoProps> = ({
   teamId,
   onClose,
@@ -915,7 +919,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       key: TEAM_INFO_TAB_KEYS.SETTINGS,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS]),
       children: (
-        <Card className="block p-6 overflow-y-auto max-h-[65vh]">
+        <Card className="block min-w-0 p-4 sm:p-6">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-medium">{t("Team Settings")}</h3>
             {canEditTeam && !isEditing && (
@@ -935,76 +939,104 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           {isEditing ? (
             <TooltipProvider>
               <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
-                <FieldGroup>
-                  <FormField control={form.control} name="team_alias" label={t("Team Name")}>
-                    {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
-                  </FormField>
-
-                  <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
-                    {({ value, onChange }) => (
-                      <RouteTemplateSelect
-                        accessToken={accessToken}
-                        value={value ?? ""}
-                        onChange={onChange}
-                        scope="team"
-                        scopeId={teamId}
-                      />
-                    )}
-                  </FormField>
-
-                  <FormField control={form.control} name="team_description" label={t("Description")}>
-                    {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
-                  </FormField>
-
-                  <FormField
-                    control={form.control}
-                    name="models"
-                    label={t("Models")}
-                    description={t(
-                      "Leave the model list empty to allow every published model. A list limits the team to those models.",
-                    )}
-                  >
-                    {({ id, value, onChange }) => (
-                      <ModelSelect
-                        id={id}
-                        value={value ?? []}
-                        onChange={onChange}
-                        teamID={teamId}
-                        organizationID={teamData?.team_info?.organization_id || undefined}
-                        options={{
-                          includeSpecialOptions: false,
-                          includeUserModels: !teamData?.team_info?.organization_id,
-                        }}
-                        context="team"
-                        dataTestId="models-select"
-                        disabled={!is_proxy_admin}
-                      />
-                    )}
-                  </FormField>
-
-                  <p className="text-sm text-muted-foreground">{t("quotaGuide.team")}</p>
-
-                  <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput
-                        {...field}
-                        ref={ref}
-                        value={value ?? ""}
-                        step={0.01}
-                        precision={2}
-                        disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
-                      />
-                    )}
-                  </FormField>
-
-                  <p className="text-sm text-muted-foreground">{t("quotaGuide.rates")}</p>
-                  {(["rpm_limit", "tpm_limit"] as const).map((name) => (
-                    <FormField key={name} control={form.control} name={name} label={t(name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)")}>
-                      {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} min={0} step={1} precision={0} placeholder={t("quotaGuide.rateBlank")} disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)} />}
+                <FieldGroup className="gap-5">
+                  <DirectoryFormSection section="identity">
+                    <FormField control={form.control} name="team_alias" label={t("Team Name")}>
+                      {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
                     </FormField>
-                  ))}
+
+                    <FormField control={form.control} name="team_description" label={t("Description")}>
+                      {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
+                    </FormField>
+                  </DirectoryFormSection>
+                  <DirectoryFormSection section="access">
+                    <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
+                      {({ value, onChange }) => (
+                        <RouteTemplateSelect
+                          accessToken={accessToken}
+                          value={value ?? ""}
+                          onChange={onChange}
+                          scope="team"
+                          scopeId={teamId}
+                        />
+                      )}
+                    </FormField>
+
+                    <FormField
+                      control={form.control}
+                      name="models"
+                      label={t("Models")}
+                      description={t(
+                        "directoryForm.teamModelHint",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <ModelSelect
+                          id={id}
+                          value={value ?? []}
+                          onChange={onChange}
+                          teamID={teamId}
+                          organizationID={teamData?.team_info?.organization_id || undefined}
+                          options={{
+                            includeSpecialOptions: false,
+                            includeUserModels: !teamData?.team_info?.organization_id,
+                          }}
+                          context="team"
+                          dataTestId="models-select"
+                          disabled={!is_proxy_admin}
+                        />
+                      )}
+                    </FormField>
+                  </DirectoryFormSection>
+                  <DirectoryFormSection section="limits">
+                    <QuotaGuide scope="team" />
+
+                    <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
+                      {({ ref, value, ...field }) => (
+                        <NumericalInput
+                          {...field}
+                          ref={ref}
+                          value={value ?? ""}
+                          step={0.01}
+                          precision={2}
+                          disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
+                        />
+                      )}
+                    </FormField>
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {(["rpm_limit", "tpm_limit"] as const).map((name) => (
+                        <FormField
+                          key={name}
+                          control={form.control}
+                          name={name}
+                          label={t(
+                            name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput
+                              {...field}
+                              ref={ref}
+                              value={value ?? ""}
+                              min={0}
+                              step={1}
+                              precision={0}
+                              placeholder={t("quotaGuide.rateBlank")}
+                              disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
+                            />
+                          )}
+                        </FormField>
+                      ))}
+                    </div>
+                  </DirectoryFormSection>
                   {is_proxy_admin ? (
-                    <FormField control={form.control} name="blocked" label={t("Blocked")}>
+                    <FormField
+                      control={form.control}
+                      name="blocked"
+                      className="rounded-xl border border-destructive/25 bg-destructive/5 p-4"
+                      label={t("Blocked")}
+                    >
                       {({ id, value, onChange }) => (
                         <Switch id={id} checked={value === true} onCheckedChange={onChange} />
                       )}
@@ -1023,7 +1055,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </form>
             </TooltipProvider>
           ) : (
-            <div className="space-y-4">
+            <div className="grid min-w-0 gap-5 border-t pt-5 sm:grid-cols-2 [&>div>p]:mb-1 [&>div>p]:text-xs [&>div>p]:text-muted-foreground">
               <div>
                 <p className="font-medium">{t("Team Name")}</p>
                 <div>{info.team_alias}</div>
@@ -1034,18 +1066,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">{t("Team ID")}</p>
-                <div className="font-mono">{info.team_id}</div>
+                <div className="break-all font-mono text-xs">{info.team_id}</div>
               </div>
               <div>
                 <p className="font-medium">{t("Created At")}</p>
-                <div>{info.created_at ? new Date(info.created_at).toLocaleString() : t("None")}</div>
+                <div>{info.created_at ? <DateCell value={info.created_at} precision="datetime" /> : t("None")}</div>
               </div>
               <div>
                 <p className="font-medium">{t("Models")}</p>
                 {info.models.length === 0 ? (
                   <div className="text-muted-foreground">
                     {t(
-                      "Leave the model list empty to allow every published model. A list limits the team to those models.",
+                      "directoryForm.teamModelHint",
                     )}
                   </div>
                 ) : (
@@ -1100,6 +1132,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <Button
               variant="ghost"
               size="icon-xs"
+              aria-label={t("Copy team ID")}
               onClick={() => copyToClipboard(info.team_id, "team-id")}
               className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["team-id"]
@@ -1114,7 +1147,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       </div>
 
       <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start gap-1 rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
               {label}

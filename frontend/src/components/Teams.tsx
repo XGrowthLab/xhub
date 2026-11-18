@@ -1,4 +1,5 @@
 import { isValidRateAllocation } from "./create_user_payload";
+import { DirectoryFormSection } from "@/components/shared/DirectoryFormSection";
 import { QuotaGuide } from "./shared/QuotaGuide";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -198,6 +199,7 @@ const getAdminOrganizations = (
 
 /** 团队管理入口：参数为会话、用户身份及权限；返回列表、编辑和删除弹窗，确认后调用真实接口，错误保留提示。
  * @deprecated */
+/** 团队管理入口根据会话、角色和已选团队展示列表或详情，并复用已有管理接口处理表单。 */
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const t = useT();
   const { data: organizationsData } = useOrganizations();
@@ -575,6 +577,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
               </TabsList>
             )}
           />
+          <QuotaGuide scope="team" />
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
@@ -592,112 +595,141 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             <TooltipProvider>
               <form onSubmit={form.handleSubmit(onCreateSubmit)}>
                 <FieldGroup>
-                  <QuotaGuide scope="team" />
-                  <FormField control={form.control} name="team_alias" label={t("Team Name")}>
-                    {({ ref, value, ...field }) => (
-                      <UIInput {...field} ref={ref} value={value ?? ""} data-testid="team-name-input" />
-                    )}
-                  </FormField>
-                  {(() => {
-                    const isSingleOrg = adminOrgs.length === 1;
-                    const hasNoOrgs = adminOrgs.length === 0;
-                    const soleOrganizationId = isSingleOrg ? adminOrgs[0].organization_id ?? null : null;
+                  <DirectoryFormSection section="identity">
+                    <FormField control={form.control} name="team_alias" label={t("Team Name")}>
+                      {({ ref, value, ...field }) => (
+                        <UIInput {...field} ref={ref} value={value ?? ""} data-testid="team-name-input" />
+                      )}
+                    </FormField>
+                    {(() => {
+                      const isSingleOrg = adminOrgs.length === 1;
+                      const hasNoOrgs = adminOrgs.length === 0;
+                      const soleOrganizationId = isSingleOrg ? adminOrgs[0].organization_id ?? null : null;
 
-                    return (
-                      <>
+                      return (
+                        <>
+                          <FormField
+                            control={form.control}
+                            name="organization_id"
+                            className="mt-8"
+                            label={t("Organization")}
+                            description={
+                              isOrgAdmin && isSingleOrg
+                                ? t("You can only create teams within this organization")
+                                : isOrgAdmin
+                                  ? t("required")
+                                  : undefined
+                            }
+                          >
+                            {({ id, value, onChange }) => (
+                              <SearchSelect
+                                inputId={id}
+                                value={value ?? ""}
+                                options={adminOrgs.map((org) => ({
+                                  value: org.organization_id ?? "",
+                                  label: org.organization_alias ?? "",
+                                  sublabel: org.organization_id ?? "",
+                                }))}
+                                disabled={isOrgAdmin && soleOrganizationId !== null && value === soleOrganizationId}
+                                allowClear={!isOrgAdmin}
+                                placeholder={
+                                  hasNoOrgs ? t("No organizations available") : t("Search or select an Organization")
+                                }
+                                emptyText={t("No organizations available")}
+                                onValueChange={(next) => selectCreateTeamOrganization(next, value ?? null, onChange)}
+                              />
+                            )}
+                          </FormField>
+
+                          {isOrgAdmin && !isSingleOrg && adminOrgs.length > 1 && (
+                            <div className="mb-8 rounded-md border border-info/20 bg-info/10 p-4">
+                              <span className="text-sm text-info">
+                                {t(
+                                  "Please select an organization to create a team for. You can only create teams within organizations where you are an admin.",
+                                )}
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                    <FormField control={form.control} name="team_description" label={t("Description")}>
+                      {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
+                    </FormField>
+                  </DirectoryFormSection>
+                  <DirectoryFormSection section="access">
+                    <FormField
+                      control={form.control}
+                      name="models"
+                      label={t("Models")}
+                      description={t(
+                        "directoryForm.teamModelHint",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <ModelSelect
+                          id={id}
+                          value={value ?? []}
+                          onChange={onChange}
+                          organizationID={watchedOrganizationId ?? undefined}
+                          options={{ includeSpecialOptions: false }}
+                          context="team"
+                          dataTestId="create-team-models-select"
+                        />
+                      )}
+                    </FormField>
+
+                    <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
+                      {({ value, onChange }) => (
+                        <RouteTemplateSelect
+                          accessToken={accessToken}
+                          value={value ?? ""}
+                          onChange={onChange}
+                          scope="team"
+                        />
+                      )}
+                    </FormField>
+                  </DirectoryFormSection>
+                  <DirectoryFormSection section="limits">
+                    <QuotaGuide scope="team" />
+                    <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
+                      {({ ref, value, ...field }) => (
+                        <NumericalInput
+                          {...field}
+                          ref={ref}
+                          value={value ?? ""}
+                          step={0.01}
+                          precision={2}
+                          width={200}
+                        />
+                      )}
+                    </FormField>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {(["rpm_limit", "tpm_limit"] as const).map((name) => (
                         <FormField
+                          key={name}
                           control={form.control}
-                          name="organization_id"
-                          className="mt-8"
-                          label={t("Organization")}
-                          description={
-                            isOrgAdmin && isSingleOrg
-                              ? t("You can only create teams within this organization")
-                              : isOrgAdmin
-                                ? t("required")
-                                : undefined
-                          }
+                          name={name}
+                          label={t(
+                            name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)",
+                          )}
                         >
-                          {({ id, value, onChange }) => (
-                            <SearchSelect
-                              inputId={id}
+                          {({ ref, value, ...field }) => (
+                            <UIInput
+                              {...field}
+                              ref={ref}
+                              type="number"
+                              min="0"
+                              max="2147483647"
+                              step="1"
                               value={value ?? ""}
-                              options={adminOrgs.map((org) => ({
-                                value: org.organization_id ?? "",
-                                label: org.organization_alias ?? "",
-                                sublabel: org.organization_id ?? "",
-                              }))}
-                              disabled={isOrgAdmin && soleOrganizationId !== null && value === soleOrganizationId}
-                              allowClear={!isOrgAdmin}
-                              placeholder={
-                                hasNoOrgs ? t("No organizations available") : t("Search or select an Organization")
-                              }
-                              emptyText={t("No organizations available")}
-                              onValueChange={(next) => selectCreateTeamOrganization(next, value ?? null, onChange)}
+                              placeholder={t("quotaGuide.rateBlank")}
                             />
                           )}
                         </FormField>
-
-                        {isOrgAdmin && !isSingleOrg && adminOrgs.length > 1 && (
-                          <div className="mb-8 rounded-md border border-info/20 bg-info/10 p-4">
-                            <span className="text-sm text-info">
-                              {t("Please select an organization to create a team for. You can only create teams within organizations where you are an admin.")}
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                  <FormField control={form.control} name="team_description" label={t("Description")}>
-                    {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
-                  </FormField>
-                  <FormField
-                    control={form.control}
-                    name="models"
-                    label={t("Models")}
-                    description={t(
-                      "Leave the model list empty to allow every published model. A list limits the team to those models.",
-                    )}
-                  >
-                    {({ id, value, onChange }) => (
-                      <ModelSelect
-                        id={id}
-                        value={value ?? []}
-                        onChange={onChange}
-                        organizationID={watchedOrganizationId ?? undefined}
-                        options={{ includeSpecialOptions: false }}
-                        context="team"
-                        dataTestId="create-team-models-select"
-                      />
-                    )}
-                  </FormField>
-
-                  <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
-                    {({ value, onChange }) => (
-                      <RouteTemplateSelect
-                        accessToken={accessToken}
-                        value={value ?? ""}
-                        onChange={onChange}
-                        scope="team"
-                      />
-                    )}
-                  </FormField>
-
-                  <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")} description={t("quotaGuide.team")}>
-                    {({ ref, value, ...field }) => (
-                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} width={200} />
-                    )}
-                  </FormField>
-                  {(["rpm_limit", "tpm_limit"] as const).map((name) => (
-                    <FormField key={name} control={form.control} name={name}
-                      label={t(name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)")}
-                      description={t("quotaGuide.rates")}>
-                      {({ ref, value, ...field }) => (
-                        <UIInput {...field} ref={ref} type="number" min="0" max="2147483647" step="1"
-                          value={value ?? ""} placeholder={t("quotaGuide.rateBlank")} />
-                      )}
-                    </FormField>
-                  ))}
+                      ))}
+                    </div>
+                  </DirectoryFormSection>
                 </FieldGroup>
                 <div className="mt-[10px] text-right">
                   <UIButton type="submit" data-testid="create-team-submit">

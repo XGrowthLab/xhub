@@ -116,13 +116,14 @@ describe("上游响应折叠", () => {
 /** 前置包含上游和计费用量的日志；双语验证零值、缺失、上游请求 ID 与原始详情，卸载组件清理。 */
 it.each(["zh-CN", "en"] as const)("%s 以可读字段显示上游用量", async (locale) => {
   const user = userEvent.setup();
-  const info = { status_code: 200, headers: { "X-Request-ID": ["upstream-id"] }, usage_reported: true,
+  const info = { status_code: 200, usage_parse_error: "upstream body closed before EOF", headers: { "X-Request-ID": ["upstream-id"] }, usage_reported: true,
     usage: { input_tokens: 0, output_tokens: 15, total_tokens: 15, input_tokens_details: { cached_tokens: 0 }, extra: "original" }, billing_usage: { prompt_tokens: 12, completion_tokens: 3, cache_creation_input_tokens: 4 } };
   const { rerender } = render(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={logEntry({ metadata: { upstream_response: info } })} /></I18nProvider>);
   const region = screen.getByRole("region", { name: translate(locale, "Upstream Response") });
   await user.click(within(region).getByRole("button", { name: translate(locale, "Upstream Response"), exact: true }));
   expect(region).toHaveTextContent(translate(locale, "logsUX.upstreamSummary"));
   expect(region).toHaveTextContent("upstream-id");
+  expect(within(region).getByText(translate(locale, "logsUX.earlyClose"))).toBeVisible();
   const upstream = within(region).getByRole("region", { name: translate(locale, "Upstream Usage") });
   expect(upstream).toHaveTextContent(translate(locale, "logsUX.inputTokens"));
   expect(upstream).toHaveTextContent("0");
@@ -134,6 +135,7 @@ it.each(["zh-CN", "en"] as const)("%s 以可读字段显示上游用量", async 
   expect(billing).toHaveTextContent(translate(locale, "logsUX.cacheWriteTokens"));
   await user.click(within(region).getByText(translate(locale, "logsUX.upstreamRaw")));
   expect(within(region).getByText(/original/)).toBeVisible();
+  expect(within(region).getByText(info.usage_parse_error)).toBeVisible();
   rerender(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={logEntry({ request_id: "other", metadata: { upstream_response: { status_code: 0, headers: {}, usage_reported: false } } })} /></I18nProvider>);
   await user.click(screen.getByRole("button", { name: translate(locale, "Upstream Response"), exact: true }));
   expect(within(screen.getByRole("region", { name: translate(locale, "Upstream Response") })).getByText(translate(locale, "Not reported"))).toBeVisible();

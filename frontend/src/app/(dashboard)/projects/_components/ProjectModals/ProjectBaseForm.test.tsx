@@ -1,3 +1,4 @@
+import { I18nProvider, translate } from "@/i18n";
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -39,9 +40,13 @@ describe("ProjectBaseForm", () => {
     expect(screen.getByLabelText("Project Name")).toBeInTheDocument();
   });
 
-  it("should show a 'Basic Information' section heading", () => {
-    renderWithProviders(<FormWrapper />);
-    expect(screen.getByText("Basic Information")).toBeInTheDocument();
+  /** 空团队的双语创建表单应将名称、模型范围和预算分别归组，并本地化禁用状态；无提交，组件随用例卸载。 */
+  it.each(["en", "zh-CN"] as const)("groups the project fields and localizes the empty scope in %s", (locale) => {
+    const tr = (key: string) => translate(locale, key);
+    renderWithProviders(<I18nProvider initialLocale={locale}><FormWrapper /></I18nProvider>);
+    expect(screen.getByRole("group", { name: tr("Basic Information") })).toContainElement(screen.getByLabelText(tr("Project Name")));
+    expect(screen.getByRole("group", { name: tr("directoryForm.modelAccess") })).toContainElement(screen.getByText(tr("pages.projects.teamFirst")));
+    expect(screen.getByRole("group", { name: tr("directoryForm.limits") })).toContainElement(screen.getByLabelText(tr("Max Budget (USD)")));
   });
 
   it("should show a Project Name input", () => {

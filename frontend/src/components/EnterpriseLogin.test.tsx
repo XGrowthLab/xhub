@@ -23,6 +23,7 @@ it("多个企业入口使用中文文案且保持名称与地址", async () => {
  render(<I18nProvider initialLocale="zh-CN"><EnterpriseLogin /></I18nProvider>);
  await waitFor(() => expect(screen.getAllByRole("link")).toHaveLength(2));
  expect(screen.getByRole("link", { name: "使用 研发 Company 登录" })).toHaveAttribute("href", "/gw/auth/enterprise/one/start");
+ expect(screen.getByRole("link", { name: "使用 Engineering 登录" })).toHaveClass("focus-visible:ring-3");
  expect(screen.getByRole("link", { name: "使用 Engineering 登录" })).toHaveAttribute("href", "/gw/auth/enterprise/two/start");
 });
 // 前置英文登录页和公开入口；验证动态名称保持原语言及受控跳转，清理组件与 mock。

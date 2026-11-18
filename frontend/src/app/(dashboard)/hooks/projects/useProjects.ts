@@ -17,7 +17,9 @@ export interface ProjectBudget {
   budget_duration: string | null;
 }
 
+/** 项目查询的响应；当前后端提供顶层预算，历史接口可返回预算表。读取时须保留显式零与 null。 */
 export interface ProjectResponse {
+  max_budget?: number | null;
   project_id: string;
   project_alias: string | null;
   description: string | null;
@@ -35,7 +37,7 @@ export interface ProjectResponse {
   created_by: string;
   updated_at: string;
   updated_by: string;
-  litellm_budget_table: ProjectBudget | null;
+  litellm_budget_table?: ProjectBudget | null;
 }
 
 // ── Query keys (shared across project hooks) ─────────────────────────────────

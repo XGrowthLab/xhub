@@ -23,7 +23,7 @@ export function registerOrganizationConfigScenario(locale: "en" | "zh-CN") {
     };
     try {
       await stableGoto(page, "/organizations");
-      await page.getByRole("button", {name: "+ " + tr("pages.organizations.create"), exact: true}).click();
+      await page.getByRole("button", {name: tr("pages.organizations.create"), exact: true}).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel(tr("Organization Name"), {exact: true}).fill(orgName);
       await expect(dialog.getByText(tr("organizationConfig.modelScopeHint"))).toBeVisible();

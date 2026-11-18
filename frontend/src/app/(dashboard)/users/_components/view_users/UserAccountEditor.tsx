@@ -2,7 +2,9 @@ import { UserBudgetReset } from "@/components/common_components/user_budget_rese
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { DirectoryFormSection } from "@/components/shared/DirectoryFormSection";
+import { HelpDisclosure } from "@/components/console/ConsolePrimitives";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { userUpdateUserCall, type UserInfoV2Response } from "@/components/networking";
@@ -64,34 +66,43 @@ export default function UserAccountEditor({ user, accessToken, onSaved, onCancel
   };
 
   return <form onSubmit={save}>
-    <fieldset disabled={saving}>
-      <FieldGroup>
-        <Field><FieldLabel htmlFor="edit-user-email">{t("pages.users.email")}</FieldLabel>
-          <Input id="edit-user-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-        <Field><FieldLabel htmlFor="edit-user-alias">{t("pages.users.alias")}</FieldLabel>
-          <Input id="edit-user-alias" value={alias} onChange={(event) => setAlias(event.target.value)} /></Field>
+    <fieldset disabled={saving} className="min-w-0 space-y-4">
+      <DirectoryFormSection section="identity">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field><FieldLabel htmlFor="edit-user-email">{t("pages.users.email")}</FieldLabel>
+            <Input id="edit-user-email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+          <Field><FieldLabel htmlFor="edit-user-alias">{t("pages.users.alias")}</FieldLabel>
+            <Input id="edit-user-alias" value={alias} onChange={(event) => setAlias(event.target.value)} /></Field>
+        </div>
         <Field><FieldLabel htmlFor="edit-user-role">{t("pages.users.role")}</FieldLabel>
           <Select items={roles} value={role} onValueChange={(value) => value && setRole(value as IamRole)} disabled={saving}>
             <SelectTrigger id="edit-user-role" aria-label={t("pages.users.role")}><SelectValue /></SelectTrigger>
             <SelectContent>{roles.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
           </Select></Field>
-        <Field><FieldLabel htmlFor="edit-user-budget">{t("pages.users.maxBudget")}</FieldLabel>
-          <Input id="edit-user-budget" type="number" min="0" step="0.01" aria-describedby="edit-user-budget-help" placeholder={t(user.teams?.length ? "quotaGuide.blank" : "pages.users.unlimited")} value={budget} onChange={(event) => setBudget(event.target.value)} />
-          <p id="edit-user-budget-help" className="text-sm text-muted-foreground">{t("quotaGuide.personalBillingHelp")}</p></Field>
-        <Field><FieldLabel htmlFor="edit-user-reset-day">{t("userBudgetReset.label")}</FieldLabel>
-          <UserBudgetReset id="edit-user-reset-day" value={resetDay} onChange={setResetDay} disabled={saving} />
-          <p className="text-sm text-muted-foreground">{t("userBudgetReset.help")}</p></Field>
-        <p className="text-sm text-muted-foreground">{t("quotaGuide.rates")}</p>
-        <Field><FieldLabel htmlFor="edit-user-rpm">{t("Requests per minute Limit (RPM)")}</FieldLabel>
-          <Input id="edit-user-rpm" type="number" min="0" max="2147483647" step="1" placeholder={t("quotaGuide.rateBlank")} value={rpm} onChange={(event) => setRpm(event.target.value)} /></Field>
-        <Field><FieldLabel htmlFor="edit-user-tpm">{t("Tokens per minute Limit (TPM)")}</FieldLabel>
-          <Input id="edit-user-tpm" type="number" min="0" max="2147483647" step="1" placeholder={t("quotaGuide.rateBlank")} value={tpm} onChange={(event) => setTpm(event.target.value)} /></Field>
         <Field orientation="horizontal"><Checkbox id="edit-user-blocked" checked={blocked} onCheckedChange={(value) => setBlocked(value === true)} />
           <FieldLabel htmlFor="edit-user-blocked">{t("Blocked")}</FieldLabel></Field>
         <EnterpriseIdentityFields connections={enterprise.connections} connectionID={connectionID} externalID={externalID}
           onConnectionChange={(value) => { setConnectionID(value); if (!value) setExternalID(""); }} onExternalChange={setExternalID}
           managed={user.sso_binding_managed} loading={enterprise.loading} error={enterprise.error} />
-      </FieldGroup>
+      </DirectoryFormSection>
+      <DirectoryFormSection section="limits">
+        <div className="grid items-start gap-4 sm:grid-cols-2">
+          <Field><FieldLabel htmlFor="edit-user-budget">{t("pages.users.maxBudget")}</FieldLabel>
+            <Input id="edit-user-budget" type="number" min="0" step="0.01" aria-describedby="edit-user-budget-help" placeholder={t(user.teams?.length ? "quotaGuide.blank" : "pages.users.unlimited")} value={budget} onChange={(event) => setBudget(event.target.value)} />
+          </Field>
+          <Field><FieldLabel htmlFor="edit-user-reset-day">{t("userBudgetReset.label")}</FieldLabel>
+            <UserBudgetReset id="edit-user-reset-day" value={resetDay} onChange={setResetDay} disabled={saving} />
+            <p className="text-sm text-muted-foreground">{t("userBudgetReset.help")}</p></Field>
+          <Field><FieldLabel htmlFor="edit-user-rpm">{t("Requests per minute Limit (RPM)")}</FieldLabel>
+            <Input id="edit-user-rpm" type="number" min="0" max="2147483647" step="1" placeholder={t("quotaGuide.rateBlank")} value={rpm} onChange={(event) => setRpm(event.target.value)} /></Field>
+          <Field><FieldLabel htmlFor="edit-user-tpm">{t("Tokens per minute Limit (TPM)")}</FieldLabel>
+            <Input id="edit-user-tpm" type="number" min="0" max="2147483647" step="1" placeholder={t("quotaGuide.rateBlank")} value={tpm} onChange={(event) => setTpm(event.target.value)} /></Field>
+        </div>
+        <HelpDisclosure title={t("directoryForm.limitHelp")}>
+          <p id="edit-user-budget-help">{t("quotaGuide.personalBillingHelp")}</p>
+          <p>{t("quotaGuide.rates")}</p>
+        </HelpDisclosure>
+      </DirectoryFormSection>
       <div className="mt-6 flex justify-end gap-2">
         <Button type="button" variant="secondary" onClick={onCancel}>{t("common.cancel")}</Button>
         <Button type="submit" aria-busy={saving}>{t("pages.users.saveChanges")}</Button>

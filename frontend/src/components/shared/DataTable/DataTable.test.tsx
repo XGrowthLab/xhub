@@ -144,6 +144,14 @@ const expansionColumns: ColumnDef<Person, unknown>[] = [
 const CHARLIE_ALICE_BOB: Person[] = [person("c", "Charlie"), person("a", "Alice"), person("b", "Bob")];
 
 describe("DataTable sorting", () => {
+  /** 给空表、单行及多行提供一致的边缘留白；前置内存数据，核对列标题与普通数据行，卸载后自动清理。 */
+  it.each([{ rows: [] }, { rows: [person("a", "Alice")] }, { rows: CHARLIE_ALICE_BOB }])("aligns headers and cells at the table edge", ({ rows }) => {
+    render(<DataTable data={rows} columns={nameCellColumns} />);
+    expect(screen.getAllByRole("columnheader")[0]).toHaveClass("first:ps-4");
+    for (const cell of screen.queryAllByTestId("name-cell")) {
+      expect(cell.closest("td")).toHaveClass("first:ps-4");
+    }
+  });
   it("client mode reorders rows when the sort header is clicked", async () => {
     const user = userEvent.setup();
     render(<DataTable data={CHARLIE_ALICE_BOB} columns={headerCycleColumns} sortingMode="client" />);

@@ -45,9 +45,6 @@ import {
 import {
   DRAWER_CONTENT_PADDING,
   API_BASE_MAX_WIDTH,
-  METADATA_MAX_HEIGHT,
-  FONT_SIZE_SMALL,
-  FONT_FAMILY_MONO,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
@@ -76,6 +73,7 @@ export interface LogDetailContentProps {
 export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetailsError = false, accessToken }: LogDetailContentProps) {
   const t = useT();
   const metadata = logEntry.metadata || {};
+  const earlyClose = metadata.upstream_response?.usage_parse_error === "upstream body closed before EOF";
   const hasError = isRequestFailure(logEntry);
   const errorDetails = hasError ? fullErrorDetails(logEntry) : "";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -303,15 +301,16 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
             <CollapsibleContent className="pt-3">
               <p className="mb-3 text-sm text-muted-foreground">{t("logsUX.upstreamSummary")}</p>
               <p>{t("HTTP Status")}: {metadata.upstream_response.status_code || t("logDiagnostics.noResponse")}</p>
-              {metadata.upstream_response.read_error && <p role="alert">{metadata.upstream_response.read_error}</p>}
-              {metadata.upstream_response.usage_parse_error && <p role="alert">{metadata.upstream_response.usage_parse_error}</p>}
+              {metadata.upstream_response.read_error && <p role="alert" className="my-2 break-words rounded-md border-l-2 border-amber-500 bg-muted px-3 py-2 text-sm">{metadata.upstream_response.read_error}</p>}
+              {metadata.upstream_response.usage_parse_error && <p role="alert" className="my-2 break-words rounded-md border-l-2 border-amber-500 bg-muted px-3 py-2 text-sm">{earlyClose ? t("logsUX.earlyClose") : metadata.upstream_response.usage_parse_error}</p>}
               {upstreamRequestId(metadata.upstream_response.headers) && <p className="break-all">{t("logsUX.upstreamRequestId")}: {upstreamRequestId(metadata.upstream_response.headers)}</p>}
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-3">
                 <UsageSummary title={t("Upstream Usage")} help={t("logsUX.upstreamUsageHelp")} usage={metadata.upstream_response.usage_reported ? metadata.upstream_response.usage : undefined} missing={metadata.upstream_response.usage_reported ? t("logsUX.usageUnavailable") : t("Not reported")} />
-                <UsageSummary title={t("Billing Usage")} help={t("logsUX.billingUsageHelp")} usage={metadata.upstream_response.billing_usage} missing={t("logsUX.usageUnavailable")} />
+                <UsageSummary billing title={t("Billing Usage")} help={t("logsUX.billingUsageHelp")} usage={metadata.upstream_response.billing_usage} missing={t("logsUX.usageUnavailable")} />
               </div>
               <details className="mt-3 rounded border p-3">
                 <summary className="cursor-pointer text-sm font-medium">{t("logsUX.upstreamRaw")}</summary>
+                {earlyClose && <pre className="my-2 whitespace-pre-wrap text-xs">{metadata.upstream_response.usage_parse_error}</pre>}
                 <h4>{t("Upstream Response Headers")}</h4>
                 <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(metadata.upstream_response.headers ?? {}, null, 2)}</pre>
                 {metadata.upstream_response.trailers && <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(metadata.upstream_response.trailers, null, 2)}</pre>}
@@ -327,7 +326,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
 
       {/* Metadata */}
       {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
-        <details className="mb-4 rounded-md border p-3"><summary className="cursor-pointer text-sm font-medium">{t("logsUX.rawMetadata")}</summary><p className="mt-2 text-sm text-muted-foreground">{t("logsUX.metadataHelp")}</p><MetadataSection metadata={logEntry.metadata} /></details>
+        <MetadataSection key={logEntry.request_id} metadata={logEntry.metadata} />
       )}
 
       {/* Bottom spacing */}
@@ -351,8 +350,8 @@ function upstreamRequestId(headers: unknown): string | undefined {
   return undefined;
 }
 
-/** 展示已记录的输入、输出和总 Token；未知字段保留在原始数据中，缺失不推断为零。 */
-function UsageSummary({ title, help, usage, missing }: { title: string; help: string; usage: unknown; missing: string }) {
+/** 上游详情按来源展示可比较的 Token 数值。title/help 为本地化标题与提示，usage 为原始对象；billing 标记计费区，missing 为缺失提示。保留真实零值与原始数据。 */
+function UsageSummary({ title, help, usage, missing, billing = false }: { billing?: boolean; title: string; help: string; usage: unknown; missing: string }) {
   const t = useT();
   const data = usage && typeof usage === "object" && !Array.isArray(usage) ? usage as Record<string, unknown> : {};
   const rawDetails = data.input_tokens_details ?? data.prompt_tokens_details;
@@ -364,24 +363,24 @@ function UsageSummary({ title, help, usage, missing }: { title: string; help: st
     [t("logsUX.cacheReadTokens"), data.cache_read_input_tokens ?? details.cached_tokens],
     [t("logsUX.cacheWriteTokens"), data.cache_creation_input_tokens ?? details.cache_write_tokens],
   ].filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]));
-  return <section aria-label={title} className="rounded border p-3 text-sm">
-    <h4 className="font-medium">{title}</h4>
-    <p className="mb-2 text-muted-foreground">{help}</p>
-    {fields.length ? <dl>{fields.map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt>{label}</dt><dd>{formatNumberWithCommas(value)}</dd></div>)}</dl> : <p>{missing}</p>}
+  return <section aria-label={title} className="min-w-0 rounded-lg border bg-card p-3 text-sm">
+    <h4 className="flex items-center gap-2 font-semibold"><span aria-hidden="true" className={billing ? "h-4 w-1 rounded-full bg-primary" : "h-4 w-1 rounded-full bg-muted-foreground"} />{title}</h4>
+    <p className="my-2 text-xs leading-relaxed text-muted-foreground">{help}</p>
+    {fields.length ? <dl className="divide-y divide-border">{fields.map(([label, value]) => <div key={label} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 py-2"><dt className="text-muted-foreground">{label}</dt><dd className="font-semibold tabular-nums">{formatNumberWithCommas(value)}</dd></div>)}</dl> : <p>{missing}</p>}
   </section>;
 }
 
+/** 为请求详情与指标排版标签值对，按容器宽度排一至两列；children 由 DescriptionItem 组成，渲染不改变数据。 */
 function DescriptionList({ children }: { children: React.ReactNode }) {
-  const t = useT();
-  return <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">{children}</div>;
+  return <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,max(12rem,45%)),1fr))] gap-x-6 gap-y-4 text-sm">{children}</dl>;
 }
 
+/** 用语义化标签和值展示单个指标；label 可含帮助按钮，children 可含复制按钮或长标识。紧凑宽度时值仍可换行。 */
 function DescriptionItem({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
-  const t = useT();
   return (
-    <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
-      <span className="shrink-0 text-muted-foreground after:content-[':']">{label}</span>
-      <span className="min-w-0 break-words">{children}</span>
+    <div className="min-w-0 space-y-1">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 leading-snug tabular-nums [overflow-wrap:anywhere]">{children}</dd>
     </div>
   );
 }
@@ -864,42 +863,23 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
   );
 }
 
-function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
+/** 在日志末尾提供单层披露控件；metadata 为后台授权返回的原始字段，首次展开时才序列化，复制使用同一数据。 */
+function MetadataSection({ metadata }: { metadata: Record<string, unknown> }) {
   const t = useT();
-  const [open, setOpen] = useState(true);
-
+  const [open, setOpen] = useState(false);
   return (
-    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
-          {open ? (
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <h3 className="text-lg font-medium text-foreground">{t("Metadata")}</h3>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-              <CopyButton getText={() => JSON.stringify(metadata, null, 2)} label={t("Copy Metadata")} />
-            </div>
-            <pre
-              style={{
-                maxHeight: METADATA_MAX_HEIGHT,
-                overflowY: "auto",
-                fontSize: FONT_SIZE_SMALL,
-                fontFamily: FONT_FAMILY_MONO,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                margin: 0,
-              }}
-            >
-              {JSON.stringify(metadata, null, 2)}
-            </pre>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-    </div>
+    <Collapsible open={open} onOpenChange={setOpen} className="mb-4 rounded-lg border bg-card p-4">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 text-left text-sm font-semibold">
+        {open ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronRight aria-hidden="true" className="size-4" />}
+        {t("logsUX.rawMetadata")}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="my-3 flex items-start justify-between gap-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("logsUX.metadataHelp")}</p>
+          <CopyButton getText={() => JSON.stringify(metadata, null, 2)} label={t("Copy Metadata")} />
+        </div>
+        {open && <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">{JSON.stringify(metadata, null, 2)}</pre>}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

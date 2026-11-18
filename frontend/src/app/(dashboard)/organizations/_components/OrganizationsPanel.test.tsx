@@ -90,13 +90,13 @@ describe("OrganizationsPanel", () => {
     renderPanel({ premiumUser: false });
 
     expect(screen.getByText(/XHub Enterprise feature/i)).toBeInTheDocument();
-    expect(screen.queryByText("+ Create New Organization")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create New Organization")).not.toBeInTheDocument();
   });
 
   it("shows the create button for a premium admin", () => {
     renderPanel();
 
-    expect(screen.getByText("+ Create New Organization")).toBeInTheDocument();
+    expect(screen.getByText("Create New Organization")).toBeInTheDocument();
   });
 
   it("resolves the loading skeleton to false when the query is disabled (no token)", () => {

@@ -737,6 +737,9 @@ describe("TeamInfoView", () => {
 
       await user.click(await screen.findByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      expect(screen.getByRole("group", { name: "Basic Information" })).toBeVisible();
+      expect(screen.getByRole("group", { name: "Model access" })).toBeVisible();
+      expect(screen.getByRole("group", { name: "Budget and rate limits" })).toBeVisible();
       const name = await screen.findByLabelText("Team Name");
       await user.clear(name);
       await user.type(name, "Renamed");

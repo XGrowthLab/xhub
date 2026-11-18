@@ -124,7 +124,12 @@ describe("ChatUI", () => {
     render(
       <ChatUI accessToken="test" token="test" userRole="user" userID="test" disabledPersonalKeyCreation={false} />,
     );
-    expect(screen.getByRole("heading", { name: translate("en", "myModels.modelsAndEndpoints") })).toBeVisible();
+    const panelToggle = screen.getByRole("button", { name: translate("en", "myModels.modelsAndEndpoints") });
+    expect(panelToggle).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(panelToggle);
+    expect(panelToggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(panelToggle);
+    expect(panelToggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByLabelText("Virtual Key Source")).not.toBeVisible();
     await userEvent.click(screen.getByText(translate("en", "myModels.connectionSettings")));
     expect(screen.getByLabelText("Virtual Key Source")).toBeVisible();

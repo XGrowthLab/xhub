@@ -7,6 +7,8 @@ import { UnavailableEndpoint } from "@/components/llm_calls/UnavailableEndpoint"
 import {
   Bot,
   Code2,
+  ChevronDown,
+  SlidersHorizontal,
   Eraser,
   Image as ImageIcon,
   Info,
@@ -262,6 +264,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
+  const panelId = React.useId();
+  const [settingsOpen, setSettingsOpen] = useState(true);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
@@ -1237,8 +1241,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
       <div className="flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-xl bg-card ring-1 ring-border">
         <div className="flex h-full min-h-0 min-w-0 w-full flex-col lg:flex-row">
           {!simplified && (
-            <div className="max-h-[42%] w-full shrink-0 overflow-y-auto border-b border-border bg-sidebar p-4 lg:max-h-none lg:w-[300px] lg:border-r lg:border-b-0 xl:w-[320px]">
-              <h2 className="mb-4 text-sm font-semibold">{t("myModels.modelsAndEndpoints")}</h2>
+            <aside className="flex max-h-[40%] w-full shrink-0 flex-col border-b border-border bg-card lg:max-h-none lg:w-[290px] lg:border-e lg:border-b-0 xl:w-[320px]">
+              <h2 className="hidden px-4 pb-2 pt-4 text-sm font-semibold lg:block">{t("myModels.modelsAndEndpoints")}</h2>
+              <button type="button" aria-expanded={settingsOpen} aria-controls={panelId} onClick={() => setSettingsOpen(!settingsOpen)}
+                className="flex min-h-11 w-full shrink-0 items-center gap-2 px-4 text-start text-sm font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset lg:hidden">
+                <SlidersHorizontal aria-hidden="true" className="size-4 text-primary" />
+                {t("myModels.modelsAndEndpoints")}
+                {!settingsOpen && selectedModel && <span className="truncate text-xs font-normal text-muted-foreground">{selectedModel}</span>}
+                <ChevronDown aria-hidden="true" className={`ms-auto size-4 shrink-0 transition-transform motion-reduce:transition-none ${settingsOpen ? "rotate-180" : ""}`} />
+              </button>
+              <div id={panelId} className={`min-h-0 overflow-y-auto overscroll-contain px-4 pb-4 lg:block ${settingsOpen ? "block" : "hidden"}`}>
               <div className="space-y-4">
                 {endpointType !== EndpointType.A2A_AGENTS && endpointType !== EndpointType.MCP && (
                   <div>
@@ -1508,7 +1520,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </div>
                       {customProxyBaseUrl && (
                         <p className="mt-1 text-xs text-muted-foreground">
-                          API calls will be sent to: {customProxyBaseUrl}
+                          {t("consoleDetails.proxyDestination", { url: customProxyBaseUrl })}
                         </p>
                       )}
                     </div>
@@ -1536,6 +1548,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             </div>
+            </aside>
           )}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
@@ -1558,7 +1571,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             ) : (
               <>
                 <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border p-3 sm:p-4">
-                  <h2 className="mb-0 text-xl font-semibold">{simplified ? t("Chat") : t("Chat")}</h2>
+                  <h2 className="mb-0 text-xl font-semibold">{t("Chat")}</h2>
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button type="button" variant="outline" size="sm" onClick={clearChatHistory}>
                       <Eraser className="size-3.5" />

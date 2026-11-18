@@ -119,12 +119,18 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("Blocked")).toBeInTheDocument();
   });
 
-  it("explains what a project is and what blocking it does", () => {
+  /** 空列表下验证指南默认折叠，可展开阅读预算与停用规则并再次收起；渲染器自动清理。 */
+  it("discloses project rules only when requested", async () => {
     mockUseProjects.mockReturnValue({ data: [], isLoading: false });
     renderWithProviders(<ProjectsPage />);
-    expect(screen.getByRole("heading", { name: "What projects are for" })).toBeInTheDocument();
-    expect(screen.getByText(/Block Project is the switch under Advanced Settings/)).toBeInTheDocument();
-    expect(screen.getByText(/keys on this project are refused before the upstream/)).toBeInTheDocument();
+    const toggle = screen.getByText("Project access and billing");
+    const rule = screen.getByText(/Enable Block Project in advanced settings/);
+    expect(rule).not.toBeVisible();
+    await userEvent.click(toggle);
+    expect(rule).toBeVisible();
+    expect(screen.getByText(/At the limit, requests stop/)).toBeVisible();
+    await userEvent.click(toggle);
+    expect(rule).not.toBeVisible();
   });
 
   it("should open the create modal when 'Create Project' is clicked", async () => {

@@ -165,6 +165,15 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       expect(account.status(), await account.text()).toBe(200);
       userID = (await account.json()).user_id;
       if (locale === "en") await page.getByRole("button", { name: "English", exact: true }).click();
+      // 管理员从真实目录搜索新部署，核对上游协议名并展开客户端接口；模型仍由 finally 清理。
+      await stableGoto(page, "/models-and-endpoints");
+      const modelSearch = page.getByRole("textbox", { name: tr("providerGuideUI.search"), exact: true });
+      await modelSearch.fill(model);
+      const group = page.getByRole("region", { name: translate(locale, "providerGuideUI.publicGroup", { name: model }), exact: true });
+      await expect(group.getByRole("paragraph").filter({ hasText: /^OpenAI · Chat Completions$/ })).toBeVisible();
+      const endpoints = group.locator("details").first();
+      await endpoints.locator("summary").click();
+      await expect(endpoints.getByRole("listitem").first()).toBeVisible();
       await login(page, email, "fixture-password", locale);
       await expect(page.getByText(tr("nav.apiKeys")).first()).toBeVisible();
       const auth = { Authorization: "Bearer " + (await sessionBearer(page)) };
@@ -410,6 +419,15 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
         await expect(page.getByRole("region", { name: tr("usageBudget.title"), exact: true })).toContainText("$500.00");
         await stableGoto(page, "/playground");
         await expect(page.getByPlaceholder(tr("Select a Model"), { exact: true })).toBeVisible();
+        const toggle = page.getByRole("button", { name: new RegExp(tr("myModels.modelsAndEndpoints")) });
+        if (width < 1024) {
+          await toggle.click();
+          await expect(toggle).toHaveAttribute("aria-expanded", "false");
+          await expect(page.getByPlaceholder(tr("Select a Model"), { exact: true })).toBeHidden();
+          await expect(page.getByTestId("chat-composer-input")).toBeVisible();
+          await toggle.click();
+          await expect(page.getByPlaceholder(tr("Select a Model"), { exact: true })).toBeVisible();
+        }
         await recordLayout(page, `playground-${locale}-${width}`);
       }
       const after = await page.request.get(GATEWAY + "/user/info?user_id=" + userID, { headers: admin });

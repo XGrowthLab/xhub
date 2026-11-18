@@ -5,7 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsPanel from "./AllModelsPanel";
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), error: vi.fn(), openModel: vi.fn() }));
-vi.mock("@/components/networking", () => ({ apiClient: { get: mocks.get, put: mocks.put } }));
+vi.mock("@/components/networking", () => ({ apiClient: { get: (path: string, ...params: unknown[]) => path === "/public/endpoints"
+  ? Promise.resolve({ transports: [{ id: "bypass_openai_chat", protocol: "openai-chat", endpoint_id: "chat" }], endpoint_types: [{ id: "chat", label: "OpenAI Chat" }] })
+  : mocks.get(path, ...params), put: mocks.put } }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "admin" }) }));
 vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostMap: () => ({ data: {} }) }));
 vi.mock("../detailNavigation", () => ({ useModelDetailRouting: () => ({ openModel: mocks.openModel }) }));
@@ -98,6 +100,10 @@ describe("公开模型默认权重", () => {
     const group = await screen.findByRole("region", { name: "公开模型 shared" });
     expect(within(group).queryByRole("button", { name: "编辑权重" })).not.toBeInTheDocument();
     expect(within(group).queryByRole("columnheader", { name: "默认权重" })).not.toBeInTheDocument();
+    // 已登记的传输使用可读名称；展开才展示接口明细，详情仍指向实际部署。
+    expect(await within(group).findByText("OpenAI · Chat Completions")).toBeVisible();
+    await user.click(within(group).getByText("1 个调用接口"));
+    expect(within(group).getByText("OpenAI Chat")).toBeVisible();
     expect(within(group).getByText("vendor/full/model")).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "配置回退" })).toBeVisible();
     await user.click(within(group).getByRole("button", { name: "详情" }));
@@ -194,6 +200,16 @@ describe("公开模型默认权重", () => {
     expect(input).toHaveValue(2);
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+  });
+  /** 未知上游操作照实显示，空端点有明确提示；历史数据来自内存夹具，测试后自动卸载。 */
+  it("保留自定义操作并区分接口缺失", async () => {
+    const dep = deployment("legacy");
+    dep.model_info.transport = "custom-transport";
+    dep.model_info.endpoint_types = [];
+    mocks.get.mockResolvedValue({ data: [{ model_name: "shared", deployments: [dep] }] });
+    mount();
+    expect(await screen.findByText("custom-transport")).toBeVisible();
+    expect(screen.getByText("未开放入口")).toBeVisible();
   });
   /** 目录不可用时显示明确错误并允许重试，避免空目录误导；无外部清理。 */
   it("目录失败可以重试", async () => {

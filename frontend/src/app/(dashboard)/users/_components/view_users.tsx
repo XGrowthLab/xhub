@@ -1,3 +1,6 @@
+import { ContactRound } from "lucide-react";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { QuotaGuide } from "@/components/shared/QuotaGuide";
 import { iamRoles } from "@/utils/iamRoles";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -48,6 +51,7 @@ const DEFAULT_SORT_BY = "created_at";
 const DEFAULT_SORTING: SortingState = [{ id: DEFAULT_SORT_BY, desc: true }];
 
 /** 用户管理页：接收会话、权限及团队信息，返回列表与管理弹窗；角色来自既有账户定义，删除成功才更新缓存。 */
+/** 用户目录与详情通过成员 ID 导航；列表接收当前会话和团队数据，批量操作沿用角色校验。 */
 const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   accessToken,
   token,
@@ -320,9 +324,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full overflow-hidden">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex space-x-3">
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      <PageHeader icon={<ContactRound />} title={t("pages.users.title")} subtitle={t("pages.users.subtitle")} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
           {userListQuery.isLoading && (
             <>
               <Skeleton className="h-9 w-28" />
@@ -366,6 +371,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         </div>
       </div>
 
+      <QuotaGuide scope="person" />
       {usersTable}
 
       {/* Existing Modals */}

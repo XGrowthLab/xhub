@@ -116,9 +116,12 @@ describe("ViewUserDashboard", () => {
     expect(screen.queryByRole("option", { name: "available_roles" })).not.toBeInTheDocument();
   });
 
+  /** 验证用户列表将配额帮助放在可操作目录内；使用已认证测试成员并由渲染器自动清理。 */
   it("should render the ViewUserDashboard component", async () => {
     renderDashboard();
 
+    expect(screen.getByRole("heading", { name: "Users" })).toBeVisible();
+    expect(screen.getByRole("complementary")).toBeVisible();
     expect(await screen.findByText("test@example.com")).toBeInTheDocument();
 
     expect(screen.queryByRole("tab", { name: "Default User Settings" })).not.toBeInTheDocument();

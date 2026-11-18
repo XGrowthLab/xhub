@@ -94,3 +94,58 @@ func TestAuditNamesSurviveRenameAndDeletion(t *testing.T) {
 		}
 	}
 }
+
+// TestKeyAuditRetainsAlias 验证已命名与无别名密钥在改名、删除后仍保留操作时快照。
+// 前置独立用户和数据库；错误 ID 不生成审计记录，结束时 testDB 回收整个 schema。
+func TestKeyAuditRetainsAlias(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	actor := Actor{Kind: "system"}
+	u, err := db.CreateUser(ctx, actor, UserInput{Name: "owner", Email: "audit-key-owner@example.test", Password: "example-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"Initial alias", ""} {
+		in := KeyInput{UserID: u.ID, OwnerType: OwnerPersonal, Name: alias}
+		k, _, err := db.CreateKey(ctx, actor, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Name = "Renamed"
+		if _, err := db.UpdateKey(ctx, actor, k.ID, in); err != nil {
+			t.Fatal(err)
+		}
+		for _, deleted := range []bool{false, true} {
+			if deleted {
+				if err := db.DeleteKey(ctx, actor, k.ID); err != nil {
+					t.Fatal(err)
+				}
+				if err := db.DeleteKey(ctx, actor, k.ID); err == nil {
+					t.Fatal("重复删除密钥应失败")
+				}
+			}
+			_, count, err := db.QueryAudit(ctx, AuditFilter{ObjectID: k.ID, Search: "Renamed"}, 20, 0)
+			expectedCount := int64(1)
+			if deleted {
+				expectedCount++
+			}
+			if err != nil || count != expectedCount {
+				t.Fatalf("搜索当前别名不应命中改名前的记录，得到 %d 条: %v", count, err)
+			}
+			rows, _, err := db.QueryAudit(ctx, AuditFilter{ObjectID: k.ID}, 20, 0)
+			expected := map[string]string{"key.create": alias, "key.update": "Renamed"}
+			if deleted {
+				expected["key.delete"] = "Renamed"
+			}
+			if err != nil || len(rows) != len(expected) {
+				t.Fatalf("密钥审计事件数错误: %d, %v", len(rows), err)
+			}
+			for _, r := range rows {
+				want, ok := expected[r.Action]
+				if !ok || r.Detail["object_name"] != want || r.ObjectName != want {
+					t.Fatalf("操作 %s 的名称 %q 与当时别名 %q 不符", r.Action, r.ObjectName, want)
+				}
+			}
+		}
+	}
+}
