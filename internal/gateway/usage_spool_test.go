@@ -17,9 +17,9 @@ import (
 	"testing"
 )
 
-// TestUsageSpoolConfiguration 验证省略配置保持兼容，显式错误容量不静默关闭；环境由t.Setenv恢复，无外部依赖。
+// TestUsageSpoolConfiguration 验证省略配置保持兼容，显式错误容量及超出 1–64 的合并上限均被拒绝；环境由t.Setenv恢复，无外部依赖。
 func TestUsageSpoolConfiguration(t *testing.T) {
-	for _, name := range []string{"XHUB_USAGE_SPOOL_DIR", "XHUB_USAGE_SPOOL_MAX_BYTES", "XHUB_USAGE_SPOOL_RECORD_BYTES", "XHUB_USAGE_SPOOL_MAX_ENTRIES"} {
+	for _, name := range []string{"XHUB_USAGE_SPOOL_DIR", "XHUB_USAGE_SPOOL_MAX_BYTES", "XHUB_USAGE_SPOOL_RECORD_BYTES", "XHUB_USAGE_SPOOL_MAX_ENTRIES", "XHUB_USAGE_SPOOL_GROUP_SIZE"} {
 		t.Setenv(name, "")
 	}
 	if _, enabled, err := usageSpoolConfig(); enabled || err != nil {
