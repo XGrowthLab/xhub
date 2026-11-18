@@ -30,7 +30,8 @@ const (
 	DefaultEntries = 8192
 	// DefaultGroupSize 限制一批并行文件同步占用的文件描述符，不额外等待凑批。
 	DefaultGroupSize = 16
-	MaxGroupSize     = 64
+	// MaxGroupSize 限制并行暂存文件占用的文件描述符，一批最多同时打开 64 份。
+	MaxGroupSize = 64
 	// DefaultRecordBytes 为每次准入保守预留的最大记录空间；完整正文不得静默截断以适应上限。
 	DefaultRecordBytes int64 = 16 << 20
 )
@@ -43,8 +44,9 @@ var (
 	ErrPending     = errors.New("usage spool batch still has unsettled records")
 )
 
-// Config 为启动时固定的目录和容量；目录必须专属于一个网关实例，多个实例应挂不同持久卷。
+// Config 为启动时固定的磁盘目录、容量及合并策略；目录必须专属于一个网关实例，多个实例应挂不同持久卷。
 type Config struct {
+	// GroupSize 为每批操作上限；0 使用默认值，1 逐笔执行，Open 拒绝其他超出 1–64 的值。
 	GroupSize      int
 	Dir            string
 	MaxBytes       int64
