@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sunqirui1987/xhub/internal/iam"
@@ -869,5 +870,148 @@ func TestSpoolErrorInvalidatesSharedProbe(t *testing.T) {
 	}
 	if err := s.Reserve("after-recovery"); err != nil || s.probedThrough == 0 {
 		t.Fatalf("独立探针未能恢复: %v", err)
+	}
+}
+
+// TestReplayFreezesOnlyEligibleSnapshots 在批处理内同时观察一份可重放账单与一份在途同步标记，
+// 验证后来确认的终态只归下轮、损坏的在途文件仍被第一遍检查隔离；独占临时目录自动回收。
+func TestReplayFreezesOnlyEligibleSnapshots(t *testing.T) {
+	for _, mode := range []string{"publish-final", "still-unconfirmed", "corrupt-active"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			ready := spoolRecord("ready")
+			active := spoolRecord("active")
+			active.Status, active.HTTPStatus = "success", 200
+			active.DeliveryPending, active.DeliverySpoolOnly = true, true
+			marker, err := iam.UnconfirmedDelivery(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker.DeliveryUnconfirmed = true
+			if err := s.Put(ready); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.BeginDelivery(marker); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "corrupt-active" {
+				if err := os.WriteFile(filepath.Join(s.config.Dir, basename(active.RequestID)), []byte("invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			n, err := s.Replay(t.Context(), 10, func(_ context.Context, r iam.UsageRecord) error {
+				if r.RequestID != ready.RequestID {
+					return fmt.Errorf("初始批次错误接管 %s", r.RequestID)
+				}
+				s.mu.Lock()
+				registered := s.replaying.pending[basename(active.RequestID)]
+				s.mu.Unlock()
+				if registered {
+					return errors.New("在途请求被错误登记为本批终态")
+				}
+				if mode == "publish-final" {
+					return s.CompleteDelivery(active)
+				}
+				return nil
+			})
+			if err != nil || n != 1 {
+				t.Fatalf("原批次处理数或回放结果错误: %d %v", n, err)
+			}
+			status, err := s.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "publish-final":
+				if status.Replayable != 1 {
+					t.Fatalf("新终态未保留给下轮: %+v", status)
+				}
+				n, err = s.Replay(t.Context(), 10, func(_ context.Context, r iam.UsageRecord) error {
+					if r.RequestID != active.RequestID || r.DeliveryUnconfirmed {
+						return errors.New("未取得已发布的终态")
+					}
+					return nil
+				})
+				if n != 1 || err != nil {
+					t.Fatalf("下一轮未恢复终态: %d %v", n, err)
+				}
+			case "still-unconfirmed":
+				if status.Pending != 1 || status.Replayable != 0 {
+					t.Fatalf("在途快照被提前清理或结算: %+v", status)
+				}
+			case "corrupt-active":
+				if status.Quarantined != 1 || !errors.Is(s.Reserve("next"), ErrCorrupt) {
+					t.Fatalf("损坏在途证据未隔离或准入未阻止: %+v", status)
+				}
+			}
+		})
+	}
+}
+
+// TestReplayDeadlineRequiresDurableAcknowledgement 在第一个回调内过期上下文并改变第二笔的状态，
+// 验证完全确认的批次可结束，有存储失败、未结算、外部丢失或隔离时不能伪造成功。临时证据随测试清理。
+func TestReplayDeadlineRequiresDurableAcknowledgement(t *testing.T) {
+	for _, mode := range []string{"all-acknowledged", "pending", "commit-failure", "externally-removed", "quarantined"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				a, b := spoolRecord("a"), spoolRecord("b")
+				for _, r := range []iam.UsageRecord{a, b} {
+					if err := s.Put(r); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				calls := 0
+				persistErr := errors.New("fixture storage commit failed")
+				n, err := s.Replay(ctx, 10, func(_ context.Context, r iam.UsageRecord) error {
+					calls++
+					other := a
+					if r.RequestID == a.RequestID {
+						other = b
+					}
+					switch mode {
+					case "all-acknowledged", "commit-failure":
+						if err := s.Acknowledge(other); err != nil {
+							return err
+						}
+					case "externally-removed":
+						if err := os.Remove(filepath.Join(s.config.Dir, basename(other.RequestID))); err != nil {
+							return err
+						}
+					case "quarantined":
+						s.mu.Lock()
+						err := s.quarantineLocked(basename(other.RequestID))
+						s.mu.Unlock()
+						if err != nil {
+							return err
+						}
+					}
+					<-ctx.Done()
+					if mode == "commit-failure" {
+						return persistErr
+					}
+					return nil
+				})
+				if calls != 1 {
+					t.Fatalf("过期后仍然进行了额外回放: %d", calls)
+				}
+				switch mode {
+				case "all-acknowledged":
+					if n != 1 || err != nil {
+						t.Fatalf("两笔均确认后错误报告超时: %d %v", n, err)
+					}
+				case "commit-failure":
+					if n != 0 || !errors.Is(err, persistErr) {
+						t.Fatalf("自身入账失败被忽略: %d %v", n, err)
+					}
+				default:
+					if n != 1 || !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("未确认、隔离或丢失的文件被当作已入账: %d %v", n, err)
+					}
+				}
+			})
+		})
 	}
 }

@@ -890,28 +890,39 @@ func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context
 		s.mu.Unlock()
 		return 0, err
 	}
+	// scanLocked 已连同在途标记一起校验过完整目录。这里只冻结当前能重放的证据；
+	// 在途标记以后转成终态时会推进 generation，由覆盖其发布时间的批次处理。
+	ready := make([]string, 0, len(entries))
 	batch.pending = make(map[string]bool, len(entries))
 	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".json") {
-			batch.pending[entry.Name()] = true
+		name := entry.Name()
+		if strings.HasSuffix(name, ".json") && !s.activeDelivery[name] {
+			ready = append(ready, name)
+			batch.pending[name] = true
 		}
 	}
 	s.mu.Unlock()
 	count, attempted := 0, 0
 	var failures []error
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
+	for _, name := range ready {
 		if attempted >= limit {
 			break
 		}
+		s.mu.Lock()
+		if len(batch.pending) == 0 {
+			// 只有实际入账且删除目录项已同步才会撤下候选，外部丢失文件不会走这里。
+			s.mu.Unlock()
+			break
+		}
+		if !batch.pending[name] {
+			s.mu.Unlock()
+			continue
+		}
 		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
 			return count, errors.Join(append(failures, err)...)
 		}
-		name := entry.Name()
-		s.mu.Lock()
-		if !batch.pending[name] || s.activeDelivery[name] {
+		if s.activeDelivery[name] {
 			s.mu.Unlock()
 			continue
 		}
