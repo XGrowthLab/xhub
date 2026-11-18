@@ -1,3 +1,4 @@
+import { translate } from "../src/i18n/translate";
 import { expect, test } from "@playwright/test";
 
 import { execFileSync } from "node:child_process";
@@ -5,178 +6,192 @@ import { execFileSync } from "node:child_process";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./helpers";
 /** 用途：注册独立场景「my models exposes prices, access, executable API examples and call guide」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC059() {
-
-
-test("my models exposes prices, access, executable API examples and call guide", async ({ page }) => {
-  test.setTimeout(120_000);
-  const schemaRequests: string[] = [];
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/openapi.json") schemaRequests.push(request.url());
-  });
-  // 无头浏览器默认拒绝剪贴板；授予隔离测试上下文权限，验证真实复制而非替换 API。
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await loginAdmin(page);
-  const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
-  let name = "e2e-mine-call-" + Date.now();
-  const priceID = "custom/" + name;
-  let id = "";
-  let key = "";
-  try {
-    expect((await page.request.post(GATEWAY + "/price/model", { headers, data: {
-      id: priceID, litellm_provider: "custom", input_cost_per_token: 0.000001, output_cost_per_token: 0.000002,
-    } })).status()).toBe(200);
-    const created = await page.request.post(GATEWAY + "/model/new", {
-      headers,
-      data: {
-        model_name: name,
-        litellm_params: {
-          model: "custom/mine-call",
-          custom_llm_provider: "custom",
-          api_base: UPSTREAM,
-          api_key: "sk-fake",
+  test("my models exposes prices, access, executable API examples and call guide", async ({ page }) => {
+    test.setTimeout(120_000);
+    const schemaRequests: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/openapi.json") schemaRequests.push(request.url());
+    });
+    // 无头浏览器默认拒绝剪贴板；授予隔离测试上下文权限，验证真实复制而非替换 API。
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await loginAdmin(page);
+    const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
+    let name = "e2e-mine-call-" + Date.now();
+    const priceID = "custom/" + name;
+    let id = "";
+    let key = "";
+    try {
+      expect(
+        (
+          await page.request.post(GATEWAY + "/price/model", {
+            headers,
+            data: {
+              id: priceID,
+              litellm_provider: "custom",
+              input_cost_per_token: 0.000001,
+              output_cost_per_token: 0.000002,
+            },
+          })
+        ).status(),
+      ).toBe(200);
+      const created = await page.request.post(GATEWAY + "/model/new", {
+        headers,
+        data: {
+          model_name: name,
+          litellm_params: {
+            model: "custom/mine-call",
+            custom_llm_provider: "custom",
+            api_base: UPSTREAM,
+            api_key: "sk-fake",
+          },
+          model_info: { transport: "bypass_openai_chat", pricing_source: "catalog", base_model: priceID },
         },
-        model_info: { transport: "bypass_openai_chat", pricing_source: "catalog", base_model: priceID },
-      },
-    });
-    expect(created.status(), await created.text()).toBe(200);
-    id = (await created.json()).model_info.id;
-    const teams = await (await page.request.get(GATEWAY + "/v2/team/list?page=1&page_size=500", { headers })).json();
-    const team = teams.teams.find((item: { team_alias: string }) => item.team_alias === "e2e-fixture-team");
-    const jwt = (await page.context().cookies()).find((cookie) => cookie.name === "token")!.value;
-    const userId = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString()).user_id;
-    const minted = await page.request.post(GATEWAY + "/key/generate", {
-      headers,
-      data: { key_alias: name, key_type: "llm_api", team_id: team.team_id, user_id: userId, models: [name] },
-    });
-    expect(minted.status(), await minted.text()).toBe(200);
-    key = (await minted.json()).key;
-    // 先给旧公开名授权再改名；后续复制curl使用同一Key实际调用，不能重新发Key掩盖授权丢失。
-    name += "-renamed";
-    const renamed = await page.request.post(GATEWAY + "/model/update", { headers, data: { id, model_name: name } });
-    expect(renamed.status(), await renamed.text()).toBe(200);
-    const loaded = page.waitForResponse((response) => new URL(response.url()).pathname === "/model/available");
-    await stableGoto(page, "/mine-models");
-    const available = await loaded;
-    expect(available.status()).toBe(200);
-    const cardData = (await available.json()).data.find((item: { id: string }) => item.id === name);
-    expect(cardData.endpoints.some((item: { path: string }) => item.path === "/v1/chat/completions")).toBe(true);
-    await page.getByRole("textbox", { name: t("Search"), exact: true }).fill(name);
-    const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
-    // 精简卡片入口后，完整四项信息仍在详情标签中，权限和示例执行链不变。
-    await card.getByRole("button", { name: "模型详情", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name, exact: true });
-    const prices = dialog.getByRole("table", { name: "模型价格" });
-    await expect(prices.getByText("$1", { exact: true })).toBeVisible();
-    await expect(prices.getByText("$2", { exact: true })).toBeVisible();
-    await dialog.getByRole("tab", { name: "接入信息" }).click();
-    await expect(dialog.getByText("POST /v1/chat/completions", { exact: true })).toBeVisible();
-    await dialog.getByRole("tab", { name: "API 接入" }).click();
-    await expect(dialog.getByRole("link", { name: "查看 API 接口定义" })).toHaveCount(0);
-    await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
-    await page.getByRole("option", { name: /OpenAI Responses/ }).click();
-    await expect(dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" })).toContainText(
-      '"input": "Hello"',
-    );
-    await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
-    await page.getByRole("option", { name: /^OpenAI Chat\s*\/v1\/chat\/completions$/ }).click();
-    await dialog.getByRole("button", { name: "复制调用示例", exact: true }).click();
-    await expect(dialog.getByRole("status")).toHaveText("已复制");
-    const sample = await dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" }).textContent();
-    expect(await page.evaluate(() => navigator.clipboard.readText()), "剪贴板应包含完整调用示例").toBe(sample);
-    expect(sample).toContain(GATEWAY + "/v1/chat/completions");
-    // 直接执行页面展示的命令，确保 URL、认证方式和正文可真正通过网关到达上游。
-    const output = execFileSync("bash", ["-c", sample!], {
-      env: { ...process.env, XHUB_API_KEY: key },
-      timeout: 20_000,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const result = JSON.parse(output);
-    expect(result.choices[0].message.content).toBeTruthy();
-    await expect
-      .poll(async () => {
-        const response = await page.request.get(GATEWAY + "/spend/logs/ui?page=1&page_size=50", { headers });
-        expect(response.status(), "调用日志接口应成功返回").toBe(200);
-        const logs = await response.json();
-        const rows = Array.isArray(logs) ? logs : (logs.data ?? logs.logs ?? []);
-        return rows.filter((row: { model: string; spend: number }) => row.model === name && Number(row.spend) > 0)
-          .length;
-      })
-      .toBeGreaterThan(0);
-    await dialog.getByRole("tab", { name: "调用文档" }).click();
-    await expect(
-      dialog.getByRole("tabpanel", { name: "调用文档", exact: true }).getByRole("heading", { name: "1. 准备 API Key" }),
-    ).toBeVisible();
-    await expect(
-      dialog.getByRole("tabpanel", { name: "调用文档", exact: true }).getByRole("link", { name: "管理虚拟密钥" }),
-    ).toHaveAttribute("href", /api-keys/);
-    await page.setViewportSize({ width: 390, height: 844 });
-    for (const title of ["模型价格", "接入信息", "API 接入", "调用文档"])
-      await expect(dialog.getByRole("tab", { name: title, exact: true })).toBeVisible();
-    await dialog.getByRole("tab", { name: "API 接入" }).click();
-    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.screenshot({ path: (process.env.MINE_MODEL_REPORT || "../.e2e/mine-models") + "/api-detail.png" });
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden();
-    await expect(card.getByRole("button", { name: "模型详情", exact: true })).toBeFocused();
-    expect(schemaRequests, "模型详情应直接使用模型绑定，不请求已移除的公共接口定义").toEqual([]);
-    await stableGoto(page, "/playground");
-    await page.getByPlaceholder(t("Select a Model"), { exact: true }).click();
-    await page.getByRole("option", { name, exact: true }).click();
-    await page
-      .getByPlaceholder(t("Type your message... (Shift+Enter for new line)"))
-      .fill("Describe a sunrise in one sentence.");
-    const guide = page.getByLabel("完整 curl 调用", { exact: true });
-    await guide.locator("summary").click();
-    const live = await guide.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" }).textContent();
-    expect(live).toContain("Describe a sunrise in one sentence.");
-    const liveOutput = execFileSync("bash", ["-c", live!], {
-      env: { ...process.env, XHUB_API_KEY: key },
-      timeout: 20000,
-      encoding: "utf8",
-    });
-    expect(liveOutput).toContain("e2e-ok");
-    await page.getByRole("button", { name: "English", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Models and endpoints" })).toBeVisible();
-    await expect(page.getByText("Connection settings", { exact: true })).toBeVisible();
-    await expect(
-      page.getByLabel("Complete curl request").getByRole("heading", { name: "1. Prepare your API key" }),
-    ).toBeVisible();
-    await expect(page.getByPlaceholder("Type your message... (Shift+Enter for new line)")).toHaveValue(
-      "Describe a sunrise in one sentence.",
-    );
-    await stableGoto(page, "/mine-models");
-    await page.getByRole("textbox", { name: "Search", exact: true }).fill(name);
-    const englishCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
-    await expect(englishCard).toContainText("$1");
-    await expect(englishCard).toContainText("$2");
-    await page.getByRole("button", { name: "中文", exact: true }).click();
-  } finally {
-    if (key)
-      expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [key] } })).status()).toBe(200);
-    if (id) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
-  }
-});
+      });
+      expect(created.status(), await created.text()).toBe(200);
+      id = (await created.json()).model_info.id;
+      const teams = await (await page.request.get(GATEWAY + "/v2/team/list?page=1&page_size=500", { headers })).json();
+      const team = teams.teams.find((item: { team_alias: string }) => item.team_alias === "e2e-fixture-team");
+      const jwt = (await page.context().cookies()).find((cookie) => cookie.name === "token")!.value;
+      const userId = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString()).user_id;
+      const minted = await page.request.post(GATEWAY + "/key/generate", {
+        headers,
+        data: { key_alias: name, key_type: "llm_api", team_id: team.team_id, user_id: userId, models: [name] },
+      });
+      expect(minted.status(), await minted.text()).toBe(200);
+      key = (await minted.json()).key;
+      // 先给旧公开名授权再改名；后续复制curl使用同一Key实际调用，不能重新发Key掩盖授权丢失。
+      name += "-renamed";
+      const renamed = await page.request.post(GATEWAY + "/model/update", { headers, data: { id, model_name: name } });
+      expect(renamed.status(), await renamed.text()).toBe(200);
+      const loaded = page.waitForResponse((response) => new URL(response.url()).pathname === "/model/available");
+      await stableGoto(page, "/mine-models");
+      const available = await loaded;
+      expect(available.status()).toBe(200);
+      const cardData = (await available.json()).data.find((item: { id: string }) => item.id === name);
+      expect(cardData.endpoints.some((item: { path: string }) => item.path === "/v1/chat/completions")).toBe(true);
+      await page.getByRole("textbox", { name: t("Search"), exact: true }).fill(name);
+      const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+      // 精简卡片入口后，完整四项信息仍在详情标签中，权限和示例执行链不变。
+      await card.getByRole("button", { name: "模型详情", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name, exact: true });
+      const prices = dialog.getByRole("table", { name: "模型价格" });
+      await expect(prices.getByText("$1", { exact: true })).toBeVisible();
+      await expect(prices.getByText("$2", { exact: true })).toBeVisible();
+      await dialog.getByRole("tab", { name: "接入信息" }).click();
+      await expect(dialog.getByText("POST /v1/chat/completions", { exact: true })).toBeVisible();
+      await dialog.getByRole("tab", { name: "API 接入" }).click();
+      await expect(dialog.getByRole("link", { name: "查看 API 接口定义" })).toHaveCount(0);
+      await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
+      await page.getByRole("option", { name: /OpenAI Responses/ }).click();
+      await expect(dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" })).toContainText(
+        '"input": "Hello"',
+      );
+      await dialog.getByRole("combobox", { name: "选择调用接口" }).click();
+      await page.getByRole("option", { name: /^OpenAI Chat\s*\/v1\/chat\/completions$/ }).click();
+      await dialog.getByRole("button", { name: "复制调用示例", exact: true }).click();
+      await expect(dialog.getByRole("status")).toHaveText("已复制");
+      const sample = await dialog.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" }).textContent();
+      expect(await page.evaluate(() => navigator.clipboard.readText()), "剪贴板应包含完整调用示例").toBe(sample);
+      expect(sample).toContain(GATEWAY + "/v1/chat/completions");
+      // 直接执行页面展示的命令，确保 URL、认证方式和正文可真正通过网关到达上游。
+      const output = execFileSync("bash", ["-c", sample!], {
+        env: { ...process.env, XHUB_API_KEY: key },
+        timeout: 20_000,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const result = JSON.parse(output);
+      expect(result.choices[0].message.content).toBeTruthy();
+      await expect
+        .poll(async () => {
+          const response = await page.request.get(GATEWAY + "/spend/logs/ui?page=1&page_size=50", { headers });
+          expect(response.status(), "调用日志接口应成功返回").toBe(200);
+          const logs = await response.json();
+          const rows = Array.isArray(logs) ? logs : logs.data ?? logs.logs ?? [];
+          return rows.filter((row: { model: string; spend: number }) => row.model === name && Number(row.spend) > 0)
+            .length;
+        })
+        .toBeGreaterThan(0);
+      await dialog.getByRole("tab", { name: "调用文档" }).click();
+      await expect(
+        dialog
+          .getByRole("tabpanel", { name: "调用文档", exact: true })
+          .getByRole("heading", { name: "1. 准备 API Key" }),
+      ).toBeVisible();
+      await expect(
+        dialog.getByRole("tabpanel", { name: "调用文档", exact: true }).getByRole("link", { name: "管理虚拟密钥" }),
+      ).toHaveAttribute("href", /api-keys/);
+      await page.setViewportSize({ width: 390, height: 844 });
+      for (const title of ["模型价格", "接入信息", "API 接入", "调用文档"])
+        await expect(dialog.getByRole("tab", { name: title, exact: true })).toBeVisible();
+      await dialog.getByRole("tab", { name: "API 接入" }).click();
+      expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.screenshot({ path: (process.env.MINE_MODEL_REPORT || "../.e2e/mine-models") + "/api-detail.png" });
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(card.getByRole("button", { name: "模型详情", exact: true })).toBeFocused();
+      expect(schemaRequests, "模型详情应直接使用模型绑定，不请求已移除的公共接口定义").toEqual([]);
+      await stableGoto(page, "/playground");
+      await page.getByPlaceholder(t("Select a Model"), { exact: true }).click();
+      await page.getByRole("option", { name, exact: true }).click();
+      await page
+        .getByPlaceholder(t("Type your message... (Shift+Enter for new line)"))
+        .fill("Describe a sunrise in one sentence.");
+      await page.getByRole("button", { name: t("consoleDetails.viewCode"), exact: true }).click();
+      const guide = page.getByLabel("完整 curl 调用", { exact: true });
+      const live = await guide.getByLabel("复制调用示例", { exact: true }).filter({ hasText: "curl" }).textContent();
+      expect(live).toContain("Describe a sunrise in one sentence.");
+      const liveOutput = execFileSync("bash", ["-c", live!], {
+        env: { ...process.env, XHUB_API_KEY: key },
+        timeout: 20000,
+        encoding: "utf8",
+      });
+      expect(liveOutput).toContain("e2e-ok");
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Models and endpoints" })).toBeVisible();
+      await expect(page.getByText("Connection settings", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: translate("en", "consoleDetails.viewCode"), exact: true }).click();
+      await expect(
+        page.getByLabel("Complete curl request").getByRole("heading", { name: "1. Prepare your API key" }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(page.getByPlaceholder("Type your message... (Shift+Enter for new line)")).toHaveValue(
+        "Describe a sunrise in one sentence.",
+      );
+      await stableGoto(page, "/mine-models");
+      await page.getByRole("textbox", { name: "Search", exact: true }).fill(name);
+      const englishCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+      await expect(englishCard).toContainText("$1");
+      await expect(englishCard).toContainText("$2");
+      await page.getByRole("button", { name: "中文", exact: true }).click();
+    } finally {
+      if (key)
+        expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [key] } })).status()).toBe(
+          200,
+        );
+      if (id)
+        expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
+    }
+  });
 }
 /** 用途：注册独立场景「my models explains unavailable endpoint configuration」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC060() {
-
-
-test("my models explains unavailable endpoint configuration", async ({ page }) => {
-  test.skip(process.env.E2E_ENDPOINT_UNBOUND !== "1", "requires isolated unbound model fixture");
-  await loginAdmin(page);
-  await stableGoto(page, "/mine-models");
-  await page.getByRole("textbox", { name: t("Search"), exact: true }).fill("e2e-unbound");
-  const card = page
-    .getByRole("article")
-    .filter({ has: page.getByRole("heading", { name: "e2e-unbound", exact: true }) });
-  await expect(card).toContainText("待配置");
-  await card.getByRole("button", { name: "模型详情", exact: true }).click();
-  await page.getByRole("tab", { name: "API 接入", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "e2e-unbound", exact: true });
-  await expect(dialog.getByRole("alert")).toContainText("暂未提供可调用接口");
-  await expect(dialog.getByRole("combobox")).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "复制调用示例" })).toHaveCount(0);
-});
+  test("my models explains unavailable endpoint configuration", async ({ page }) => {
+    test.skip(process.env.E2E_ENDPOINT_UNBOUND !== "1", "requires isolated unbound model fixture");
+    await loginAdmin(page);
+    await stableGoto(page, "/mine-models");
+    await page.getByRole("textbox", { name: t("Search"), exact: true }).fill("e2e-unbound");
+    const card = page
+      .getByRole("article")
+      .filter({ has: page.getByRole("heading", { name: "e2e-unbound", exact: true }) });
+    await expect(card).toContainText("待配置");
+    await card.getByRole("button", { name: "模型详情", exact: true }).click();
+    await page.getByRole("tab", { name: "API 接入", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "e2e-unbound", exact: true });
+    await expect(dialog.getByRole("alert")).toContainText("暂未提供可调用接口");
+    await expect(dialog.getByRole("combobox")).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "复制调用示例" })).toHaveCount(0);
+  });
 }

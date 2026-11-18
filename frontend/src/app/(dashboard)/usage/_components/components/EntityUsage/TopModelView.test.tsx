@@ -20,17 +20,17 @@ describe("TopModelView", () => {
 
   it("should render", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByText("Table View")).toBeInTheDocument();
+    expect(screen.getByText("Table")).toBeInTheDocument();
   });
 
   it("should display table view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByText("Table View")).toBeInTheDocument();
+    expect(screen.getByText("Table")).toBeInTheDocument();
   });
 
   it("should display chart view button", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
-    expect(screen.getByText("Chart View")).toBeInTheDocument();
+    expect(screen.getByText("Chart")).toBeInTheDocument();
   });
 
   it("should display all table column headers", () => {
@@ -77,7 +77,7 @@ describe("TopModelView", () => {
     );
 
     expect(showsChart(container)).toBe(false);
-    await clickControl(user, "Chart View");
+    await clickControl(user, "Chart");
 
     expect(showsChart(container)).toBe(true);
     expect(screen.queryByText("Spend (USD)")).not.toBeInTheDocument();
@@ -89,8 +89,8 @@ describe("TopModelView", () => {
       <TopModelView topModels={oneModel} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />,
     );
 
-    await clickControl(user, "Chart View");
-    await clickControl(user, "Table View");
+    await clickControl(user, "Chart");
+    await clickControl(user, "Table");
 
     expect(showsChart(container)).toBe(false);
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
@@ -121,7 +121,7 @@ describe("TopModelView", () => {
       />,
     );
 
-    await clickControl(user, "Chart View");
+    await clickControl(user, "Chart");
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(2);
@@ -304,6 +304,6 @@ describe("TopModelView", () => {
         setTopModelsLimit={mockSetTopModelsLimit}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("Model not recorded")).toBeInTheDocument();
   });
 });

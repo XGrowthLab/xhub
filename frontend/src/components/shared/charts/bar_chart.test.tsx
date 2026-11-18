@@ -159,3 +159,11 @@ describe("BarChart", () => {
     expect(new Set(xPositions).size).toBe(2);
   });
 });
+
+/** 单日期柱状图使用真实 SVG 验证默认宽度上限，防止占满图表；允许调用方显式覆盖且不改变值，测试自动清理 DOM。 */
+it("caps a single bar to forty pixels unless explicitly configured", () => {
+  const { container, rerender } = render(<BarChart data={[{ date: "2026-11-18", spend: 1.25 }]} index="date" categories={["spend"]} />);
+  expect(Number(container.querySelector("path.recharts-rectangle")?.getAttribute("width"))).toBeLessThanOrEqual(40);
+  rerender(<BarChart data={[{ date: "2026-11-18", spend: 1.25 }]} index="date" categories={["spend"]} maxBarSize={28} />);
+  expect(Number(container.querySelector("path.recharts-rectangle")?.getAttribute("width"))).toBe(28);
+});

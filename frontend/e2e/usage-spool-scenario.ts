@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -133,7 +134,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await expect(page.getByRole("dialog")).toContainText(model);
       await expect(page.getByRole("dialog").getByRole("note")).toContainText(t("logsUX.captureStorageFailed"));
       await stableGoto(page, "/model-monitor");
-      await page.getByLabel(t("monitor.model"), { exact: true }).selectOption(model);
+      await selectMonitorOption(page, t("monitor.model"), model);
       await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
       await expect(page.getByRole("region", { name: t("monitor.requests"), exact: true })).toContainText("1");
     } finally {

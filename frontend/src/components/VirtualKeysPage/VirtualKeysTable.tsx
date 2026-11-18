@@ -76,7 +76,8 @@ const filterValue = (filters: ColumnFiltersState, column: FilterColumn): string 
   return (typeof value === "string" ? value.trim() : "") || null;
 };
 
-/** 渲染我的虚拟密钥；headerActions 为创建操作，返回列表或详情。个人路由的查询强制本人范围，URL 筛选不能改变归属；分页及详情导航会更新 URL。 */
+/** 渲染我的虚拟密钥；headerActions 为创建操作，返回列表或详情。个人路由的查询强制本人范围，URL 筛选不能改变归属；分页及详情导航会更新 URL。
+ * 团队或组织只有一个候选时隐藏多余筛选，已生效的条件仍可编辑；不改变现有查询范围和预算判断。 */
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const t = useT();
   const { data: fetchedOrganizations } = useOrganizations();
@@ -325,31 +326,36 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               open={filtersOpen}
               onOpenChange={setFiltersOpen}
-              title={t("Filters")}
-              description={t("Narrow down virtual keys")}
+              title={t("consoleDetails.keyFilters")}
+              description={t("consoleDetails.keyFiltersDescription")}
             >
               {({ get, set }) => (
                 <>
-                  <DataTableFilterField label={t("Team")}>
-                    <SearchSelect
-                      options={teamOptions}
-                      value={(get("team_id") as string) || undefined}
-                      onValueChange={(value) => set("team_id", value ?? undefined)}
-                      placeholder={t("Select a team…")}
-                      emptyText={t("No teams found")}
-                    />
-                  </DataTableFilterField>
-                  <DataTableFilterField label={t("Organization")}>
-                    <SearchSelect
-                      options={orgOptions}
-                      value={(get("org_id") as string) || undefined}
-                      onValueChange={(value) => set("org_id", value ?? undefined)}
-                      placeholder={t("Select an organization…")}
-                      emptyText={t("No organizations found")}
-                    />
-                  </DataTableFilterField>
+                  {(teamOptions.length > 1 || appliedFilters.team_id) && (
+                    <DataTableFilterField label={t("Team")}>
+                      <SearchSelect
+                        options={teamOptions}
+                        value={(get("team_id") as string) || undefined}
+                        onValueChange={(value) => set("team_id", value ?? undefined)}
+                        placeholder={t("Select a team…")}
+                        emptyText={t("No teams found")}
+                      />
+                    </DataTableFilterField>
+                  )}
+                  {(orgOptions.length > 1 || appliedFilters.org_id) && (
+                    <DataTableFilterField label={t("Organization")}>
+                      <SearchSelect
+                        options={orgOptions}
+                        value={(get("org_id") as string) || undefined}
+                        onValueChange={(value) => set("org_id", value ?? undefined)}
+                        placeholder={t("Select an organization…")}
+                        emptyText={t("No organizations found")}
+                      />
+                    </DataTableFilterField>
+                  )}
                   <DataTableFilterField label={t("Key ID")}>
                     <Input
+                      aria-label={t("Key ID")}
                       value={(get("key_hash") as string) ?? ""}
                       onChange={(event) => set("key_hash", event.target.value)}
                       placeholder={t("Enter Key ID…")}

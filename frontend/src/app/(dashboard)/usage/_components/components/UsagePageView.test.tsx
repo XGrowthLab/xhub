@@ -726,8 +726,8 @@ describe("UsagePage", () => {
   it("removed customer and tag modules are absent and never fetch data", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
     await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
-    expect(screen.queryByRole("option", { name: "Customer Usage" })).toBeNull();
-    expect(screen.queryByRole("option", { name: "Tag Usage" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Customer Usage" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
     expect(mockTagListCall).not.toHaveBeenCalled();
     expect(mockUseCustomers).not.toHaveBeenCalled();
   });
@@ -761,7 +761,7 @@ describe("UsagePage", () => {
         node = node.parentElement;
       }
       const combobox = node?.querySelector('[role="combobox"]') ?? null;
-      expect(combobox).not.toBeNull();
+      expect(combobox).toBeInTheDocument();
       return combobox as HTMLElement;
     };
 
@@ -864,7 +864,7 @@ describe("UsagePage", () => {
       await userEvent.setup().click(screen.getByRole("option", { name: "Alice (user-001)" }));
       await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
         "test-token", expect.any(Date), expect.any(Date), "user-001"));
-      expect(screen.queryByText("424,242")).toBeNull();
+      expect(screen.queryByText("424,242")).not.toBeInTheDocument();
       expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
     });
 
@@ -1105,94 +1105,15 @@ describe("UsagePage", () => {
     });
   });
 
-  describe("model view toggle", () => {
-    it("should show Public Model Name view by default", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      // Default should be "groups" view showing "Top Public Model Names"
-      expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
-      expect(screen.getAllByText("Public Model Name").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("XHub Model Name").length).toBeGreaterThan(0);
-    });
-
-    it("should switch to XHub Model Name view on toggle click", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      // Click the "XHub Model Name" toggle
-      const litellmToggle = screen.getAllByText("XHub Model Name")[0];
-      act(() => {
-        fireEvent.click(litellmToggle);
-      });
-
-      // Title should change to "Top XHub Models"
-      await waitFor(() => {
-        expect(screen.getByText("Top XHub Models")).toBeInTheDocument();
-      });
-    });
-
-    it("should switch back to Public Model Name view", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      // Switch to individual first
-      const litellmToggle = screen.getAllByText("XHub Model Name")[0];
-      act(() => {
-        fireEvent.click(litellmToggle);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText("Top XHub Models")).toBeInTheDocument();
-      });
-
-      // Switch back to groups
-      const publicToggle = screen.getAllByText("Public Model Name")[0];
-      act(() => {
-        fireEvent.click(publicToggle);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
-      });
-    });
-
-    it("should feed the Model Activity tab from the model_groups breakdown by default", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
-      expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
-    });
-
-    it("should switch the Model Activity tab to the litellm models breakdown on toggle click", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-      });
-
-      act(() => {
-        fireEvent.click(screen.getAllByText("XHub Model Name")[0]);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
-      });
-      expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
-    });
+  /** 后台两模型维度同源，验证只展示一个真实费用排行并沿用既有默认数据源；无网络写入，测试环境清理 DOM。 */
+  it("shows one model spend view without a misleading upstream toggle", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+    expect(screen.getByText("Model spend")).toBeInTheDocument();
+    expect(screen.queryByText("Public Model Name")).not.toBeInTheDocument();
+    expect(screen.queryByText("XHub Model Name")).not.toBeInTheDocument();
+    expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
+    expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
   });
 
   describe("tab navigation in global view", () => {

@@ -70,7 +70,7 @@ describe("SpendByProvider", () => {
 
   it("should display Show Unknown toggle", () => {
     render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
-    expect(screen.getByText("Show Unknown")).toBeInTheDocument();
+    expect(screen.getByText("Include unattributed usage")).toBeInTheDocument();
     expect(screen.getAllByRole("switch")[1]).toBeInTheDocument();
   });
 

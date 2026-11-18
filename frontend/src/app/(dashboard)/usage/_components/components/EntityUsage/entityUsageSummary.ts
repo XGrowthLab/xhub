@@ -47,7 +47,7 @@ export const buildSummaryTiles = (metadata: SpendSummaryMetadata, showFlatCost: 
       className: "text-success",
     },
     { title: t("Failed Requests"), value: metadata.total_failed_requests.toLocaleString(), className: "text-destructive" },
-    { title: t("Total Tokens"), value: metadata.total_tokens.toLocaleString() },
+    { title: t("usagePolish.totalTokens"), value: metadata.total_tokens.toLocaleString() },
   ];
 };
 

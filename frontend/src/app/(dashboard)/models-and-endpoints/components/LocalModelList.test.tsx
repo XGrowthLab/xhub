@@ -1,5 +1,6 @@
 import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { LocalModelList } from "./LocalModelList";
 import { priceCatalogRows } from "./priceCatalogRows";
@@ -26,11 +27,14 @@ it("本地列表保留记录并允许上下架", () => {
 });
 
 /** 来源下架的历史资料可搜索，不能通过上架按钮消除来源状态；英文文案完整，渲染后自动清理。 */
-it("preserves delisted source records in English",()=>{
+it("preserves delisted source records in English",async()=>{
  localStorage.removeItem(LOCALE_COOKIE);document.cookie=`${LOCALE_COOKIE}=;path=/;max-age=0`;
  const rows=priceCatalogRows({models:[{id:"removed",market_catalog:true,feed_unavailable:true},{id:"active",market_catalog:true}]});
  render(<I18nProvider initialLocale="en"><LocalModelList rows={rows} onDetail={vi.fn()} onListing={vi.fn()} /></I18nProvider>);
- fireEvent.change(screen.getByRole("combobox",{name:"Local model status"}),{target:{value:"down"}});
+ const user = userEvent.setup();
+ screen.getByRole("combobox",{name:"Local model status"}).focus();
+ await user.keyboard("{ArrowDown}");
+ await user.click(screen.getByRole("option",{name:"Delisted", exact:true}));
  expect(screen.getByRole("status")).toHaveTextContent("1 of 2 archived models match");
  expect(screen.getByText("Delisted at source")).toBeVisible();expect(screen.getByRole("button",{name:"Delist"})).toBeDisabled();
 });

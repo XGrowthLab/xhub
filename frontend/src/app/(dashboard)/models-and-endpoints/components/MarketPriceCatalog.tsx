@@ -1,4 +1,5 @@
 "use client";
+import { ConsoleSelect } from "@/components/console/ConsoleSelect";
 import { useState } from "react";
 import Link from "next/link";
 import { Boxes, Filter, Search } from "lucide-react";
@@ -202,17 +203,12 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
             setLimit(60);
           }}
         />
-        <select
-          aria-label={t("priceCatalog.sort")}
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          className="rounded border bg-background p-2 text-sm"
-        >
-          <option value="rank">{t("marketSync.rank")}</option>
-          <option value="name">{t("marketSync.name")}</option>
-          <option value="input">{t("marketSync.inputPrice")}</option>
-          <option value="output">{t("marketSync.outputPrice")}</option>
-        </select>
+        <ConsoleSelect label={t("priceCatalog.sort")} value={sort} onValueChange={setSort} className="w-full sm:w-56" options={[
+          { value: "rank", label: t("marketSync.rank") },
+          { value: "name", label: t("marketSync.name") },
+          { value: "input", label: t("marketSync.inputPrice") },
+          { value: "output", label: t("marketSync.outputPrice") },
+        ]} />
         {props.onAdd && (
           <Button data-testid="price-add-model" onClick={props.onAdd}>
             {t("priceData.addModel")}
@@ -254,18 +250,9 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
           ))}
           <label className="block space-y-3 border-t pt-5 text-sm text-muted-foreground">
             {t("marketSync.context")}
-            <select
-              aria-label={t("marketSync.context")}
-              className="w-full rounded border bg-background p-2"
-              value={context}
-              onChange={(e) => setContext(Number(e.target.value))}
-            >
-              {[0, 32000, 128000, 256000, 1000000].map((n) => (
-                <option value={n} key={n}>
-                  {n ? n.toLocaleString() + "+" : t("marketSync.unlimited")}
-                </option>
-              ))}
-            </select>
+            <ConsoleSelect label={t("marketSync.context")} value={String(context)} onValueChange={(value) => setContext(Number(value))} options={
+              [0, 32000, 128000, 256000, 1000000].map((n) => ({ value: String(n), label: n ? n.toLocaleString() + "+" : t("marketSync.unlimited") }))
+            } />
           </label>
           <fieldset className="border-t pt-5">
             <legend className="text-sm text-muted-foreground">{t("marketSync.capabilities")}</legend>

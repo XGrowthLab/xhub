@@ -204,31 +204,35 @@ describe("Navbar", () => {
     mockUserDropdownData.current = originalCurrent;
   });
 
-  it("should show version badge when health data contains version", () => {
-    mockUseHealthReadinessDetailsImpl = () => ({ data: { litellm_version: "1.0.0" } });
+  /** 品牌导航不展示内部构建标识；健康接口即使返回开发版本也不影响产品名称，夹具随后还原。 */
+  it("keeps deployment versions out of the product brand", () => {
+    mockUseHealthReadinessDetailsImpl = () => ({ data: { litellm_version: "xhub-dev" } });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    expect(screen.getByText("v1.0.0")).toBeInTheDocument();
+    expect(screen.queryByText("vxhub-dev")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "XHub home" })).toHaveTextContent("XHub");
 
     // Reset mock
     mockUseHealthReadinessDetailsImpl = () => ({ data: null });
   });
 
-  it("should forward accessToken to the readiness hook", () => {
+  /** 导航品牌不再为版本展示请求健康详情，避免普通用户无谓请求；测试不连接外部服务。 */
+  it("does not request readiness metadata just to render the brand", () => {
     useHealthReadinessDetailsSpy.mockClear();
 
     renderWithProviders(<Navbar {...defaultProps} accessToken="my-token" />);
 
-    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token");
+    expect(useHealthReadinessDetailsSpy).not.toHaveBeenCalled();
   });
 
-  it("should forward a null accessToken to the readiness hook (disables the hook)", () => {
+  /** 未登录也不读取构建详情；空令牌只影响已有账户行为，结束由框架清理。 */
+  it("does not request readiness metadata for a signed-out visitor", () => {
     useHealthReadinessDetailsSpy.mockClear();
 
     renderWithProviders(<Navbar {...defaultProps} accessToken={null} />);
 
-    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
+    expect(useHealthReadinessDetailsSpy).not.toHaveBeenCalled();
   });
 
   it("should use custom logo from theme context", () => {

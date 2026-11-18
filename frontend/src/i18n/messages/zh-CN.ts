@@ -1,3 +1,5 @@
+import { consoleDetailsZhCN } from "./consoleDetailsMessages";
+import { usagePolishZhCN } from "./usagePolish";
 import { consoleUi } from "./consoleUi.zh-CN";
 import { notifications } from "./notifications.zh-CN";
 import { marketSync } from "./marketSync.zh-CN";
@@ -22,6 +24,8 @@ export const zhCN = {
   playgroundAttachment: { expired: "刷新后之前的附件已不可用，请清空对话并重新上传附件后继续。" },
   notifications,
   consoleUi,
+  consoleDetails: consoleDetailsZhCN,
+  usagePolish: usagePolishZhCN,
   marketSync,
   protocolProbe: protocolProbeZhCN,
   logsUX: {
@@ -675,7 +679,8 @@ export const zhCN = {
     specialized: "该接口使用专用请求格式。请按供应商协议文档构造参数，再前往调试台测试。",
     actions: "任务后续操作",
     priceNote:
-      "以下为当前网关返回的 Token 参考费率，单位为美元 / 100 万 tokens。未提供价格不代表免费；媒体专用计费与最终费用以网关实际账单为准。",
+      "以下为当前网关返回的美元费率，计费单位以各行标注为准；Token 单价按每 100 万 tokens 展示。未提供价格不代表免费，最终费用以网关实际账单为准。",
+    unitPrice: "单价",
     item: "计费项目",
     rate: "费率 / 100 万 tokens",
     stepKey: "1. 准备 API Key",

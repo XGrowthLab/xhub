@@ -1,3 +1,4 @@
+import { usageModelLabel } from "@/components/UsagePage/usageIdentityLabel";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -32,7 +33,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
     {
       header: t("Model"),
       accessorKey: "key",
-      cell: (info: any) => info.getValue() || "-",
+      cell: (info: any) => usageModelLabel(info.getValue()),
     },
     {
       header: t("Spend (USD)"),
@@ -59,7 +60,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
-  const processedTopModels = topModels.slice(0, topModelsLimit);
+  const processedTopModels = topModels.slice(0, topModelsLimit).map((model) => ({ ...model, key: usageModelLabel(model.key) }));
 
   return (
     <>
@@ -84,10 +85,10 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         >
           <TabsList aria-label={t("Top model view mode")}>
             <TabsTrigger value="table" className="h-8 flex-none px-3">
-              {t("Table View")}
+              {t("usagePolish.table")}
             </TabsTrigger>
             <TabsTrigger value="chart" className="h-8 flex-none px-3">
-              {t("Chart View")}
+              {t("usagePolish.chart")}
             </TabsTrigger>
           </TabsList>
         </Tabs>

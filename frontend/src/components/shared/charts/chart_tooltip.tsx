@@ -11,7 +11,13 @@ export type ChartTooltipProps = Pick<
 
 export type ChartTooltipComponent = React.ComponentType<ChartTooltipProps>;
 
+/** 为已知用量字段生成可读名称；任意模型名、端点路径保持原文。图例与摘要调用，返回本地化标签且无副作用。 */
 export const formatCategoryName = (name: string): string => {
+  const metric = name.replace(/^metrics\./, "");
+  const labels: Record<string, string> = { prompt_tokens: "usagePolish.inputTokens", completion_tokens: "usagePolish.outputTokens", total_tokens: "usagePolish.totalTokens" };
+  if (labels[metric]) return t(labels[metric]);
+  const knownMetrics = new Set(["api_requests", "successful_requests", "failed_requests", "cache_read_input_tokens", "cache_creation_input_tokens", "spend"]);
+  if (!name.startsWith("metrics.") && !knownMetrics.has(name)) return name;
   const label = name
     .replace("metrics.", "")
     .replace(/_/g, " ")

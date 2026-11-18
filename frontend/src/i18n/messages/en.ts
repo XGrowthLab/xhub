@@ -1,3 +1,5 @@
+import { consoleDetailsEn } from "./consoleDetailsMessages";
+import { usagePolishEn } from "./usagePolish";
 import { consoleUi } from "./consoleUi.en";
 import { notifications } from "./notifications.en";
 import { marketSync } from "./marketSync.en";
@@ -21,6 +23,8 @@ export const en = {
   playgroundAttachment: { expired: "An earlier attachment is no longer available after refreshing. Clear the conversation and upload it again to continue." },
   notifications,
   consoleUi,
+  consoleDetails: consoleDetailsEn,
+  usagePolish: usagePolishEn,
   marketSync,
   protocolProbe: protocolProbeEn,
   logsUX: {
@@ -695,7 +699,8 @@ export const en = {
       "This endpoint requires a specialized request format. Follow the provider’s protocol documentation and test the request in the Playground.",
     actions: "Task follow-up operations",
     priceNote:
-      "These are the token rates reported by the gateway, in USD per 1M tokens. Missing prices do not mean free usage. Media pricing and final charges follow the gateway bill.",
+      "These are the rates reported by the gateway, in USD. Each row shows its billing unit; token rates are per 1M tokens. Missing prices do not mean free usage. Final charges follow the gateway bill.",
+    unitPrice: "Unit price",
     item: "Billing item",
     rate: "Rate / 1M tokens",
     stepKey: "1. Prepare an API key",

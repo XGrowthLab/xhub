@@ -34,14 +34,14 @@ export function playgroundCurlBody(options: CurlBodyOptions): Record<string, unk
   if (!messages.length) messages = [{ role: "user", content: input || "Hello" }];
   const body: Record<string, unknown> = { stream };
   if (protocol === "openai-responses") {
-    body.input = native
-      ? messages.map((message) => ({
-          ...message,
-          content: Array.isArray(message.content)
-            ? message.content.map((part) => responsesContentPart(part, message.role))
-            : message.content,
-        }))
-      : messages.map((message) => ({ ...message, type: "message" }));
+    // 历史附件以 Chat 形态保存在内存，标准和透传 Responses 都需恢复为 input_file/input_image，不能把展示占位当成请求正文。
+    body.input = messages.map((message) => ({
+      ...message,
+      ...(!native ? { type: "message" } : {}),
+      content: Array.isArray(message.content)
+        ? message.content.map((part) => responsesContentPart(part, message.role))
+        : message.content,
+    }));
     if (!native && options.previousResponseId) {
       body.input = (body.input as unknown[]).slice(-1);
       body.previous_response_id = options.previousResponseId;
@@ -76,16 +76,15 @@ export function playgroundCurlBody(options: CurlBodyOptions): Record<string, unk
       const id = options.selectedMCPServers?.[index] ?? "__all__";
       const toolset = id.startsWith("toolset:");
       const server = options.mcpServers?.find((item) => item.server_id === id);
-      const name = toolset
-        ? tool.server_label
-        : protocol === "openai-chat"
-          ? server?.alias || server?.server_name || id
-          : server?.server_name || id;
+      let name = server?.server_name || id;
+      if (protocol === "openai-chat") name = server?.alias || name;
+      if (toolset) name = tool.server_label;
       const suffix =
         id === "__all__" ? "" : "/" + (protocol === "openai-responses" || toolset ? encodeURIComponent(name) : name);
+      const useGatewayLabel = id === "__all__" || (protocol === "openai-chat" && !toolset);
       return {
         ...tool,
-        server_label: id === "__all__" ? "litellm" : protocol === "openai-chat" && !toolset ? "litellm" : name,
+        server_label: useGatewayLabel ? "litellm" : name,
         server_url:
           (protocol === "openai-responses" ? options.base.replace(/\/$/, "") : "litellm_proxy") + "/mcp" + suffix,
       };

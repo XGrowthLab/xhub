@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./helpers";
@@ -55,11 +56,10 @@ test("supplier model monitor displays real billing and switches chart and langua
     }
     // 配置已存在但尚未推理时，目录和下拉列表必须可用。
     await stableGoto(page, "/model-monitor");
-    await expect(
-      page.getByLabel(t("monitor.supplier"), { exact: true }).getByRole("option", { name: suppliers[0], exact: true }),
-    ).toHaveCount(1);
-    await page.getByLabel(t("monitor.supplier"), { exact: true }).selectOption(suppliers[0]);
-    await page.getByLabel(t("monitor.model"), { exact: true }).selectOption(actual);
+    await page.getByRole("combobox", { name: t("monitor.supplier"), exact: true }).click();
+    await expect(page.getByRole("option", { name: suppliers[0], exact: true })).toHaveCount(1);
+    await page.getByRole("option", { name: suppliers[0], exact: true }).click();
+    await selectMonitorOption(page, t("monitor.model"), actual);
     await expect(page.getByRole("region", { name: t("monitor.requests") })).toContainText("0");
     await expect(page.getByRole("rowheader", { name: actual, exact: true })).toHaveCount(0);
     const requestIDs: string[] = [];
@@ -99,12 +99,12 @@ test("supplier model monitor displays real billing and switches chart and langua
     expect(body.models.find((row: any) => row.supplier === suppliers[1]).ttft_samples).toBe(1);
     await stableGoto(page, "/model-monitor");
     await expect(page.getByRole("heading", { name: t("monitor.title"), exact: true })).toBeVisible();
-    await page.getByLabel(t("monitor.model"), { exact: true }).selectOption(actual);
+    await selectMonitorOption(page, t("monitor.model"), actual);
     await expect(page.getByRole("rowheader", { name: actual, exact: true })).toHaveCount(2);
-    await page.getByLabel(t("monitor.metric"), { exact: true }).selectOption("cost");
+    await selectMonitorOption(page, t("monitor.metric"), t("monitor.cost"));
     await expect(page.getByRole("region", { name: t("monitor.trend") })).toBeVisible();
     await expect(page.getByRole("region", { name: t("monitor.trend") }).getByRole("application")).toBeVisible();
-    await page.getByLabel(t("monitor.supplier"), { exact: true }).selectOption(suppliers[0]);
+    await selectMonitorOption(page, t("monitor.supplier"), suppliers[0]);
     const row = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: actual, exact: true }) });
     await expect(row).toHaveCount(1);
     await expect(row.getByRole("cell").nth(1)).toHaveText("1");
@@ -112,7 +112,7 @@ test("supplier model monitor displays real billing and switches chart and langua
     await page.getByRole("button", { name: "English", exact: true }).click();
     const en = (key: string) => translate("en", key);
     await expect(page.getByRole("heading", { name: en("monitor.title"), exact: true })).toBeVisible();
-    await expect(page.getByLabel(en("monitor.supplier"), { exact: true })).toHaveValue(suppliers[0]);
+    await expect(page.getByRole("combobox", { name: en("monitor.supplier"), exact: true })).toHaveText(suppliers[0]);
     // 语言切换会刷新服务端组件；先完成真实重载并等待数据加载，避免未完成的刷新覆盖日期输入。
     await page.reload();
     await expect(page.getByRole("button", { name: en("monitor.refresh"), exact: true })).toBeEnabled();

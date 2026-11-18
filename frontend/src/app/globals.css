@@ -311,3 +311,34 @@
 .key-details-scrollbar::-webkit-scrollbar { width: 8px; }
 .key-details-scrollbar::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
 .key-details-scrollbar::-webkit-scrollbar-track { background: transparent; }
+
+/* 工作区独占动态视口，由 main 与侧栏分别滚动；禁止正文溢出再次撑开 document。
+   规则仅在工作区挂载时生效，登录、公开目录与独立聊天仍保留各自的滚动行为。 */
+body:has([data-dashboard-shell]) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* 页签只做透明度过渡，避免 transform 改变内部 fixed 弹层的定位参照。
+   使用现有面板节点，不创建动画副本，也不修改挂载策略或请求生命周期。 */
+@keyframes console-panel-enter {
+  from { opacity: 0.55; }
+  to { opacity: 1; }
+}
+.console-tab-panel:not([hidden]) {
+  animation: console-panel-enter 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 浮层共享节奏；保留组件已有方向和焦点行为，避免各页菜单快慢不一。 */
+:is([data-slot="dialog-content"], [data-slot="dialog-overlay"], [data-slot="dropdown-menu-content"], [data-slot="popover-content"], [data-slot="select-content"]) {
+  animation-duration: 160ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.console-tab-panel, [data-slot="dialog-content"], [data-slot="dialog-overlay"], [data-slot="dropdown-menu-content"], [data-slot="popover-content"], [data-slot="select-content"], [data-slot="sheet-content"], [data-slot="sheet-overlay"], [data-slot="tabs-trigger"]),
+  [data-slot="tabs-trigger"]::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -6,6 +6,9 @@ import { chooseSelectOption, renderWithProviders } from "../../../tests/test-uti
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import { setActiveLocale, translate } from "@/i18n";
+import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
@@ -1007,4 +1010,44 @@ it("waits for detail data even if the list already contains the key", () => {
   renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token } });
   expect(screen.getByText("Loading key...")).toBeVisible();
   expect(screen.queryByText("Pending budget: $0")).not.toBeInTheDocument();
+});
+
+/** 前置仅一个团队/组织；验证无意义的分组筛选隐藏、完整 ID 输入与文案双语，数据范围保持个人，自动卸载清理。 */
+it.each(["en", "zh-CN"] as const)("keeps personal key filters compact in %s", async (locale) => {
+  setActiveLocale(locale);
+  renderWithProviders(<VirtualKeysTable />);
+  await userEvent.click(screen.getByRole("button", { name: translate(locale, "Filters") }));
+  const dialog = screen.getByRole("dialog", { name: translate(locale, "consoleDetails.keyFilters") });
+  expect(within(dialog).getByRole("textbox", { name: translate(locale, "Key ID") })).toBeVisible();
+  expect(within(dialog).queryByPlaceholderText(translate(locale, "Select a team…"))).not.toBeInTheDocument();
+  expect(within(dialog).queryByPlaceholderText(translate(locale, "Select an organization…"))).not.toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("Narrow");
+  expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ scope: "personal" }));
+});
+
+/** 前置链接已有团队与组织条件；即使目录候选只有一个也可编辑条件，避免隐藏生效限制；URL 状态随 DOM 卸载清理。 */
+it("keeps active team and organization filters editable", async () => {
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_team: "team-1", filter_org: "org-1" } });
+  fireEvent.click(screen.getByTestId("datatable-filters-trigger"));
+  expect(screen.getByPlaceholderText("Select a team…")).toBeVisible();
+  expect(screen.getByPlaceholderText("Select an organization…")).toBeVisible();
+});
+
+/** 前置多个可选团队；验证仍提供团队筛选，目录读失败时不产生空选择器；测试后恢复共享 hook 替身。 */
+it("shows relevant multi-team filters and tolerates an unavailable directory", () => {
+  const teamHook = vi.mocked(useAllTeams);
+  const orgHook = vi.mocked(useOrganizations);
+  const originalTeam = teamHook.getMockImplementation()!;
+  const originalOrg = orgHook.getMockImplementation()!;
+  try {
+    teamHook.mockReturnValue({ data: [{ team_id: "one" }, { team_id: "two" }] } as ReturnType<typeof useAllTeams>);
+    orgHook.mockReturnValue({ data: undefined } as ReturnType<typeof useOrganizations>);
+    renderWithProviders(<VirtualKeysTable />);
+    openFilters();
+    expect(screen.getByPlaceholderText("Select a team…")).toBeVisible();
+    expect(screen.queryByPlaceholderText("Select an organization…")).not.toBeInTheDocument();
+  } finally {
+    teamHook.mockImplementation(originalTeam);
+    orgHook.mockImplementation(originalOrg);
+  }
 });

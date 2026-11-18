@@ -1,11 +1,11 @@
-import { translate } from "@/i18n";
+import { translate, setActiveLocale } from "@/i18n";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders as render } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import { endpointTitle } from "@/components/llm_calls/EndpointPicker";
-const endpointLabel = (item: Parameters<typeof endpointTitle>[0]) => endpointTitle(item,"streaming");
+const endpointLabel = (item: Parameters<typeof endpointTitle>[0]) => endpointTitle(item, "streaming");
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages";
@@ -81,9 +81,11 @@ describe("ChatUI", () => {
     render(
       <ChatUI accessToken="test" token="test" userRole="user" userID="test" disabledPersonalKeyCreation={false} />,
     );
-    await waitFor(() => expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue(
-      endpointLabel(endpoint("/v1/chat/completions")),
-    ));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue(
+        endpointLabel(endpoint("/v1/chat/completions")),
+      ),
+    );
     expect(sessionStorage.getItem("endpointPath")).toBe("/v1/chat/completions");
     sessionStorage.removeItem("endpointType");
     await selectComboboxOption("Select an endpoint", "/v1/messages");
@@ -278,31 +280,67 @@ describe("ChatUI", () => {
     });
   });
 
-  it("should show the SDK type by its human label rather than its wire value", async () => {
-    const user = userEvent.setup();
+  /** 前置尚未选择模型；验证代码按钮禁用并提供解释，避免空白弹窗；DOM 与会话由测试框架清理。 */
+  it("disables code export until a model and endpoint are selected", () => {
     render(
       <ChatUI
-        accessToken="1234567890"
-        token="1234567890"
+        accessToken="secret-session-token"
+        token="secret-session-token"
         userRole="user"
-        userID="1234567890"
+        userID="u"
         disabledPersonalKeyCreation={false}
       />,
     );
+    expect(screen.getByRole("button", { name: "View request code" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "View request code" })).toHaveAttribute(
+      "title",
+      "Select a model and endpoint to view request code.",
+    );
+  });
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Chat" })).toBeInTheDocument();
-    });
+  /** 前置真实组件、模型绑定和用户草稿；验证中英文弹窗直接展示当前协议、复制正文不含会话密钥；DOM、剪贴板和会话由测试框架清理。 */
+  it.each(["en", "zh-CN"] as const)("exports the selected request safely in %s", async (locale) => {
+    setActiveLocale(locale);
+    const user = userEvent.setup();
+    render(
+      <ChatUI
+        accessToken="secret-session-token"
+        token="secret-session-token"
+        userRole="user"
+        userID="u"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+    await selectComboboxOption(translate(locale, "Select a Model"), "Model 1");
+    const input = screen.getByPlaceholderText(translate(locale, "Type your message... (Shift+Enter for new line)"));
+    await user.type(input, "请保留我的输入");
+    await user.click(screen.getByRole("button", { name: translate(locale, "consoleDetails.viewCode") }));
+    expect(await screen.findByRole("dialog", { name: translate(locale, "consoleDetails.codeTitle") })).toBeVisible();
+    const code = screen.getByLabelText(translate(locale, "myModels.copyExample"), { selector: "pre" });
+    expect(code).toHaveTextContent("/v1/chat/completions");
+    expect(code).toHaveTextContent("Model 1");
+    expect(code).toHaveTextContent("请保留我的输入");
+    expect(code).toHaveTextContent("$XHUB_API_KEY");
+    expect(code).not.toHaveTextContent("secret-session-token");
+    await user.click(screen.getByRole("button", { name: translate(locale, "myModels.copyExample") }));
+    expect(await navigator.clipboard.readText()).toContain("请保留我的输入");
+    expect(await navigator.clipboard.readText()).not.toContain("secret-session-token");
+    expect(input).toHaveValue("请保留我的输入");
+  });
 
-    await user.click(screen.getByRole("button", { name: /get code/i }));
-
-    const sdkTrigger = await screen.findByLabelText("SDK Type");
-    expect(sdkTrigger).toHaveTextContent("OpenAI SDK");
-
-    await user.click(sdkTrigger);
-    await user.click(await screen.findByRole("option", { name: "Azure SDK" }));
-
-    expect(await screen.findByLabelText("SDK Type")).toHaveTextContent("Azure SDK");
+  /** 前置刷新后只剩附件标记；验证调用代码明确提示文件失效且不允许复制残缺请求，DOM 和存储自动清理。 */
+  it("does not export a request when a historical attachment has expired", async () => {
+    sessionStorage.setItem("selectedModel", "Model 1");
+    sessionStorage.setItem(
+      "chatHistory",
+      JSON.stringify([{ role: "user", content: "Attached file", attachmentToken: "expired-file" }]),
+    );
+    render(<ChatUI accessToken="test" token="test" userRole="user" userID="u" disabledPersonalKeyCreation={false} />);
+    const button = await screen.findByRole("button", { name: "View request code" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+    expect(screen.getByRole("alert")).toHaveTextContent(translate("en", "playgroundAttachment.expired"));
+    expect(screen.queryByRole("button", { name: translate("en", "myModels.copyExample") })).not.toBeInTheDocument();
   });
 
   it("should show the voice by its human label rather than its wire value", async () => {

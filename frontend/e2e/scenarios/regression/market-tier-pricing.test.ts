@@ -45,6 +45,18 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     const before = await cost();
     expect(before).toBeGreaterThan(0);
     await stableGoto(page, "/price-data");
+    // 管理员目录的筛选与本地档案也使用统一控件，真实数据从价格同步接口加载。
+    await page.getByRole("combobox", { name: "模型排序", exact: true }).click();
+    await page.getByRole("option", { name: "输入价格", exact: true }).click();
+    await page.getByRole("combobox", { name: "上下文长度", exact: true }).click();
+    await page.getByRole("option", { name: "不限", exact: true }).click();
+    await page.getByRole("tab", { name: "本地模型列表", exact: true }).click();
+    await page.getByRole("combobox", { name: "本地模型状态", exact: true }).click();
+    await page.getByRole("option", { name: "已下架", exact: true }).click();
+    await page.getByRole("combobox", { name: "本地模型状态", exact: true }).click();
+    await page.getByRole("option", { name: "全部", exact: true }).click();
+    await page.getByRole("textbox", { name: "搜索本地模型", exact: true }).fill("e2e-market-tier");
+    await expect(page.getByRole("row").filter({ hasText: "e2e-market-tier" })).toHaveCount(1);
     await page.getByRole("tab", { name: "部署价格更新", exact: true }).click();
     const section = page.getByRole("region", { name: "部署价格更新", exact: true });
     const row = section.getByRole("row").filter({ hasText: "e2e-tier-deployment" });

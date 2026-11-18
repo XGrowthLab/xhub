@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { UsageHistoryNote } from "../UsageHistoryNote";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
@@ -33,6 +34,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
+  const [detailsUnavailable, setDetailsUnavailable] = useState(false);
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
 
   const toggleTagsExpansion = (apiKey: string) => {
@@ -47,8 +49,10 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
+  /** 读取仍可访问的密钥详情；输入为历史排行项，空 ID 不发请求，失败明确提示且保留历史账单。 */
   const handleKeyClick = async (item: any) => {
-    if (!accessToken) return;
+    if (!accessToken || !item.api_key) return;
+    setDetailsUnavailable(false);
 
     try {
       const keyInfo = await keyInfoV1Call(accessToken, item.api_key);
@@ -58,6 +62,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       setSelectedKey(item.api_key);
       setIsModalOpen(true); // Open modal when key is clicked
     } catch (error) {
+      setDetailsUnavailable(true);
       console.error("Error fetching key info:", error);
     }
   };
@@ -92,12 +97,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: t("Key ID"),
       accessorKey: "api_key",
-      cell: (info: any) => <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} />,
+      cell: (info: any) => info.getValue() ? <IdCell value={info.getValue()} onClick={() => handleKeyClick(info.row.original)} /> : <span className="whitespace-nowrap text-muted-foreground">{t("usagePolish.unlinkedKey")}</span>,
     },
     {
-      header: t("Key Alias"),
+      header: t("usagePolish.recordedName"),
       accessorKey: "key_alias",
-      cell: (info: any) => info.getValue() || "-",
+      cell: (info: any) => <span className="block max-w-52 truncate" title={info.getValue() || undefined}>{info.getValue() && info.getValue() !== "-" ? info.getValue() : t(info.row.original.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey")}</span>,
     },
   ];
 
@@ -166,13 +171,19 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
   const columns = showTags ? [...baseColumns, tagsColumn, spendColumn] : [...baseColumns, spendColumn];
 
-  const processedTopKeys = topKeys.map((k) => ({
-    ...k,
-    display_key_alias: k.key_alias && k.key_alias.length > 10 ? `${k.key_alias.slice(0, 10)}...` : k.key_alias || "-",
-  }));
+  // 图表标签保留可辨识长度；名称缺失时区分有标识的未命名密钥与未关联记录，不覆盖原始历史字段。
+  const processedTopKeys = topKeys.map((key) => {
+    let displayAlias = t(key.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey");
+    if (key.key_alias && key.key_alias !== "-") {
+      displayAlias = key.key_alias.length > 24 ? `${key.key_alias.slice(0, 24)}…` : key.key_alias;
+    }
+    return { ...key, display_key_alias: displayAlias };
+  });
 
   return (
     <>
+      <div className="mb-3"><UsageHistoryNote /></div>
+      {detailsUnavailable && <p role="status" className="mb-3 rounded-lg bg-muted p-3 text-sm text-muted-foreground">{t("usagePolish.keyDetailsUnavailable")}</p>}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <RadioGroup
           aria-label={t("Number of top keys to show")}
@@ -196,14 +207,14 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             aria-pressed={viewMode === "table"}
             className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
-            {t("Table View")}
+            {t("usagePolish.table")}
           </button>
           <button
             onClick={() => setViewMode("chart")}
             aria-pressed={viewMode === "chart"}
             className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
-            {t("Chart View")}
+            {t("usagePolish.chart")}
           </button>
         </div>
       </div>
@@ -230,8 +241,8 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
                 <div className="relative z-floating p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
-                      <span className="text-muted-foreground">{t("Key Alias:")} </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
+                      <span className="text-muted-foreground">{t("usagePolish.recordedName")} </span>
+                      <span className="font-mono text-gray-100 break-all">{item?.key_alias || t(item?.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey")}</span>
                     </div>
                     <div className="text-sm">
                       <span className="text-muted-foreground">{t("Key ID:")} </span>

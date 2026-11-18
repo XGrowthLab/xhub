@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, it } from "vitest";
-import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
+import { I18nProvider, LOCALE_COOKIE, translate } from "@/i18n";
 import { setActiveLocale } from "@/i18n/runtime";
 import { grantedModelCards, type MyModelCard } from "./grantedModelCards";
 import { MyModels } from "./MyModels";
@@ -72,4 +72,30 @@ it("shows zero and missing-rate states without inventing a price", () => {
   );
   expect(screen.getByText("$0")).toBeInTheDocument();
   expect(screen.getByText("Price unavailable")).toBeInTheDocument();
+});
+
+/** 前置按次、秒、图片的已确认价格；验证通用表头与每行计价单位，中英文金额不被乘百万；自动卸载，无计费数据写入。 */
+it.each(["en", "zh-CN"] as const)("shows mixed billing units without a token-only header in %s", (locale) => {
+  const rates = ["query", "second", "picture"].map((measure, index) => ({
+    measure,
+    side: "output",
+    window: "all",
+    usd: (index + 1) / 100,
+  }));
+  render(
+    <I18nProvider initialLocale={locale}>
+      <ModelPriceDetails model={{ ...model, price_tiers: undefined, rates }} />
+    </I18nProvider>,
+  );
+  expect(
+    screen.getByRole("columnheader", { name: translate(locale, "myModels.unitPrice"), exact: true }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("columnheader", { name: translate(locale, "myModels.rate"), exact: true }),
+  ).not.toBeInTheDocument();
+  const rows = screen.getAllByRole("row").slice(1);
+  for (const [index, rate] of rates.entries()) {
+    expect(rows[index]).toHaveTextContent("$0.0" + (index + 1));
+    expect(rows[index]).toHaveTextContent("/ " + translate(locale, "marketSync.unit." + rate.measure));
+  }
 });

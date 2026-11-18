@@ -3,6 +3,7 @@
 import * as React from "react";
 import { CartesianGrid, Line, LineChart as RechartsLineChart, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
+import { SinglePointSummary } from "./SinglePointSummary";
 import { cn } from "@/lib/cva.config";
 import { ValueTooltip, type ChartTooltipComponent } from "./chart_tooltip";
 import { categoryFills, type ChartColor } from "./colors";
@@ -28,6 +29,7 @@ export type LineChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
+/** 展示真实多日序列；参数为数据与显示选项，返回图表。单日记录显示数值摘要，避免孤立小点被误认作趋势；不补造日期。 */
 export function LineChart<TDatum extends Record<string, unknown>>({
   data,
   index,
@@ -46,6 +48,8 @@ export function LineChart<TDatum extends Record<string, unknown>>({
   className,
   style,
 }: LineChartProps<TDatum>) {
+  if (data.length === 1) return <SinglePointSummary row={data[0]} index={index} categories={categories} colors={colors} valueFormatter={valueFormatter} className={className} style={style} />;
+
   const fills = categoryFills(categories.length, colors);
   const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const TooltipContent = customTooltip ?? ValueTooltip;

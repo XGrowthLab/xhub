@@ -2,13 +2,14 @@
 import { render as rawRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { I18nProvider, LOCALE_COOKIE } from "@/i18n";
+import { I18nProvider, LOCALE_COOKIE, translate } from "@/i18n";
 import { setActiveLocale } from "@/i18n/runtime";
 import { grantedModelCards } from "./grantedModelCards";
 import { MyModels } from "./MyModels";
 
 /** 提供真实语言上下文以验证卡片数值格式；不写后端，DOM 自动清理。 */
-const render: typeof rawRender = (ui, options) => rawRender(ui, { wrapper: ({children}) => <I18nProvider initialLocale="en">{children}</I18nProvider>, ...options });
+const render: typeof rawRender = (ui, options) =>
+  rawRender(ui, { wrapper: ({ children }) => <I18nProvider initialLocale="en">{children}</I18nProvider>, ...options });
 
 const cards = grantedModelCards(
   ["gpt-allowed", "eye-allowed", "unpriced", "fennoai", "gpt-allowed", " "],
@@ -28,7 +29,11 @@ const cards = grantedModelCards(
 );
 
 describe("MyModels", () => {
-  beforeEach(() => { setActiveLocale("en"); localStorage.removeItem(LOCALE_COOKIE); document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`; });
+  beforeEach(() => {
+    setActiveLocale("en");
+    localStorage.removeItem(LOCALE_COOKIE);
+    document.cookie = `${LOCALE_COOKIE}=;path=/;max-age=0`;
+  });
 
   it("only lists granted model ids, removing duplicates and provider shells", () => {
     expect(cards.map((card) => card.id)).toEqual(["gpt-allowed", "eye-allowed", "unpriced"]);
@@ -90,6 +95,7 @@ describe("MyModels", () => {
     expect(grantedModelCards(["still-available"], []).map((card) => card.id)).toEqual(["still-available"]);
   });
 
+  /** 从授权卡片出发验证搜索、双层筛选、键盘选项及缺价排序；纯组件测试，DOM自动清理，不改变授权。 */
   it("searches, filters by type and provider, sorts and clears filters", async () => {
     const user = userEvent.setup();
     render(<MyModels models={cards} />);
@@ -98,19 +104,49 @@ describe("MyModels", () => {
     expect(screen.queryByTestId("my-model-gpt-allowed")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     await user.click(screen.getByRole("button", { name: "Filters" }));
-    await user.click(screen.getByRole("button", { name: "vision" }));
+    await user.click(screen.getByRole("button", { name: "Vision" }));
     expect(screen.queryByTestId("my-model-gpt-allowed")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Provider" }), "openai");
+    screen.getByRole("combobox", { name: "Provider" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "openai", exact: true }));
     expect(screen.getByTestId("my-model-gpt-allowed")).toBeInTheDocument();
     expect(screen.queryByTestId("my-model-eye-allowed")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort models" }), "input");
+    screen.getByRole("combobox", { name: "Sort models" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "Input price: low to high", exact: true }));
     expect(screen.getAllByTestId(/^my-model-/).map((node) => node.getAttribute("data-testid"))).toEqual([
       "my-model-gpt-allowed",
       "my-model-unpriced",
       "my-model-eye-allowed",
     ]);
+  });
+
+  /** 前置同一列表混有 llm/chat 和不同类型；验证中英文仅一个对话分组及筛选，且不丢模型、不修改原始类别；自动卸载清理。 */
+  it.each(["en", "zh-CN"] as const)("groups legacy and current chat categories together in %s", async (locale) => {
+    const user = userEvent.setup();
+    const models = [
+      { ...cards[0], id: "legacy-chat", category: "llm" },
+      { ...cards[0], id: "current-chat", category: "chat" },
+      { ...cards[1], id: "vision-model", category: "vision" },
+    ];
+    rawRender(
+      <I18nProvider initialLocale={locale}>
+        <MyModels models={models} />
+      </I18nProvider>,
+    );
+    const chatLabel = translate(locale, "Chat");
+    expect(screen.getAllByRole("region", { name: chatLabel, exact: true })).toHaveLength(1);
+    expect(within(screen.getByRole("region", { name: chatLabel, exact: true })).getAllByRole("article")).toHaveLength(
+      2,
+    );
+    await user.click(screen.getByRole("button", { name: translate(locale, "myModels.filters"), exact: true }));
+    expect(screen.getAllByRole("button", { name: chatLabel, exact: true })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: chatLabel, exact: true }));
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.queryByRole("heading", { name: "vision-model" })).not.toBeInTheDocument();
+    expect(models.map((model) => model.category)).toEqual(["llm", "chat", "vision"]);
   });
 
   it("shows loading, retryable error, empty account and no-match states", async () => {

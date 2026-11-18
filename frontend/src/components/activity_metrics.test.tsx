@@ -419,7 +419,8 @@ describe("ActivityMetrics", () => {
   it("should display charts for tokens over time", () => {
     const { container } = render(<ActivityMetrics modelMetrics={mockModelMetrics} />);
     expect(screen.getByText("Total Tokens Over Time")).toBeInTheDocument();
-    expect(container.querySelectorAll(".recharts-area").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("region", { name: "One recorded date" }).length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".recharts-area")).toHaveLength(0);
   });
 
   it("should display charts for requests over time", () => {
@@ -441,7 +442,7 @@ describe("ActivityMetrics", () => {
     };
 
     render(<ActivityMetrics modelMetrics={modelWithEmptyLabel} />);
-    expect(screen.getByText("Unknown Item")).toBeInTheDocument();
+    expect(screen.getByText("Model not recorded")).toBeInTheDocument();
   });
 });
 
@@ -644,7 +645,7 @@ describe("processActivityData", () => {
     const result = processActivityData(mockDailyActivity, "api_keys", MOCK_TEAMS);
 
     expect(result).toHaveProperty("key1");
-    expect(result["key1"].label).toBe("test-key-1 (team: Test Team 1)");
+    expect(result["key1"].label).toBe("test-key-1");
     expect(result["key1"].total_requests).toBe(50);
     expect(result["key1"].total_spend).toBe(50.25);
   });
@@ -653,7 +654,7 @@ describe("processActivityData", () => {
     const result = processActivityData(mockDailyActivity, "api_keys");
 
     expect(result).toHaveProperty("key1");
-    expect(result["key1"].label).toBe("test-key-1 (team_id: team1)");
+    expect(result["key1"].label).toBe("test-key-1");
   });
 
   it("retains the api key metadata so key activity can be searched by user", () => {
@@ -1445,7 +1446,7 @@ describe("formatKeyLabel", () => {
     });
 
     const result = formatKeyLabel(modelData, "test-key", MOCK_TEAMS);
-    expect(result).toBe("test-key (team: Test Team 1)");
+    expect(result).toBe("test-key");
   });
 
   it("should return key_alias with team_id when team is not found", () => {
@@ -1455,7 +1456,7 @@ describe("formatKeyLabel", () => {
     });
 
     const result = formatKeyLabel(modelData, "test-key", MOCK_TEAMS);
-    expect(result).toBe("test-key (team_id: nonexistent-team)");
+    expect(result).toBe("test-key");
   });
 
   it("should use key-hash fallback when key_alias is null", () => {
@@ -1465,7 +1466,7 @@ describe("formatKeyLabel", () => {
     });
 
     const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
-    expect(result).toBe("key-hash-actual-key (team: Test Team 1)");
+    expect(result).toBe("actual-key");
   });
 
   it("should use user_email when key_alias is null", () => {
@@ -1476,7 +1477,7 @@ describe("formatKeyLabel", () => {
     });
 
     const result = formatKeyLabel(modelData, "actual-key", MOCK_TEAMS);
-    expect(result).toBe("alice@example.com (team: Test Team 1)");
+    expect(result).toBe("alice@example.com");
   });
 
   it("should return key_alias with team_id when teams array is empty", () => {
@@ -1486,6 +1487,6 @@ describe("formatKeyLabel", () => {
     });
 
     const result = formatKeyLabel(modelData, "my-key", []);
-    expect(result).toBe("my-key (team_id: team1)");
+    expect(result).toBe("my-key");
   });
 });

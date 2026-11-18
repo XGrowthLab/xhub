@@ -8,7 +8,7 @@ import { invocationCurl, invocationSteps, shellQuote } from "../../../mine-model
 import { protocolParameters } from "../../../mine-models/protocolParameters";
 
 /** 展示当前请求的完整终端教程；参数包含真实绑定、公开别名、网关、正文及文件名，不接收密钥。
- * 返回可展开的顺序命令与协议文档，供普通和原生调试界面调用；非法 JSON 不生成误导命令。
+ * presentation 选择独立面板或折叠教程；返回可展开的顺序命令与协议文档，供普通和原生调试界面调用；非法 JSON 不生成误导命令。
  * 用户点击复制才写剪贴板，复制失败保留命令；任务 ID 回填不自动调用，文件需保存在本地当前目录。 */
 export function CurlRequestGuide({
   endpoint,
@@ -19,6 +19,7 @@ export function CurlRequestGuide({
   multipart,
   taskId,
   headers,
+  presentation = "disclosure",
 }: {
   endpoint: ModelEndpoint;
   model: string;
@@ -28,6 +29,7 @@ export function CurlRequestGuide({
   multipart?: boolean;
   taskId?: string;
   headers?: Record<string, string>;
+  presentation?: "disclosure" | "panel";
 }) {
   const t = useT();
   const [status, setStatus] = useState("");
@@ -69,57 +71,61 @@ export function CurlRequestGuide({
       setStatus("copyFailed");
     }
   }
+  const content = (
+    <div
+      className={presentation === "panel" ? "min-w-0 space-y-4" : "mt-3 max-h-[50vh] min-w-0 space-y-3 overflow-auto"}
+    >
+      <p className="text-xs leading-5 text-muted-foreground">
+        {t("myModels.curlCurrentHint")} {t("myModels.exampleHint")}
+      </p>
+      {multipart && <p className="text-xs">{t("myModels.localFilesHint")}</p>}
+      {!command && <p role="alert">{t("myModels.curlInvalid")}</p>}
+      {status && <p role={status === "copied" ? "status" : "alert"}>{t("myModels." + status)}</p>}
+      <ol className="min-w-0 space-y-3">
+        {steps.map((step, index) => (
+          <li key={step.copy} className="min-w-0 rounded-md border p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">
+                {index + 1}. {t("myModels." + step.title)}
+              </h3>
+              <Button size="sm" variant="outline" onClick={() => void copy(step.command)}>
+                {t("myModels." + step.copy)}
+              </Button>
+            </div>
+            <p className="my-2 text-xs leading-5 text-muted-foreground">{t("myModels." + step.hint)}</p>
+            <pre
+              aria-label={t("myModels." + step.copy)}
+              className="max-h-80 overflow-auto rounded bg-slate-950 p-3 text-xs leading-5 text-slate-100"
+            >
+              <code>{step.command}</code>
+            </pre>
+          </li>
+        ))}
+      </ol>
+      <details className="rounded-md border p-3">
+        <summary className="cursor-pointer text-sm font-medium">{t("myModels.parameterGuide")}</summary>
+        <p className="my-2 text-xs leading-5 text-muted-foreground">{t("myModels.parameterGuideHint")}</p>
+        <dl className="space-y-2 text-xs">
+          {protocolParameters(endpoint).map((row) => (
+            <div key={row.field}>
+              <dt className="font-mono font-semibold">{row.field}</dt>
+              <dd className="mt-1 leading-5">{t("myModels." + row.description)}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+      <p className="text-xs leading-5 text-muted-foreground">
+        {t("myModels.errorHint")} {t("myModels.checkUsageHint")}
+      </p>
+    </div>
+  );
+  if (presentation === "panel") return <section aria-label={t("myModels.curlGuide")}>{content}</section>;
   return (
     <details className="min-w-0 shrink-0 border-b border-border p-4" aria-label={t("myModels.curlGuide")}>
       <summary className="cursor-pointer text-sm font-medium" onClick={() => setExpanded(!expanded)}>
         {t("myModels.curlGuide")}
       </summary>
-      {expanded && (
-        <div className="mt-3 max-h-[50vh] min-w-0 space-y-3 overflow-auto">
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t("myModels.curlCurrentHint")} {t("myModels.exampleHint")}
-          </p>
-          {multipart && <p className="text-xs">{t("myModels.localFilesHint")}</p>}
-          {!command && <p role="alert">{t("myModels.curlInvalid")}</p>}
-          {status && <p role={status === "copied" ? "status" : "alert"}>{t("myModels." + status)}</p>}
-          <ol className="min-w-0 space-y-3">
-            {steps.map((step, index) => (
-              <li key={step.copy} className="min-w-0 rounded-md border p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-medium">
-                    {index + 1}. {t("myModels." + step.title)}
-                  </h3>
-                  <Button size="sm" variant="outline" onClick={() => void copy(step.command)}>
-                    {t("myModels." + step.copy)}
-                  </Button>
-                </div>
-                <p className="my-2 text-xs leading-5 text-muted-foreground">{t("myModels." + step.hint)}</p>
-                <pre
-                  aria-label={t("myModels." + step.copy)}
-                  className="max-h-80 overflow-auto rounded bg-slate-950 p-3 text-xs leading-5 text-slate-100"
-                >
-                  <code>{step.command}</code>
-                </pre>
-              </li>
-            ))}
-          </ol>
-          <details className="rounded-md border p-3">
-            <summary className="cursor-pointer text-sm font-medium">{t("myModels.parameterGuide")}</summary>
-            <p className="my-2 text-xs leading-5 text-muted-foreground">{t("myModels.parameterGuideHint")}</p>
-            <dl className="space-y-2 text-xs">
-              {protocolParameters(endpoint).map((row) => (
-                <div key={row.field}>
-                  <dt className="font-mono font-semibold">{row.field}</dt>
-                  <dd className="mt-1 leading-5">{t("myModels." + row.description)}</dd>
-                </div>
-              ))}
-            </dl>
-          </details>
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t("myModels.errorHint")} {t("myModels.checkUsageHint")}
-          </p>
-        </div>
-      )}
+      {expanded && content}
     </details>
   );
 }

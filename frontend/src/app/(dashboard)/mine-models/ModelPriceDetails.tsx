@@ -20,7 +20,7 @@ export function ModelPriceDetails({ model }: { model: MyModelCard }) {
           <thead className="bg-muted/50">
             <tr>
               <th className="p-3">{t("myModels.item")}</th>
-              <th className="p-3 text-right">{t("myModels.rate")}</th>
+              <th className="p-3 text-right">{t("myModels.unitPrice")}</th>
             </tr>
           </thead>
           <tbody>

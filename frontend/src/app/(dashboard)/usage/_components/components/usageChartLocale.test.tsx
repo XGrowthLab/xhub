@@ -160,7 +160,7 @@ describe("usage charts in zh-CN", () => {
       expect(screen.getByTestId("gateway-requests-by-endpoint")).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(document.body.textContent).toContain("总体用量");
+      expect(document.body).toHaveTextContent("总体用量");
     });
 
     const text = document.body.textContent ?? "";
@@ -200,11 +200,11 @@ describe("usage charts in zh-CN", () => {
       "成功请求",
       "失败请求",
       "接口请求",
-      "提示词令牌",
-      "补全令牌",
+      "输入 Token",
+      "输出 Token",
       "缓存读取输入令牌",
       "缓存创建输入令牌",
-      "key-hash-",
+      "未关联密钥",
       "/chat/completions",
       "9月25日",
       "9月28日",

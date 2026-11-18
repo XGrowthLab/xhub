@@ -64,6 +64,7 @@ const columns: ColumnDef<ProviderSpendData>[] = [
   },
 ];
 
+/** 展示供应商费用分布；参数为授权汇总与加载状态，返回可筛选图表。未归属用量仅影响展示，不从总计或账单删除。 */
 const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
   const t = useT();
   const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
@@ -90,20 +91,20 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
     <Card className="h-full">
       <CardHeader>
         <CardTitle>{t("Spend by Provider")}</CardTitle>
-        <CardAction className="flex items-center gap-4">
+        <CardAction className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <label className="text-sm text-foreground">{t("Show Zero Spend")}</label>
-            <Switch checked={includeZeroSpend} onCheckedChange={setIncludeZeroSpend} />
+            <Switch aria-label={t("Show Zero Spend")} checked={includeZeroSpend} onCheckedChange={setIncludeZeroSpend} />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
-              <label className="text-sm text-foreground">{t("Show Unknown")}</label>
+              <label className="text-sm text-foreground">{t("usagePolish.missingProviderToggle")}</label>
               <Tooltip>
                 <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
-                <TooltipContent>{t("Requests that failed to route to a provider")}</TooltipContent>
+                <TooltipContent>{t("usagePolish.missingProviderHint")}</TooltipContent>
               </Tooltip>
             </div>
-            <Switch checked={includeUnknown} onCheckedChange={setIncludeUnknown} />
+            <Switch aria-label={t("usagePolish.missingProviderToggle")} checked={includeUnknown} onCheckedChange={setIncludeUnknown} />
           </div>
         </CardAction>
       </CardHeader>
@@ -111,7 +112,7 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
         {loading ? (
           <ChartLoader isDateChanging={isDateChanging} />
         ) : (
-          <div className="grid grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <DonutChart
               className="mt-4 h-40"
               data={filteredProviderSpend}

@@ -67,13 +67,6 @@ for (const locale of ["zh-CN", "en"] as const) {
           .getByRole("option")
           .filter({ has: page.getByText(path, { exact: true }) })
           .click();
-        if (path !== "/v1/messages") {
-          await page.getByRole("button", { name: t("Get Code"), exact: true }).click();
-          const guide = page.getByRole("dialog", { name: t("Generated Code") });
-          await expect(guide).toContainText("Summarize this document.");
-          await expect(guide).toContainText(path.endsWith("responses") ? '"type": "input_file"' : '"type": "file"');
-          await page.keyboard.press("Escape");
-        }
         if (path.endsWith("responses")) {
           const session = page.getByRole("switch", { name: t("Use API session management") });
           if (await session.isChecked()) await session.click();
@@ -86,6 +79,21 @@ for (const locale of ["zh-CN", "en"] as const) {
         await page
           .getByPlaceholder(t("Type your message... (Shift+Enter for new line)"), { exact: true })
           .fill("Read the attached document.");
+        // 调用代码直接使用已上传的 PDF；验证真实协议字段与原始字节，而非旧 SDK 中的静态注释示例。
+        await page.getByRole("button", { name: t("consoleDetails.viewCode"), exact: true }).click();
+        const guide = page.getByRole("dialog", { name: t("consoleDetails.codeTitle") });
+        const example = guide.locator("pre").filter({ hasText: "curl --request POST" });
+        await expect(example).toContainText("Read the attached document.");
+        await expect(example).toContainText(PDF);
+        await expect(example).toContainText(
+          path.endsWith("responses")
+            ? '"type": "input_file"'
+            : path.endsWith("messages")
+              ? '"type": "document"'
+              : '"type": "file"',
+        );
+        await expect(example).not.toContainText(key.key);
+        await page.keyboard.press("Escape");
         const pending = page.waitForResponse(
           (r) => new URL(r.url()).pathname.endsWith(path.replace(/^\/v1/, "")) && r.request().method() === "POST",
         );
@@ -104,16 +112,33 @@ for (const locale of ["zh-CN", "en"] as const) {
           .toEqual({ status: "success", spend: 0.000012 });
         // 续聊必须把同一份文件再次送到无状态上游，浏览器会话存储则不能保存文件字节。
         await expect(page.getByRole("button", { name: t("Send message"), exact: true })).toBeVisible();
-        await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)"), { exact: true }).fill("Continue reading the same document.");
-        const followup = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith(path.replace(/^\/v1/, "")) && r.request().method() === "POST");
+        await page
+          .getByPlaceholder(t("Type your message... (Shift+Enter for new line)"), { exact: true })
+          .fill("Continue reading the same document.");
+        // 续聊代码必须还原内存中的同一附件，而不能把历史显示占位复制成请求。
+        await page.getByRole("button", { name: t("consoleDetails.viewCode"), exact: true }).click();
+        await expect(
+          page
+            .getByRole("dialog", { name: t("consoleDetails.codeTitle") })
+            .locator("pre")
+            .filter({ hasText: "curl --request POST" }),
+        ).toContainText(PDF);
+        await page.keyboard.press("Escape");
+        const followup = page.waitForResponse(
+          (r) => new URL(r.url()).pathname.endsWith(path.replace(/^\/v1/, "")) && r.request().method() === "POST",
+        );
         await page.getByRole("button", { name: t("Send message"), exact: true }).click();
         expect((await followup).status(), "PDF 续聊必须保留附件").toBe(200);
         await expect(page.getByText("pdf-verified", { exact: true })).toHaveCount(2);
         await expect.poll(() => page.evaluate(() => sessionStorage.getItem("chatHistory") ?? "")).not.toContain(PDF);
         if (path === "/v1/messages") {
-          await expect.poll(() => page.evaluate(() => sessionStorage.getItem("chatHistory") ?? "")).toContain("attachmentToken");
+          await expect
+            .poll(() => page.evaluate(() => sessionStorage.getItem("chatHistory") ?? ""))
+            .toContain("attachmentToken");
           await page.reload();
-          await page.getByPlaceholder(t("Type your message... (Shift+Enter for new line)"), { exact: true }).fill("Continue after refresh.");
+          await page
+            .getByPlaceholder(t("Type your message... (Shift+Enter for new line)"), { exact: true })
+            .fill("Continue after refresh.");
           await page.getByRole("button", { name: t("Send message"), exact: true }).click();
           await expect(page.getByText(t("playgroundAttachment.expired"), { exact: true })).toBeVisible();
         }

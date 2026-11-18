@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { formatConsoleMoney } from "../src/components/console/money";
+import { expectKeyFiltersAndColumns, expectRunnablePlaygroundCode } from "./console-details-scenario";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 保存本轮布局截图并检查页面级溢出；page 为真实浏览器，name 为测试证据名，图片只写隔离测试目录。 */
@@ -55,7 +56,7 @@ async function expectReadableUsageControls(page: Page, locale: "en" | "zh-CN") {
       "切换条不能产生竖向滚动条",
     ).toBeLessThanOrEqual(1);
   }
-  for (const key of ["Table View", "Chart View", "Public Model Name", "Litellm Model Name"]) {
+  for (const key of ["usagePolish.table", "usagePolish.chart"]) {
     const button = page.getByRole("button", { name: translate(locale, key), exact: true }).first();
     await expect(button).toBeVisible();
     const size = await button.evaluate((element) => {
@@ -127,13 +128,24 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
               input_cost_per_token: 0.000001,
               output_cost_per_token: 0.000003,
               ...(detailed
-                ? { cache_read_input_token_cost: 0.0000001, cache_creation_input_token_cost: 0.000002 }
+                ? {
+                    cache_read_input_token_cost: 0.0000001,
+                    cache_creation_input_token_cost: 0.000002,
+                    rates: [
+                      { measure: "token", side: "input", window: "all", usd: 0.000001 },
+                      { measure: "token", side: "output", window: "all", usd: 0.000003 },
+                      { measure: "token", side: "cache_read", window: "all", usd: 0.0000001 },
+                      { measure: "token", side: "cache_write", window: "all", usd: 0.000002 },
+                      { measure: "query", side: "output", variant: "search", window: "all", usd: 0.01 },
+                    ],
+                  }
                 : {}),
             },
             model_info: {
               transport: "bypass_openai_chat",
               endpoint_types: ["chat"],
               pricing_source: "manual",
+              category: detailed ? "chat" : "llm",
               supports_function_calling: detailed,
               supports_response_schema: detailed,
               supports_reasoning: detailed,
@@ -185,6 +197,7 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await expect(date).toHaveCount(1);
       if (locale === "zh-CN") await expect(date).toContainText("年");
       else await expect(date).toContainText(/[A-Z][a-z]{2}/);
+      await expectKeyFiltersAndColumns(page, locale);
       // 使用新密钥实际调用，页面布局变更不能扩权、改变预算或破坏调用链。
       const called = await page.request.post(GATEWAY + "/v1/chat/completions", {
         headers: { Authorization: "Bearer " + key.key },
@@ -212,6 +225,34 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await page.evaluate(() => (document.documentElement.style.fontSize = "20px"));
       await expectAlignedModelCards(page, model);
       await page.evaluate(() => document.documentElement.style.removeProperty("font-size"));
+      const pageBounds = await card.boundingBox();
+      await page.getByRole("combobox", { name: tr("myModels.sort"), exact: true }).click();
+      await page.getByRole("option", { name: tr("myModels.sortInput"), exact: true }).click();
+      await expect(card).toBeVisible();
+      expect((await card.boundingBox())!.x).toBeCloseTo(pageBounds!.x, 0);
+      await page.getByRole("button", { name: tr("myModels.filters"), exact: true }).click();
+      // 历史 llm 与默认 chat 仅展示一个对话类别，筛选后保留全部三条真实部署。
+      await expect(page.getByRole("button", { name: tr("Chat"), exact: true })).toHaveCount(1);
+      await expect(page.getByRole("region", { name: tr("Chat"), exact: true })).toHaveCount(1);
+      await page.getByRole("button", { name: tr("Chat"), exact: true }).click();
+      await expect(page.getByRole("article")).toHaveCount(3);
+      await page.getByRole("combobox", { name: tr("Provider"), exact: true }).click();
+      await page.getByRole("option", { name: "openai", exact: true }).click();
+      await expect(card).toBeVisible();
+      await page.getByRole("button", { name: new RegExp("^" + tr("myModels.filters") + "(?:\\s+\\d+)?$") }).click();
+      const beforeHelp = await card.boundingBox();
+      await page.getByRole("button", { name: tr("consoleUi.priceHelp"), exact: true }).click();
+      await expect(page.getByText(tr("myModels.units"), { exact: true })).toBeVisible();
+      expect((await card.boundingBox())!.y, "价格说明使用浮层，不应撑开模型网格").toBeCloseTo(beforeHelp!.y, 0);
+      await page.keyboard.press("Escape");
+      expect(
+        await page.evaluate(() => document.documentElement.scrollHeight - innerHeight),
+        "控制台只应有一个内容滚动区",
+      ).toBeLessThanOrEqual(1);
+      await expect(page.getByText("vxhub-dev", { exact: true })).toHaveCount(0);
+      const iconResponse = await page.request.get("/ui/icon.svg");
+      expect(iconResponse.status()).toBe(200);
+      expect(await iconResponse.text()).toContain("<svg");
       await recordLayout(page, `models-${locale}`);
       await page.getByRole("button", { name: tr("consoleUi.darkMode"), exact: true }).click();
       await expect(page.locator("html")).toHaveClass(/dark/);
@@ -221,6 +262,21 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await expect(page.getByRole("dialog").getByRole("tab")).toHaveCount(4);
       await page.keyboard.press("Escape");
       await expect(card.getByRole("button", { name: tr("consoleUi.modelDetails"), exact: true })).toBeFocused();
+
+      // 完整价格按实际单位标注，搜索按次价格不能被表头误说成每百万 Token。
+      const featureCard = page
+        .getByRole("article")
+        .filter({ has: page.getByRole("heading", { name: model + "-features", exact: true }) });
+      await featureCard.getByRole("button", { name: tr("consoleUi.modelDetails"), exact: true }).click();
+      const priceDetail = page.getByRole("dialog");
+      await expect(
+        priceDetail.getByRole("columnheader", { name: tr("myModels.unitPrice"), exact: true }),
+      ).toBeVisible();
+      const searchRate = priceDetail.getByRole("row").filter({ hasText: tr("marketSync.variant.search") });
+      await expect(searchRate).toContainText("$0.01");
+      await expect(searchRate).toContainText("/ " + tr("marketSync.unit.query"));
+      await expect(priceDetail).toContainText(tr("myModels.priceNote"));
+      await page.keyboard.press("Escape");
 
       await stableGoto(page, "/playground");
       await page.getByPlaceholder(tr("Select a Model"), { exact: true }).click();
@@ -232,6 +288,7 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await page.getByRole("button", { name: locale === "en" ? "中文" : "English", exact: true }).click();
       await expect(page.getByTestId("chat-composer-input")).toHaveValue(original);
       await page.getByRole("button", { name: locale === "en" ? "English" : "中文", exact: true }).click();
+      await expectRunnablePlaygroundCode(page, locale, model, key.key);
       await page.getByTestId("chat-send-button").click();
       await expect(page.getByTestId("message-surface").filter({ hasText: /e2e-ok/ })).toBeVisible();
       await expect(page.getByTestId("message-surface").filter({ hasText: original })).toBeVisible();
@@ -260,6 +317,11 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
           return spent;
         })
         .toBeGreaterThan(0);
+      // 删除已真实调用的测试密钥，验证历史别名仍保留且不会伪装成当前有效密钥。
+      expect(
+        (await page.request.post(GATEWAY + "/key/delete", { headers: auth, data: { keys: [keyID] } })).status(),
+      ).toBe(200);
+      keyID = "";
       await stableGoto(page, "/usage");
       const budget = page.getByRole("region", { name: tr("usageBudget.title"), exact: true });
       await expect(budget).toBeVisible();
@@ -267,7 +329,7 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await expect(budget).toContainText("$500.00");
       await expect(page.getByRole("tablist", { name: tr("pages.usage.viewTitle") })).toHaveCount(0);
       await expect(
-        page.getByRole("paragraph").and(page.getByText(formatConsoleMoney(spent / 2, locale), { exact: true })),
+        page.getByRole("paragraph").and(page.getByText(formatConsoleMoney(spent / 3, locale), { exact: true })),
       ).toBeVisible();
       const dailyChart = page.getByTestId("daily-spend-settled");
       await expect(dailyChart).toBeVisible();
@@ -288,9 +350,32 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
       await expectReadableUsageControls(page, locale);
       await page.evaluate(() => document.documentElement.style.removeProperty("font-size"));
       await recordLayout(page, `usage-${locale}`);
+      for (const tab of ["pages.usage.modelActivity", "pages.usage.keyActivity", "pages.usage.endpointActivity"]) {
+        await page.getByRole("tab", { name: tr(tab), exact: true }).click();
+        const panel = page.getByRole("tabpanel", { name: tr(tab), exact: true });
+        await expect(
+          panel.getByRole("region", { name: tr("usagePolish.singleDate"), exact: true }).first(),
+        ).toBeVisible();
+        if (tab === "pages.usage.keyActivity") {
+          await panel.getByText(tr("usagePolish.historyTitle"), { exact: true }).click();
+          await expect(panel.getByText(tr("usagePolish.historyHint"), { exact: true })).toBeVisible();
+          await expect(panel.getByText(alias, { exact: true }).first()).toBeVisible();
+        }
+        const widths = await panel
+          .locator(".recharts-bar-rectangle path")
+          .evaluateAll((bars) => bars.map((bar) => Number(bar.getAttribute("width"))));
+        expect(widths.length, "活动页签必须有真实数据柱").toBeGreaterThan(0);
+        expect(
+          widths.every((width) => width > 0 && width <= 40),
+          "单日柱不能占满图表",
+        ).toBe(true);
+        await recordLayout(page, `${tab}-${locale}`);
+      }
+      await page.getByRole("tab", { name: tr("pages.usage.cost"), exact: true }).click();
 
       await stableGoto(page, "/model-monitor");
-      await page.getByLabel(tr("monitor.model"), { exact: true }).selectOption("gpt-4o-mini");
+      await page.getByRole("combobox", { name: tr("monitor.model"), exact: true }).click();
+      await page.getByRole("option", { name: "gpt-4o-mini", exact: true }).click();
       const modelCell = page.getByRole("rowheader", { name: "gpt-4o-mini", exact: true });
       await expect(modelCell).toBeVisible();
       expect(await modelCell.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe("nowrap");
@@ -308,6 +393,10 @@ export function registerConsoleLayoutScenario(locale: "en" | "zh-CN") {
         await stableGoto(page, "/usage");
         await expect(page.getByRole("region", { name: tr("usageBudget.title"), exact: true })).toBeVisible();
         await expectReadableUsageControls(page, locale);
+        await expect(page.getByRole("tabpanel", { name: tr("pages.usage.cost"), exact: true })).toHaveCSS(
+          "animation-name",
+          "none",
+        );
         await recordLayout(page, `usage-${locale}-${width}`);
         await page.getByRole("button", { name: tr("Select Time Range"), exact: true }).click();
         await recordLayout(page, `date-picker-${locale}-${width}`);

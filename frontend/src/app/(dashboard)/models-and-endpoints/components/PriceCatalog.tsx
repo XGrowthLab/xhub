@@ -1,5 +1,6 @@
 "use client";
 
+import { ConsoleSelect } from "@/components/console/ConsoleSelect";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowDownUp, Boxes, Pencil, Plus, Rocket, RotateCcw, Search, SlidersHorizontal, Trash2 } from "lucide-react";
@@ -304,19 +305,15 @@ function CatalogToolbar({
           onChange={(event) => onQuery(event.target.value)}
         />
       </div>
-      <label className="flex h-11 items-center gap-2 rounded-lg border border-input bg-background px-3 text-sm sm:w-56">
-        <ArrowDownUp aria-hidden="true" className="size-4 text-muted-foreground" />
-        <select
-          aria-label={t("priceCatalog.sort")}
-          className="min-w-0 flex-1 bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          value={sort}
-          onChange={(event) => onSort(event.target.value as SortOrder)}
-        >
-          <option value="name">{t("priceCatalog.sortName")}</option>
-          <option value="input">{t("priceCatalog.sortInput")}</option>
-          <option value="output">{t("priceCatalog.sortOutput")}</option>
-        </select>
-      </label>
+      <ConsoleSelect label={t("priceCatalog.sort")} value={sort} onValueChange={(value) => onSort(value as SortOrder)}
+        className="h-11 data-[size=default]:h-11 sm:w-60 sm:shrink-0"
+        icon={<ArrowDownUp aria-hidden className="size-4 text-muted-foreground" />}
+        options={[
+          { value: "name", label: t("priceCatalog.sortName") },
+          { value: "input", label: t("priceCatalog.sortInput") },
+          { value: "output", label: t("priceCatalog.sortOutput") },
+        ]}
+      />
       <Button
         type="button"
         variant="outline"
@@ -552,25 +549,14 @@ function LegacyPriceCatalog({costMap, rows: providedRows, isLoading, isError, on
           </div>
           <label className="flex flex-wrap items-center gap-3 text-sm">
             {t("Provider")}
-            <select
-              aria-label={t("Provider")}
-              className="h-9 max-w-full rounded-md border border-input bg-background px-3"
-              value={provider}
-              onChange={(event) => {
-                setProvider(event.target.value);
-                setLimit(60);
-              }}
-            >
-              <option value="all">{t("priceCatalog.allProviders")}</option>
-              {providers.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-              {rows.some((row) => row.provider == null) && (
-                <option value="unknown">{t("priceCatalog.unknownProvider")}</option>
-              )}
-            </select>
+            <ConsoleSelect label={t("Provider")} value={provider} className="w-full sm:w-64"
+              onValueChange={(value) => { setProvider(value); setLimit(60); }}
+              options={[
+                { value: "all", label: t("priceCatalog.allProviders") },
+                ...providers.map((item) => ({ value: item, label: item })),
+                ...(rows.some((row) => row.provider == null) ? [{ value: "unknown", label: t("priceCatalog.unknownProvider") }] : []),
+              ]}
+            />
           </label>
         </div>
       )}

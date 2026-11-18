@@ -1,3 +1,4 @@
+import { usageModelLabel } from "../usageIdentityLabel";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -20,7 +21,7 @@ const columns: ColumnDef<TopModelData>[] = [
   {
     header: () => t("Model"),
     accessorKey: "model",
-    cell: ({ row }) => row.original.model || "-",
+    cell: ({ row }) => usageModelLabel(row.original.model),
   },
   {
     header: () => t("Spend (USD)"),
@@ -48,6 +49,7 @@ const columns: ColumnDef<TopModelData>[] = [
   },
 ];
 
+/** 展示当前历史密钥的模型费用；参数是已授权排行，返回表格或图表，缺失模型使用明确占位且不删除账单。 */
 const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   const t = useT();
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
@@ -82,13 +84,13 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
           <div className="max-h-[234px] overflow-y-auto">
             <BarChart
               style={{ height: topModels.length * 40 }}
-              data={topModels.map((m) => ({ key: m.model, spend: m.spend }))}
+              data={topModels.map((m) => ({ key: usageModelLabel(m.model), spend: m.spend }))}
               index="key"
               categories={["spend"]}
               colors={["cyan"]}
               valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
               layout="vertical"
-              yAxisWidth={180}
+              yAxisWidth="auto"
               tickGap={5}
               showLegend={false}
             />

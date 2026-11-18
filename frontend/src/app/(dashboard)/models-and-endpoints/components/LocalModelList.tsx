@@ -1,4 +1,5 @@
 "use client";
+import { ConsoleSelect } from "@/components/console/ConsoleSelect";
 import { useT } from "@/i18n";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
@@ -31,23 +32,20 @@ export function LocalModelList({
   return (
     <section aria-label={t("marketSync.local")} className="space-y-4">
       <p className="text-sm text-muted-foreground">{t("marketSync.archiveHelp")}</p>
-      <div className="flex gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row">
         <Input
           aria-label={t("marketSync.searchLocal")}
           placeholder={t("marketSync.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <select
-          className="rounded border bg-background px-3"
-          aria-label={t("marketSync.localStatus")}
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-        >
-          <option value="all">{t("marketSync.all")}</option>
-          <option value="up">{t("marketSync.up")}</option>
-          <option value="down">{t("marketSync.down")}</option>
-        </select>
+        <ConsoleSelect label={t("marketSync.localStatus")} value={status} onValueChange={setStatus} className="w-full sm:w-44 sm:shrink-0"
+          options={[
+            { value: "all", label: t("marketSync.all") },
+            { value: "up", label: t("marketSync.up") },
+            { value: "down", label: t("marketSync.down") },
+          ]}
+        />
       </div>
       <p role="status">{t("marketSync.localCount", { total: rows.length, count: visible.length })}</p>
       <div className="overflow-x-auto rounded-xl border">

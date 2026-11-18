@@ -88,8 +88,25 @@ export function documentationAssetRequest(method: string, pathname: string): boo
   return (method === "GET" || method === "HEAD") && pathname.startsWith("/assets/provider-guide/");
 }
 
+/** 解析品牌图标读取；参数为方法和完整路径，命中精确 GET/HEAD 路径时返回 Next 图标路由，否则返回 null。
+ * 供中间件识别 /ui 别名，避免图标被代理到网关；不接管写请求、子路径或同名前缀 API。 */
+export function brandIconReadPath(method: string, pathname: string): string | null {
+  if (method !== "GET" && method !== "HEAD") return null;
+  return pathname === "/icon.svg" || pathname === "/ui/icon.svg" ? "/icon.svg" : null;
+}
+
+/** 按请求方法和路径分发控制台与网关；req 为 Next 请求，返回放行或保留查询参数的重写响应。
+ * 品牌图标读取使用精确路由，其余请求沿用既有页面和 API 分流，不更改鉴权或正文。 */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
+
+  const iconPath = brandIconReadPath(req.method, pathname);
+  if (iconPath) {
+    if (pathname === iconPath) return NextResponse.next();
+    const url = req.nextUrl.clone();
+    url.pathname = iconPath;
+    return NextResponse.rewrite(url);
+  }
 
   // 帮助截图属于控制台 public，否则图片请求会被代理到数据面并返回 404。
   if (documentationAssetRequest(req.method, pathname)) return NextResponse.next();

@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -78,7 +79,7 @@ export function registerUsageUpgradeScenario(locale: "en" | "zh-CN") {
         await expect(heading.locator("xpath=ancestor::*[p][1]").locator(":scope > p")).toHaveText(metadata[field].toLocaleString());
       }
       await stableGoto(page, "/model-monitor");
-      await page.getByLabel(tr("monitor.model"), { exact: true }).selectOption(model);
+      await selectMonitorOption(page, tr("monitor.model"), model);
       await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
       await expect(page.getByRole("region", { name: tr("monitor.requests"), exact: true })).toContainText("2");
       await info.attach("usage-upgrade-contract", { body: JSON.stringify({ calls, metrics, metadata }, null, 2), contentType: "application/json" });

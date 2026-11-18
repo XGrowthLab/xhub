@@ -37,6 +37,7 @@ import {
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
+import { usageModelLabel } from "@/components/UsagePage/usageIdentityLabel";
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
@@ -49,7 +50,6 @@ import {
 } from "./gatewayActivity";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage from "./EntityUsage/EntityUsage";
-import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
@@ -95,7 +95,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
   // 请求切换范围或失败时内容会卸载，选中标签保留在页面状态中，恢复后继续当前视图。
   const [activeTab, setActiveTab] = useState("cost");
-  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
   // Org-admin membership is read from the server, so unlike the other usage
@@ -182,53 +181,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 
-  // Calculate top models from the breakdown data
-  const topModels = useMemo(() => {
-    const modelSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-        if (!modelSpend[model]) {
-          modelSpend[model] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        modelSpend[model].metrics.spend += metrics.metrics.spend;
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelSpend[model].metrics.cache_read_input_tokens! += metrics.metrics.cache_read_input_tokens || 0;
-        modelSpend[model].metrics.cache_creation_input_tokens! += metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(modelSpend)
-      .map(([model, metrics]) => ({
-        key: model,
-        spend: metrics.metrics.spend,
-        requests: metrics.metrics.api_requests,
-        successful_requests: metrics.metrics.successful_requests,
-        failed_requests: metrics.metrics.failed_requests,
-        tokens: metrics.metrics.total_tokens,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  }, [userSpendData.results, topModelsLimit]);
-
+  // 后台 models/model_groups 当前都按 UsageEvent.Model 聚合；保留既有默认来源，去掉容易误认为上游身份的重复切换。
   const topModelGroups = useMemo(() => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
@@ -376,8 +329,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
-    () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
-    [userSpendData, modelViewType, teams],
+    () => processActivityData(userSpendData, "model_groups", teams),
+    [userSpendData, teams],
   );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
 
@@ -529,7 +482,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
                             >
                               <div className="flex items-center gap-2">
-                                <h3 className="text-sm font-medium text-muted-foreground">{t("Total Tokens")}</h3>
+                                <h3 className="text-sm font-medium text-muted-foreground">{t("usagePolish.totalTokens")}</h3>
                                   {showTokenBreakdown ? (
                                     <ChevronDown className="size-3 text-muted-foreground" />
                                   ) : (
@@ -679,7 +632,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <ShadcnCard className="h-full">
                         <CardContent>
                           <h3 className="text-lg font-medium text-foreground">
-                            {modelViewType === "groups" ? t("Top Public Model Names") : t("Top Litellm Models")}
+                            {t("usagePolish.modelSpend")}
                           </h3>
                           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                             <Tabs
@@ -695,19 +648,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 ))}
                               </TabsList>
                             </Tabs>
-                            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+
                           </div>
                           {loading ? (
                             <ChartLoader isDateChanging={isDateChanging} />
                           ) : (
                             <div data-testid="top-models-spend" className="relative max-h-[600px] min-w-0 overflow-x-hidden overflow-y-auto">
                               {(() => {
-                                const modelData = modelViewType === "groups" ? topModelGroups : topModels;
+                                const modelData = topModelGroups;
                                 return (
                                   <BarChart
                                     className="mt-4"
                                     style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
-                                    data={modelData}
+                                    data={modelData.map((row) => ({ ...row, key: usageModelLabel(row.key) }))}
                                     index="key"
                                     categories={["spend"]}
                                     colors={["cyan"]}
@@ -763,9 +716,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
                 {/* Activity Panel */}
                 <TabsContent value="models" keepMounted>
-                  <div className="flex justify-end mt-2 mb-4">
-                    <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
-                  </div>
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
