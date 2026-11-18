@@ -6,7 +6,8 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示；finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送普通与流式对话并从监控核对费用与用量。
+ * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -135,10 +136,53 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await row.click();
       await expect(page.getByRole("dialog")).toContainText(model);
       await expect(page.getByRole("dialog").getByRole("note")).toContainText(t("logsUX.captureStorageFailed"));
+      // 队列恢复后仍然启用。用唯一提示词同时发送四个正常请求，核对流结束、请求 ID 和所有成功账单。
+      const concurrentIDs = await Promise.all(
+        [false, true, false, true].map(async (stream, index) => {
+          const reply = await page.request.post(GATEWAY + "/v1/chat/completions", {
+            headers,
+            data: {
+              model,
+              stream,
+              ...(stream && { stream_options: { include_usage: true } }),
+              messages: [{ role: "user", content: `Verify concurrent billing after recovery, request ${index}.` }],
+            },
+          });
+          expect(reply.status(), await reply.text()).toBe(200);
+          if (stream) {
+            const body = await reply.text();
+            expect(body).toContain("e2e-ok");
+            expect(body.trimEnd()).toMatch(/data:\s*\[DONE\]$/);
+          } else {
+            expect((await reply.json()).choices[0].message.content).toBe("e2e-ok");
+          }
+          const id = reply.headers()["x-litellm-call-id"];
+          expect(id).toBeTruthy();
+          return id;
+        }),
+      );
+      const expectedCalls = 1 + concurrentIDs.length;
+      expect(new Set([callID, ...concurrentIDs]).size).toBe(expectedCalls);
+      await expect
+        .poll(async () => {
+          const result = await page.request.get(GATEWAY + "/models/monitor?model=" + model, { headers });
+          expect(result.status()).toBe(200);
+          return (await result.json()).summary;
+        })
+        .toMatchObject({
+          requests: expectedCalls,
+          total_tokens: expectedCalls * 10,
+          cost: expect.closeTo(expectedCalls * 0.12, 8),
+        });
+      for (const id of concurrentIDs) {
+        const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
+        expect(log.status()).toBe(200);
+        expect(await log.json()).toMatchObject({ request_id: id, status: "success", spend: expect.closeTo(0.12, 8) });
+      }
       await stableGoto(page, "/model-monitor");
       await selectMonitorOption(page, t("monitor.model"), model);
       await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
-      await expect(page.getByRole("region", { name: t("monitor.requests"), exact: true })).toContainText("1");
+      await expect(page.getByRole("region", { name: t("monitor.requests"), exact: true })).toContainText(String(expectedCalls));
     } finally {
       if (injected)
         expect((await page.request.post(control + "/usage-spool/recover", { data: { model } })).status()).toBe(200);

@@ -6,11 +6,86 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/sunqirui1987/xhub/benchmarks/load"
 	"github.com/sunqirui1987/xhub/internal/gateway"
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
+
+// TestUsageSpoolConcurrentChatBilling 使用工单中的压测客户端，验证启用磁盘队列时普通 Chat 与 SSE 均能并发完成。
+// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；核对每笔用量、五层费用及重放幂等。
+// t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
+func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
+	const model = "spool-concurrent-chat"
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
+	isolatedSpendRedis(t)
+	h := newHarness(t, chatDeployment(model))
+	if h.gw.Live == nil {
+		t.Fatal("并发账单回归需要连接真实 Redis")
+	}
+	scope := h.openScope(t, h.adminSession(), model)
+	before := h.moneyOf(t, scope)
+	// 在上游作答前检查真实队列的在途状态，防止因关闭队列绕过并发故障而误通过。
+	h.onUpstream(model, sync.OnceFunc(func() {
+		if pending, err := h.gw.HasPendingLocalUsage(t.Context()); err != nil || !pending {
+			t.Errorf("首个上游调用缺少本机账单预留: pending=%v err=%v", pending, err)
+		}
+	}))
+	succeeded, streamed := 0, 0
+	for _, scenario := range []string{"chat", "stream"} {
+		for _, concurrency := range []int{4, 16} {
+			for _, requests := range []int{3, 30} {
+				cfg := load.Config{BaseURL: h.server.URL, Model: model, Key: scope.key, Scenario: scenario,
+					Concurrency: concurrency, Requests: requests, Duration: 6 * time.Second, Timeout: 30 * time.Second, PromptBytes: 128}
+				res, err := load.Run(t.Context(), cfg)
+				if err != nil {
+					t.Fatalf("%s 并发 %d 启动失败: %v", scenario, concurrency, err)
+				}
+				t.Logf("%s 并发 %d 上限 %d: 完成 %d 成功 %d 状态 %v", scenario, concurrency, requests, res.Attempted, res.Succeeded, res.Statuses)
+				// 六秒是发压窗口；较慢机器也必须发满首批并发，且每个实际发出的请求都须返回完整回答。
+				if res.Attempted < min(requests, concurrency) || res.Failed != 0 || res.Statuses[http.StatusOK] != res.Attempted {
+					t.Errorf("%s 并发 %d 返回异常: 发出=%d 成功=%d 状态=%v 错误=%v", scenario, concurrency, res.Attempted, res.Succeeded, res.Statuses, res.Errors)
+				}
+				succeeded += res.Succeeded
+				if scenario == "stream" {
+					streamed += res.Succeeded
+				}
+			}
+		}
+	}
+	// SSE 客户端可先收到结束帧；等所有处理器退出再连续刷账，确保检查的是持久终态。
+	h.server.Close()
+	h.flushSpend()
+	after := h.moneyOf(t, scope)
+	if got := len(h.upstreamCalls()); got != succeeded || !after.grewBy(before, float64(succeeded)*expectedCost()) {
+		t.Errorf("上游调用或五层入账不一致: 成功=%d 上游=%d 之前=%+v 之后=%+v", succeeded, got, before, after)
+	}
+	var events []iam.UsageEvent
+	if err := h.db.Engine.Where("key_id = ?", scope.keyID).Find(&events); err != nil {
+		t.Fatal(err)
+	}
+	ids := make(map[string]bool, len(events))
+	streamBills := 0
+	for _, event := range events {
+		if event.RequestID == "" || ids[event.RequestID] || event.Status != "success" || event.HTTPStatus != http.StatusOK ||
+			event.PromptTokens != defaultReply.PromptTokens || event.CompletionTokens != defaultReply.CompletionTokens || !nearlyEqual(event.Cost, expectedCost()) {
+			t.Fatalf("账单重复、费用或用量不符: id=%q 状态=%s HTTP=%d 输入=%d 输出=%d 费用=%g", event.RequestID, event.Status, event.HTTPStatus, event.PromptTokens, event.CompletionTokens, event.Cost)
+		}
+		ids[event.RequestID] = true
+		if event.Streamed {
+			streamBills++
+		}
+	}
+	if len(events) != succeeded || streamBills != streamed {
+		t.Errorf("成功请求与账单条数不一致: 成功=%d 账单=%d 流式成功=%d 流式账单=%d", succeeded, len(events), streamed, streamBills)
+	}
+	if pending, err := h.gw.HasPendingLocalUsage(t.Context()); err != nil || pending {
+		t.Errorf("成功结算后磁盘仍有待处理账单: pending=%v err=%v", pending, err)
+	}
+}
 
 // TestUsageSpoolDatabaseDisconnect 验证上游已接收后数据库断开仍可恢复完整账单，正文存储失败则明确标记。
 // 前置私有PG和本地供应商，覆盖同步/流式及有无硬额度；重复Flush不重复费用或上游，最后清理schema/磁盘/连接。

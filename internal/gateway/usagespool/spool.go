@@ -62,7 +62,12 @@ type envelope struct {
 	Payload  json.RawMessage `json:"payload"`
 }
 
-// Spool 独占本机目录；进程锁防止两实例共享目录，mu 保护文件更新、容量预留和失败重试时间。
+// replayBatch 记录一次目录枚举中仍待检查的文件名。只在 Spool.mu 下访问，不复制账单正文。
+type replayBatch struct {
+	pending map[string]bool
+}
+
+// Spool 独占本机目录；mu 保护文件更新、容量预留、重放批次及失败重试时间。
 type Spool struct {
 	mu             sync.Mutex
 	root           *os.Root
@@ -70,6 +75,7 @@ type Spool struct {
 	config         Config
 	reserved       map[string]bool
 	activeDelivery map[string]bool
+	replayBatches  map[*replayBatch]struct{}
 	retry          map[string]time.Time
 	lastErr        error
 	closed         bool
@@ -142,7 +148,11 @@ func Open(config Config) (*Spool, error) {
 		root.Close()
 		return nil, fmt.Errorf("%w: directory already in use", ErrUnavailable)
 	}
-	s := &Spool{root: root, lock: lock, config: config, reserved: map[string]bool{}, activeDelivery: map[string]bool{}, retry: map[string]time.Time{}}
+	s := &Spool{
+		root: root, lock: lock, config: config,
+		reserved: make(map[string]bool), activeDelivery: make(map[string]bool),
+		replayBatches: make(map[*replayBatch]struct{}), retry: make(map[string]time.Time),
+	}
 	if len(entries) == 0 {
 		marker, createErr := root.OpenFile(".spool-format", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if createErr != nil {
@@ -674,7 +684,7 @@ func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) error {
 	}
 	delete(s.activeDelivery, name)
 	delete(s.reserved, record.RequestID)
-	return s.syncDirectoryLocked(".")
+	return s.syncSettledRemovalLocked(name)
 }
 
 // writeLocked 将完整字节原子发布到根内指定名字；持mu调用，任何同步失败保留临时或已发布文件供恢复。
@@ -722,7 +732,20 @@ func boolInt(value bool) int {
 	return 0
 }
 
-// acknowledgeLocked 仅删除与已提交完整内容一致的快照，并同步目录；错误保留/重放由数据库request_id保证幂等。
+// syncSettledRemovalLocked 在已核对账单且已删除 name 后持锁调用。目录同步成功才从正在重放的批次移除旧候选。
+// 同步失败原样返回；文件意外丢失或被隔离均不走此路径，重放仍会报告读取错误。
+func (s *Spool) syncSettledRemovalLocked(name string) error {
+	if err := s.syncDirectoryLocked("."); err != nil {
+		return err
+	}
+	for batch := range s.replayBatches {
+		delete(batch.pending, name)
+	}
+	return nil
+}
+
+// acknowledgeLocked 由请求结算及队列重放持锁调用，仅在 name 的当前内容与已入账 raw 相同后删除。
+// 返回内容冲突、读取或目录同步错误；成功时同时通知正在遍历此文件的重放批次。
 func (s *Spool) acknowledgeLocked(name string, raw []byte) error {
 	current, err := s.readLocked(name)
 	if os.IsNotExist(err) {
@@ -738,7 +761,7 @@ func (s *Spool) acknowledgeLocked(name string, raw []byte) error {
 		return err
 	}
 	delete(s.retry, name)
-	return s.syncDirectoryLocked(".")
+	return s.syncSettledRemovalLocked(name)
 }
 
 // Acknowledge 在调用方确认账单事务成功后删除同一快照；record必须是Put时完整值，不可仅凭RequestID删除新内容。
@@ -757,6 +780,7 @@ func (s *Spool) Acknowledge(record iam.UsageRecord) error {
 
 // Replay 至多提交limit条快照；commit只负责本地数据库结算，成功才确认，失败保留并至少30秒后再试。
 // 参数ctx取消即停止，返回本轮成功数和合并错误；单条冲突不阻塞其他记录，不包含正文的错误可供运维观察。
+// 本轮候选与目录枚举一起在锁内登记；提交期间释放锁，其他请求确认入账后可撤下旧候选。
 func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error) (int, error) {
 	if limit < 1 || commit == nil {
 		return 0, ErrUnavailable
@@ -777,10 +801,23 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 	}
 	entries, err := dir.ReadDir(-1)
 	dir.Close()
-	s.mu.Unlock()
 	if err != nil {
+		s.mu.Unlock()
 		return 0, err
 	}
+	batch := &replayBatch{pending: make(map[string]bool, len(entries))}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			batch.pending[entry.Name()] = true
+		}
+	}
+	s.replayBatches[batch] = struct{}{}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.replayBatches, batch)
+		s.mu.Unlock()
+	}()
 	count, attempted := 0, 0
 	var failures []error
 	for _, entry := range entries {
@@ -795,7 +832,7 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 		}
 		name := entry.Name()
 		s.mu.Lock()
-		if s.activeDelivery[name] {
+		if !batch.pending[name] || s.activeDelivery[name] {
 			s.mu.Unlock()
 			continue
 		}
