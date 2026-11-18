@@ -145,6 +145,8 @@ func (d ConfirmedDelivery) Settle(ctx context.Context) error {
 	if d.db == nil {
 		return fmt.Errorf("missing confirmed delivery snapshot")
 	}
+	// 凭据可以在确认后延迟使用或重试。本次调用开始前已存在的领写事务必须重新核对数据库围栏。
+	d.saved.observedAt = time.Now()
 	return d.db.settlePendingUsage(ctx, d.saved)
 }
 

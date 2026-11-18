@@ -77,6 +77,9 @@ func (db *DB) settlePendingUsage(ctx context.Context, saved pendingUsage) error 
 	return db.settleObservedPending(ctx, record, saved)
 }
 
+// errPendingSettlementInterrupted 作为在途结算的初始失败结果，只有完整返回才可发布成功。
+var errPendingSettlementInterrupted = errors.New("pending usage settlement interrupted")
+
 type pendingWrite struct {
 	started  time.Time
 	payload  string
@@ -94,9 +97,12 @@ func (db *DB) settleObservedPending(ctx context.Context, record UsageRecord, sav
 	if !loaded {
 		defer db.pendingWrites.Delete(saved.RequestID)
 		defer close(work.done)
-		work.err = db.settleFrozenPending(ctx, record, saved)
+		// 若领写者在数据库或其驱动内异常退出，defer 仍会唤醒等待者，但绝不能发布零值成功。
+		work.err = errPendingSettlementInterrupted
+		err := db.settleFrozenPending(ctx, record, saved)
 		work.canceled = ctx.Err() != nil
-		return work.err
+		work.err = err
+		return err
 	}
 	prior := existing.(*pendingWrite)
 	if saved.Payload == prior.payload {

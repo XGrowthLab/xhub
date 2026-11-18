@@ -19,16 +19,20 @@ import (
 type pendingSQLHook struct {
 	count            atomic.Int64
 	hold             atomic.Bool
+	panicOnRelease   bool
 	entered, release chan struct{}
 }
 
-// BeforeProcess 记录操作数，定向测试仅暂停一次真实 DELETE；返回原请求上下文，超时与取消语义保持原样。
+// BeforeProcess 记录操作数，定向测试仅暂停一次真实 DELETE，异常分支模拟领写者在确认前退出；返回原请求上下文，超时与取消语义保持原样。
 func (h *pendingSQLHook) BeforeProcess(c *contexts.ContextHook) (context.Context, error) {
 	h.count.Add(1)
 	if strings.HasPrefix(strings.TrimSpace(c.SQL), "DELETE FROM usage_pending WHERE request_id") && h.hold.CompareAndSwap(true, false) {
 		close(h.entered)
 		select {
 		case <-h.release:
+			if h.panicOnRelease {
+				panic("fixture interrupted acknowledgement")
+			}
 		case <-c.Ctx.Done():
 			return c.Ctx, c.Ctx.Err()
 		}
@@ -93,11 +97,11 @@ func TestConfirmedDeliveryFreezesFullSnapshot(t *testing.T) {
 	}
 }
 
-// TestPendingObserversRespectObservationOrder 验证先观察的相同快照共用一次确认，晚观察的新预占必须重新进入原校验。
+// TestPendingObserversRespectObservationOrder 验证先观察的相同快照共用一次确认，晚观察和延后使用的凭据都必须重新核对新预占。
 // 前台完成真实 PG 账本提交后阻塞删除；这时插入冲突预占并让另一调用观察旧 pending。确认后仍保留冲突占用，schema 自动清理。
 func TestPendingObserversRespectObservationOrder(t *testing.T) {
-	for _, late := range []bool{false, true} {
-		t.Run(fmt.Sprintf("late_%t", late), func(t *testing.T) {
+	for _, timing := range []string{"early", "late-read", "late-receipt"} {
+		t.Run(timing, func(t *testing.T) {
 			db := testDB(t)
 			r := usageRecord("shared-observation", "obs-owner", .125)
 			if err := db.PrepareDelivery(t.Context(), r, time.Now().Add(time.Minute)); err != nil {
@@ -134,15 +138,25 @@ func TestPendingObserversRespectObservationOrder(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("未观察到账本提交后的确认删除")
 			}
+			late := timing != "early"
 			if late {
 				if _, err := db.Engine.Exec("INSERT INTO budget_reservations(request_id,kind,node_id,user_id,amount) VALUES(?,'user','obs-owner','obs-owner',1)", r.RequestID); err != nil {
 					t.Fatal(err)
 				}
-				observer = read()
+				if timing == "late-read" {
+					observer = read()
+				}
 			}
 			ctx := &observedPendingWait{Context: t.Context(), entered: make(chan struct{})}
 			follower := make(chan error, 1)
-			go func() { follower <- db.settlePendingUsage(ctx, observer) }()
+			go func() {
+				// 凭据早于领写者创建，但前台确实在冲突预占建立后才开始调用 Settle。
+				if timing == "late-receipt" {
+					follower <- confirmed.Settle(ctx)
+					return
+				}
+				follower <- db.settlePendingUsage(ctx, observer)
+			}()
 			select {
 			case <-ctx.entered:
 			case <-time.After(3 * time.Second):
@@ -244,5 +258,58 @@ func BenchmarkPendingDirectedDelivery(b *testing.B) {
 			}
 			b.ReportMetric(float64(calls)/float64(b.N), "sql/record")
 		})
+	}
+}
+
+// TestPendingLeaderPanicCannotAcknowledge 在私有 PG 将真实账本提交后，模拟领写者在删除待办前异常退出。
+// 先观察者必须得到错误，待办可再次核对并完成，最终只有一笔账；夹具释放等待协程、连接和 schema。
+func TestPendingLeaderPanicCannotAcknowledge(t *testing.T) {
+	db := testDB(t)
+	r := usageRecord("interrupted-pending", "interrupted-owner", .125)
+	if err := db.PrepareDelivery(t.Context(), r, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := db.ConfirmDeliveryForSettlement(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := receipt.saved
+	hook := &pendingSQLHook{entered: make(chan struct{}), release: make(chan struct{}), panicOnRelease: true}
+	hook.hold.Store(true)
+	db.Engine.AddHook(hook)
+	release := sync.OnceFunc(func() { close(hook.release) })
+	defer release()
+	panicked := make(chan any, 1)
+	go func() { defer func() { panicked <- recover() }(); _ = receipt.Settle(t.Context()) }()
+	select {
+	case <-hook.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("账本未到达确认前的故障注入点")
+	}
+	waitCtx := &observedPendingWait{Context: t.Context(), entered: make(chan struct{})}
+	follow := make(chan error, 1)
+	go func() { follow <- db.settlePendingUsage(waitCtx, observer) }()
+	select {
+	case <-waitCtx.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("跟随者没有等待领写结算")
+	}
+	release()
+	if got := <-panicked; got != "fixture interrupted acknowledgement" {
+		t.Fatalf("未收到预期的领写异常: %v", got)
+	}
+	if err := <-follow; !errors.Is(err, errPendingSettlementInterrupted) {
+		t.Fatalf("领写异常却让跟随者确认，得到 %v", err)
+	}
+	found, err := db.Engine.Table("usage_pending").Where("request_id=?", r.RequestID).Exist()
+	if err != nil || !found {
+		t.Fatalf("领写失败丢失待办: found=%t err=%v", found, err)
+	}
+	if err := receipt.Settle(t.Context()); err != nil {
+		t.Fatalf("健康后继未能严格重放: %v", err)
+	}
+	rows, err := db.Engine.QueryString("SELECT (SELECT COUNT(*) FROM usage_events WHERE request_id=?) AS ledger, (SELECT COUNT(*) FROM usage_pending WHERE request_id=?) AS pending", r.RequestID, r.RequestID)
+	if err != nil || len(rows) != 1 || rows[0]["ledger"] != "1" || rows[0]["pending"] != "0" {
+		t.Fatalf("恢复后金额事实重复或待办未清: %v/%v", rows, err)
 	}
 }
