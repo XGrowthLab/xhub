@@ -13,13 +13,13 @@ skill_install_target="$skill_install_root/computer-use-testing"
 if [ -e "$skill_install_target" ] || [ -L "$skill_install_target" ]; then
   echo "技能位置已存在，请先确认来源：$skill_install_target"
 else
-  ln -s "$(pwd)/computer-use-testing" "$skill_install_target"
+  ln -s "$(pwd)/.agents/skills/computer-use-testing" "$skill_install_target"
 fi
 ~~~
 
 命令保留已有目录和链接，不覆盖其他安装。仓库搬家后重新建立链接。
 
-不支持符号链接时，可以将整个 computer-use-testing 目录复制到 Codex 的个人 skills 目录；复制方式需要在更新仓库后同步副本。Windows 用户同样可以复制到用户目录中的 .codex/skills/，自定义 CODEX_HOME 时使用该目录下的 skills/。
+不支持符号链接时，可以将整个 .agents/skills/computer-use-testing 目录复制到 Codex 的个人 skills 目录；复制方式需要在更新仓库后同步副本。Windows 用户同样可以复制到用户目录中的 .codex/skills/，自定义 CODEX_HOME 时使用该目录下的 skills/。
 
 安装后在新建 Codex 会话的技能列表中检查 Computer Use 自动测试；若未发现，重启 Codex 后重新检查。直接提供项目内 SKILL.md 的路径也可以让 Codex 按文件执行。
 
@@ -38,7 +38,7 @@ fi
 从仓库根目录启动仅监听本机的测试页服务：
 
 ~~~sh
-python3 -m http.server 8765 --bind 127.0.0.1 --directory computer-use-testing/assets
+python3 -m http.server 8765 --bind 127.0.0.1 --directory .agents/skills/computer-use-testing/assets
 ~~~
 
 让 Codex 使用该技能打开 http://127.0.0.1:8765/smoke.html，验证空值拒绝、输入提交、展开/折叠和清空草稿，结束后停止本次服务。该页面不创建账号、调用供应商或保存数据；通过只证明控制工具与浏览器表单可用，不代表 xhub 业务 E2E 已通过。
