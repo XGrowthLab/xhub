@@ -80,16 +80,10 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 			return nil, false
 		}
 	}
-	// 无Redis时失败账单可能只保存在PG；先恢复，失败才拒绝。
-	// 并发结算会短暂产生正常pending，恢复成功后不能因新出现的在途记录误拒503。
-	stage := "pg_pending_count"
-	pending, err := s.IAM.Engine.Context(r.Context()).Table("usage_pending").Count()
-	if err == nil && pending > 0 {
-		stage = "pg_pending_replay"
-		err = s.IAM.FlushPendingUsage(r.Context(), 100)
-	}
-	if err != nil {
-		util.Error("billing admission pending stage=%s cause=%s", stage, billingPendingCause(err))
+	// 直接读取最多 100 条有序原始快照；即便另一个恢复者同时删除行，本次准入也要完成自己已观察的证据。
+	// 空集合只需这一次 PG 读取；新出现的在途交付由随后准入按同样规则处理。
+	if err := s.IAM.FlushPendingUsage(r.Context(), 100); err != nil {
+		util.Error("billing admission pending stage=pg_pending_replay cause=%s", billingPendingCause(err))
 		util.WriteTypedError(w, r.URL.Path, 503, "billing_storage_pending", "pending token charges must settle before another request")
 		return nil, false
 	}
