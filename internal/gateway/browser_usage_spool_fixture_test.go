@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
@@ -125,8 +123,8 @@ func newBrowserUsageSpoolControl(s *Server, dir string) (func(http.ResponseWrite
 			}
 			if err == nil {
 				failure := s.FlushLocalUsage(r.Context())
-				var pg *pgconn.PgError
-				if !errors.As(failure, &pg) || pg.SQLState() != "23514" {
+				// IAM 将 SQLSTATE 23514 转为 ErrInvalid 并保留约束名，必须同时匹配这两项。
+				if !errors.Is(failure, iam.ErrInvalid) || !strings.HasSuffix(failure.Error(), ": e2e_spool_admission") {
 					err = fmt.Errorf("expected isolated spool constraint failure, got %v", failure)
 				}
 			}
