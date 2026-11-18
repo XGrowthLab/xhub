@@ -2,8 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { setActiveLocale } from "@/i18n";
 import { ChatCurlGuide } from "./ChatCurlGuide";
+import { createMultimodalMessage } from "./ResponsesImageUtils";
 import { createChatMultimodalMessage } from "./ChatImageUtils";
 import type { CurlBodyOptions } from "./playgroundCurlBody";
+vi.mock("./ResponsesImageUtils", () => ({ createMultimodalMessage: vi.fn() }));
 vi.mock("./ChatImageUtils", () => ({ createChatMultimodalMessage: vi.fn() }));
 const options: CurlBodyOptions & { model: string } = {
   model: "public-chat",
@@ -86,4 +88,59 @@ it("每张编辑图片生成对应 multipart curl", () => {
   expect(curls[0]).toHaveTextContent("first.png");
   expect(curls[1]).toHaveTextContent("second.png");
   expect(curls[0]).toHaveTextContent("--form");
+});
+
+/** 前置一次编码失败后修改草稿重试；验证旧失败不污染新的成功编码，原始输入保留；替身及 DOM 自动清理。 */
+it("草稿改变后可从附件编码失败恢复", async () => {
+  const image = new File(["image"], "retry.png", { type: "image/png" });
+  vi.mocked(createChatMultimodalMessage).mockRejectedValueOnce(new Error("read failed"));
+  const { rerender } = render(<ChatCurlGuide options={options} tags={[]} image={image} presentation="panel" />);
+  await waitFor(() => expect(createChatMultimodalMessage).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByRole("alert")).toBeVisible());
+  vi.mocked(createChatMultimodalMessage).mockResolvedValueOnce({
+    role: "user",
+    content: [
+      { type: "text", text: "新的原文" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
+    ],
+  });
+  rerender(<ChatCurlGuide options={{ ...options, input: "新的原文" }} tags={[]} image={image} presentation="panel" />);
+  await waitFor(() => expect(screen.getByLabelText("复制调用示例", { selector: "pre" })).toHaveTextContent("BBBB"));
+  expect(screen.getByLabelText("复制调用示例", { selector: "pre" })).toHaveTextContent("新的原文");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+/** 前置同一附件与草稿切换协议；新编码完成前禁止复制旧协议结果，完成后仅展示 Responses 字段；自动卸载无持久数据。 */
+it("协议切换后等待当前协议的附件编码", async () => {
+  const image = new File(["image"], "switch.png", { type: "image/png" });
+  vi.mocked(createChatMultimodalMessage).mockResolvedValueOnce({
+    role: "user",
+    content: [{ type: "text", text: "old" }],
+  });
+  const { rerender } = render(<ChatCurlGuide options={options} tags={[]} image={image} presentation="panel" />);
+  await waitFor(() => expect(screen.getByLabelText("复制调用示例", { selector: "pre" })).toHaveTextContent("old"));
+  let finish: (value: Awaited<ReturnType<typeof createMultimodalMessage>>) => void = () => {};
+  vi.mocked(createMultimodalMessage).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  rerender(
+    <ChatCurlGuide
+      options={{ ...options, endpoint: { ...options.endpoint, protocol: "openai-responses", path: "/v1/responses" } }}
+      tags={[]}
+      image={image}
+      presentation="panel"
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "复制调用示例" })).not.toBeInTheDocument();
+  finish({
+    role: "user",
+    content: [
+      { type: "input_text", text: "new" },
+      { type: "input_image", image_url: "data:image/png;base64,CCCC" },
+    ],
+  });
+  await waitFor(() => expect(screen.getByLabelText("复制调用示例", { selector: "pre" })).toHaveTextContent("CCCC"));
+  expect(screen.getByLabelText("复制调用示例", { selector: "pre" })).not.toHaveTextContent("old");
 });

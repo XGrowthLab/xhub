@@ -121,7 +121,9 @@ describe("PriceCatalog filtering", () => {
     const user = userEvent.setup();
     render(<PriceCatalog rows={rows} />);
     await user.click(screen.getByRole("button", { name: "More filters" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Provider" }), "alpha");
+    screen.getByRole("combobox", { name: "Provider" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "alpha", exact: true }));
     await user.click(screen.getByRole("button", { name: "chat" }));
     expect(screen.getAllByRole("article")).toHaveLength(1);
     expect(screen.getByText("alpha-chat")).toBeInTheDocument();
@@ -135,9 +137,13 @@ describe("PriceCatalog filtering", () => {
     const user = userEvent.setup();
     render(<PriceCatalog rows={rows} />);
     const order = () => screen.getAllByRole("article").map((card) => within(card).getByRole("heading").textContent);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort models" }), "input");
+    screen.getByRole("combobox", { name: "Sort models" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "Input price: low to high", exact: true }));
     expect(order()).toEqual(["alpha-chat", "alpha-embed", "beta-chat", "gamma-chat"]);
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort models" }), "output");
+    screen.getByRole("combobox", { name: "Sort models" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "Output price: low to high", exact: true }));
     expect(order()).toEqual(["alpha-chat", "gamma-chat", "alpha-embed", "beta-chat"]);
   });
 

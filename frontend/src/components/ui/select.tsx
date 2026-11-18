@@ -18,6 +18,8 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   );
 }
 
+/** 渲染统一下拉触发器；参数沿用 Base UI 并接收尺寸/样式，返回可键盘操作的按钮。
+ * 图标显式作为子节点传入，避免 render 合并时混入库默认的文本箭头；不改变选项或焦点状态。 */
 function SelectTrigger({
   className,
   size = "default",
@@ -37,7 +39,9 @@ function SelectTrigger({
       {...props}
     >
       {children}
-      <SelectPrimitive.Icon render={<ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />} />
+      <SelectPrimitive.Icon>
+        <ChevronDownIcon aria-hidden className="pointer-events-none size-4 text-muted-foreground" />
+      </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
 }

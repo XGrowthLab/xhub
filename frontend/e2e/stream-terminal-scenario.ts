@@ -91,9 +91,11 @@ async function inspectTerminalBill(
     })
     .toEqual(expected);
   await stableGoto(page, "/logs");
-  if (expected.status === "error") await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
-  await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(callID);
-  const row = page.getByRole("row").filter({ hasText: callID });
+  const tabName = t(expected.status === "error" ? "Error Logs" : "Logs");
+  if (expected.status === "error") await page.getByRole("tab", { name: tabName, exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: tabName, exact: true });
+  await panel.getByPlaceholder(t("Search logs by ID…"), { exact: true }).fill(callID);
+  const row = panel.getByRole("row").filter({ hasText: callID });
   await expect(row).toHaveCount(1);
   await row.click();
   const dialog = page.getByRole("dialog");

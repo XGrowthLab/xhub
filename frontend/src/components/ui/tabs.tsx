@@ -62,9 +62,10 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
   );
 }
 
+/** 展示当前页签内容并淡入；保持 Base UI 的挂载策略和传入属性，不延迟请求或重新挂载表单。 */
 function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   return (
-    <TabsPrimitive.Panel data-slot="tabs-content" className={cn("flex-1 text-sm outline-none", className)} {...props} />
+    <TabsPrimitive.Panel data-slot="tabs-content" className={cn("console-tab-panel min-w-0 flex-1 text-sm outline-none", className)} {...props} />
   );
 }
 

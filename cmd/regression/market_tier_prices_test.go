@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -45,6 +46,52 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	}
 	id := created.json()["model_info"].(map[string]any)["id"].(string)
 	t.Cleanup(func() { h.do("POST", "/model/delete", admin, map[string]any{"id": id}) })
+	// 查询普通用户真正拿到的价格快照；返回该模型卡片，授权失败、秘密泄漏或缺失都直接定位到接口。
+	visibleCard := func() map[string]any {
+		t.Helper()
+		response := h.ok("GET", "/model/available", tenant.session, nil)
+		if strings.Contains(string(mustJSON(response.json())), "sk-test") {
+			t.Fatal("普通用户可见价格不应泄漏上游凭据")
+		}
+		for _, row := range listField(response.json(), "data") {
+			if row["id"] == "tier-fixture" {
+				return row
+			}
+		}
+		t.Fatal("普通用户未获得已授权模型的价格卡片")
+		return nil
+	}
+	// 断言公开价格与实际计费同用已确认快照；factor 为确认时的价格倍率，不允许市场自动覆盖。
+	assertVisibleTiers := func(factor float64) {
+		t.Helper()
+		card := visibleCard()
+		tiers, ok := card["price_tiers"].([]any)
+		if !ok || len(tiers) != 2 || card["input_price"] != nil {
+			t.Fatalf("分档卡片应完整显示两档，不能退回单价: %#v", card)
+		}
+		for index, raw := range tiers {
+			tier := raw.(map[string]any)
+			rates := tier["rates"].([]any)
+			found := false
+			for _, rawRate := range rates {
+				rate := rawRate.(map[string]any)
+				if rate["side"] == "input" {
+					found = true
+					want := float64(index+1) * factor / 1e6
+					if math.Abs(rate["usd"].(float64)-want) > 1e-12 {
+						t.Fatalf("展示价与已确认账单不符: got=%v want=%g", rate, want)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("第 %d 档缺少输入价格", index)
+			}
+		}
+	}
+	if denied := h.do("GET", "/model/available", "sk-invalid", nil); denied.status != 401 {
+		t.Fatalf("新增价格展示不能绕过鉴权: %s", denied.describe())
+	}
+	assertVisibleTiers(1)
 	sequence := 0
 	call := func(input, cached int) float64 {
 		sequence++
@@ -63,6 +110,7 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	// 市场更新只改变候选；未经管理员确认，旧部署和账单仍采用已冻结报价。
 	factor.Store(2)
 	h.ok("POST", "/reload/model_cost_map", admin, nil)
+	assertVisibleTiers(1)
 	if got := call(12, 0); math.Abs(got-.0000615) > 1e-10 {
 		t.Fatalf("市场同步擅自更改已确认价格: %g", got)
 	}
@@ -83,6 +131,7 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 		t.Fatalf("普通用户不能确认价格: %s", denied.describe())
 	}
 	h.ok("POST", "/price/deployments/apply", admin, map[string]any{"items": []any{selected}})
+	assertVisibleTiers(2)
 	if got := call(12, 0); math.Abs(got-.000123) > 1e-10 {
 		t.Fatalf("确认后的第二档价格未生效: %g", got)
 	}
@@ -96,6 +145,9 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 		t.Fatalf("普通用户修改模型价格未被拒绝: %s", r.describe())
 	}
 	h.ok("POST", "/model/update", admin, manual)
+	if card := visibleCard(); card["price_tiers"] != nil || card["input_price"] != float64(3) {
+		t.Fatalf("切换手工价后必须移除旧市场档位: %#v", card)
+	}
 	if got := call(12, 0); math.Abs(got-.000081) > 1e-10 {
 		t.Fatalf("手工分档价格未生效: %g", got)
 	}

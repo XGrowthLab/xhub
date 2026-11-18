@@ -18,7 +18,7 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   valueFormatter?: (value: number) => string;
   stack?: boolean;
   layout?: "horizontal" | "vertical";
-  yAxisWidth?: number;
+  yAxisWidth?: number | "auto";
   tickGap?: number;
   showLegend?: boolean;
   showXAxis?: boolean;
@@ -30,13 +30,22 @@ export type BarChartProps<TDatum extends Record<string, unknown>> = {
   style?: React.CSSProperties;
 };
 
+/** 根据堆叠与方向返回柱体末端圆角；共享柱图调用，堆叠保持直角避免内部接缝，不改变数据或交互。 */
+function barCornerRadius(stack: boolean, vertical: boolean): number | [number, number, number, number] {
+  if (stack) return 0;
+  return vertical ? [0, 4, 4, 0] : [4, 4, 0, 0];
+}
+
+/** 展示分类柱状图；参数包含真实数据、维度、交互与轴宽，返回图表或无数据状态。
+ * vertical + auto 由 Recharts 按实际标签测量轴宽，避免排行短名称预留数百像素空白；不改变数据和费用。
+ */
 export function BarChart<TDatum extends Record<string, unknown>>({
   data,
   index,
   categories,
   colors,
   colorByDatum = false,
-  maxBarSize,
+  maxBarSize = 40,
   valueFormatter,
   stack = false,
   layout = "horizontal",
@@ -67,6 +76,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
   const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
   const vertical = layout === "vertical";
   const TooltipContent = customTooltip ?? ValueTooltip;
+  const barRadius = barCornerRadius(stack, vertical);
 
   return (
     <ChartContainer config={config} className={cn("aspect-auto h-80 w-full", className)} style={style}>
@@ -122,6 +132,7 @@ export function BarChart<TDatum extends Record<string, unknown>>({
             stackId={stack ? "stack" : undefined}
             isAnimationActive={false}
             maxBarSize={maxBarSize}
+            radius={barRadius}
             onClick={
               onValueChange
                 ? (item: { payload?: TDatum }) => {

@@ -1,11 +1,10 @@
-import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useWorker } from "@/hooks/useWorker";
 import { uiHref } from "@/utils/uiHref";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
-import { Badge } from "@/components/ui/badge";
+import { XHubMark } from "@/components/console/XHubMark";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
@@ -24,6 +23,7 @@ interface NavbarProps {
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
 
+/** 渲染旧版独立页面的顶栏；保留自定义品牌与账号入口，不把内部构建标识作为产品名称展示。 */
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
   isPublicPage = false,
@@ -33,8 +33,6 @@ const Navbar: React.FC<NavbarProps> = ({
   const t = useT();
   const handleLogout = useLogout(accessToken);
   const { logoUrl } = useTheme();
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
-  const version = healthData?.litellm_version;
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
@@ -74,14 +72,12 @@ const Navbar: React.FC<NavbarProps> = ({
                     <img src={logoUrl} alt={t("site.logoAlt")} className={NAV_LOGO_CLASS_NAME} />
                   </div>
                 ) : (
-                  <span className="text-base font-semibold tracking-tight text-foreground">{t("site.product")}</span>
+                  <span className="flex items-center gap-2.5 text-base font-semibold tracking-tight text-foreground">
+                    <XHubMark className="size-7" />
+                    {t("site.product")}
+                  </span>
                 )}
               </Link>
-              {version && (
-                <Badge variant="outline" className="text-xs font-medium">
-                  v{version}
-                </Badge>
-              )}
             </div>
           </div>
 

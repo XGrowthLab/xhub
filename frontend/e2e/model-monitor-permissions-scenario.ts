@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
@@ -55,12 +56,13 @@ export function registerModelMonitorPermissionsScenario(locale: "en" | "zh-CN") 
       expect(initial.status()).toBe(200);
       expect(new URL(initial.url()).searchParams.has("team_id"), "页面默认查询不依赖 team_id 才能执行权限过滤").toBe(false);
       expect((await initial.json()).options).toEqual(want);
-      const supplierSelect = page.getByLabel(tr("monitor.supplier"), { exact: true });
-      await expect(supplierSelect.getByRole("option", { name: suppliers[0], exact: true })).toHaveCount(1);
-      await expect(supplierSelect.getByRole("option", { name: suppliers[1], exact: true })).toHaveCount(0);
-      await expect(supplierSelect.getByRole("option")).toHaveCount(2);
-      await supplierSelect.selectOption(suppliers[0]);
-      await page.getByLabel(tr("monitor.model"), { exact: true }).selectOption(actual);
+      const supplierSelect = page.getByRole("combobox", { name: tr("monitor.supplier"), exact: true });
+      await supplierSelect.click();
+      await expect(page.getByRole("option", { name: suppliers[0], exact: true })).toHaveCount(1);
+      await expect(page.getByRole("option", { name: suppliers[1], exact: true })).toHaveCount(0);
+      await expect(page.getByRole("option")).toHaveCount(2);
+      await page.getByRole("option", { name: suppliers[0], exact: true }).click();
+      await selectMonitorOption(page, tr("monitor.model"), actual);
       const listed = await page.request.get(GATEWAY + "/v1/models", { headers: userHeaders });
       expect((await listed.json()).data.map((entry: { id: string }) => entry.id)).toEqual([aliases[0]]);
       for (let index = 0; index < 2; index++) {
@@ -129,14 +131,22 @@ export function registerModelMonitorPermissionsScenario(locale: "en" | "zh-CN") 
       expect(history.status()).toBe(200);
       expect((await history.json()).data.length).toBeGreaterThan(0);
       await expect(page.getByText(tr("monitor.currentScopeNote"))).toBeVisible();
-      await expect(page.getByLabel(tr("monitor.supplier"), { exact: true }).getByRole("option")).toHaveCount(1);
-      await expect(page.getByLabel(tr("monitor.supplier"), { exact: true }).getByRole("option", { name: suppliers[1], exact: true })).toHaveCount(0);
-      await expect(page.getByLabel(tr("monitor.model"), { exact: true }).getByRole("option")).toHaveCount(1);
+      // 撤权后的弹出目录仅保留“全部”，两个供应商及旧模型都不可见；选项通过门户挂载，不在触发按钮下。
+      await page.getByRole("combobox", { name: tr("monitor.supplier"), exact: true }).click();
+      await expect(page.getByRole("option")).toHaveCount(1);
+      await expect(page.getByRole("option", { name: tr("monitor.allSuppliers"), exact: true })).toBeVisible();
+      for (const supplier of suppliers) await expect(page.getByRole("option", { name: supplier, exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await page.getByRole("combobox", { name: tr("monitor.model"), exact: true }).click();
+      await expect(page.getByRole("option")).toHaveCount(1);
+      await expect(page.getByRole("option", { name: tr("monitor.allModels"), exact: true })).toBeVisible();
+      await expect(page.getByRole("option", { name: actual, exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
       await expect(page.getByRole("rowheader", { name: actual, exact: true })).toHaveCount(0);
       // 访问撤权前收藏的旧链接时，失效筛选应从 URL 移除，避免显示“全部”但仍暗中筛选。
       await stableGoto(page, "/model-monitor?supplier=" + encodeURIComponent(suppliers[0]) + "&model=" + encodeURIComponent(actual));
-      await expect(page.getByLabel(tr("monitor.supplier"), { exact: true })).toHaveValue("");
-      await expect(page.getByLabel(tr("monitor.model"), { exact: true })).toHaveValue("");
+      await expect(page.getByRole("combobox", { name: tr("monitor.supplier"), exact: true })).toHaveText(tr("monitor.allSuppliers"));
+      await expect(page.getByRole("combobox", { name: tr("monitor.model"), exact: true })).toHaveText(tr("monitor.allModels"));
       await expect.poll(() => new URL(page.url()).searchParams.has("supplier")).toBe(false);
       await expect.poll(() => new URL(page.url()).searchParams.has("model")).toBe(false);
       const before = await (await page.request.get(UPSTREAM + "/e2e/request-count")).json();

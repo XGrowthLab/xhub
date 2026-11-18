@@ -7,6 +7,7 @@ import { ChevronDown } from "lucide-react";
 import React, { useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
+import { usageModelLabel } from "./UsagePage/usageIdentityLabel";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopApiKeyData, TopModelData } from "./UsagePage/types";
 import { valueFormatter } from "./UsagePage/utils/value_formatters";
@@ -17,6 +18,7 @@ interface ActivityMetricsProps {
   hidePromptCachingMetrics?: boolean;
 }
 
+/** 展示单项历史用量及趋势；参数为汇总指标，返回响应式卡片，不更改账单数据。零成功请求不计算平均值。 */
 const ModelSection = ({
   modelName,
   metrics,
@@ -30,7 +32,7 @@ const ModelSection = ({
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">{t("Total Requests")}</p>
@@ -47,10 +49,10 @@ const ModelSection = ({
         </Card>
         <Card>
           <CardContent>
-            <p className="text-sm text-muted-foreground">{t("Total Tokens")}</p>
+            <p className="text-sm text-muted-foreground">{t("usagePolish.totalTokens")}</p>
             <h3 className="text-lg font-medium text-foreground">{metrics.total_tokens.toLocaleString()}</h3>
             <p className="text-sm text-muted-foreground">
-              {t("{value0} avg per successful request", { value0: (Math.round(metrics.total_tokens / metrics.total_successful_requests)) })}</p>
+              {t("{value0} avg per successful request", { value0: (metrics.total_successful_requests ? Math.round(metrics.total_tokens / metrics.total_successful_requests) : "—") })}</p>
           </CardContent>
         </Card>
         <Card>
@@ -58,7 +60,7 @@ const ModelSection = ({
             <p className="text-sm text-muted-foreground">{t("Total Spend")}</p>
             <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</h3>
             <p className="text-sm text-muted-foreground">
-              {t("${value0} per successful request", { value0: (formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)) })}</p>
+              {t("${value0} per successful request", { value0: (metrics.total_successful_requests ? formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3) : "—") })}</p>
           </CardContent>
         </Card>
       </div>
@@ -73,7 +75,7 @@ const ModelSection = ({
                   <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
                     <div>
                       <p className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</p>
-                      {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
+                      {keyData.team_id && <p className="text-xs text-muted-foreground">{t("usagePolish.team", { name: keyData.team_id })}</p>}
                     </div>
                     <div className="text-right">
                       <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
@@ -93,7 +95,7 @@ const ModelSection = ({
       {/* Spend per day - Full width card */}
       <Card className="mt-4">
         <CardContent>
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-medium text-foreground">{t("Spend per day")}</h3>
             <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
           </div>
@@ -111,11 +113,11 @@ const ModelSection = ({
       </Card>
 
       {/* Charts */}
-      <div className="grid grid-cols-2 gap-4 mt-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 mt-4">
         <Card>
           <CardContent>
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-medium text-foreground">{t("Total Tokens")}</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-medium text-foreground">{t("usagePolish.totalTokens")}</h3>
               <CustomLegend
                 categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
                 colors={["blue", "cyan", "indigo"]}
@@ -136,7 +138,7 @@ const ModelSection = ({
 
         <Card>
           <CardContent>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-lg font-medium text-foreground">{t("Requests per day")}</h3>
               <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
             </div>
@@ -155,7 +157,7 @@ const ModelSection = ({
 
         <Card>
           <CardContent>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-lg font-medium text-foreground">{t("Success vs Failed Requests")}</h3>
               <CustomLegend
                 categories={["metrics.successful_requests", "metrics.failed_requests"]}
@@ -178,7 +180,7 @@ const ModelSection = ({
         {!hidePromptCachingMetrics && (
           <Card>
             <CardContent>
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-lg font-medium text-foreground">{t("Prompt Caching Metrics")}</h3>
                 <CustomLegend
                   categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
@@ -209,6 +211,7 @@ const ModelSection = ({
   );
 };
 
+/** 按需展开历史明细；参数包含标题、初始状态与内容，返回可访问折叠区域并保留已加载状态。 */
 const ModelCollapsible = ({
   defaultOpen,
   header,
@@ -244,6 +247,7 @@ const ModelCollapsible = ({
   );
 };
 
+/** 汇总展示模型或密钥历史；参数为已授权聚合，返回卡片、趋势和明细，缺失归属单独说明。 */
 export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, hidePromptCachingMetrics = false }) => {
   const t = useT();
   const modelNames = Object.keys(modelMetrics).sort((a, b) => {
@@ -322,7 +326,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
       {/* Global Summary */}
       <div className="border rounded-lg p-4">
         <h3 className="text-lg font-medium text-foreground">{t("Overall Usage")}</h3>
-        <div className="grid grid-cols-4 gap-4 mb-4">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 mb-4">
           <Card>
             <CardContent>
               <p className="text-sm text-muted-foreground">{t("Total Requests")}</p>
@@ -339,7 +343,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
           </Card>
           <Card>
             <CardContent>
-              <p className="text-sm text-muted-foreground">{t("Total Tokens")}</p>
+              <p className="text-sm text-muted-foreground">{t("usagePolish.totalTokens")}</p>
               <h3 className="text-lg font-medium text-foreground">{totalMetrics.total_tokens.toLocaleString()}</h3>
             </CardContent>
           </Card>
@@ -353,10 +357,10 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
           </Card>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card>
             <CardContent>
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-lg font-medium text-foreground">{t("Total Tokens Over Time")}</h3>
                 <CustomLegend
                   categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
@@ -378,7 +382,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
           </Card>
           <Card>
             <CardContent>
-              <div className="flex justify-between items-center">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-lg font-medium text-foreground">{t("Total Requests Over Time")}</h3>
                 <CustomLegend
                   categories={["metrics.successful_requests", "metrics.failed_requests"]}
@@ -408,11 +412,13 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
             key={modelName}
             defaultOpen={modelName === modelNames[0]}
             header={
-              <div className="flex justify-between items-center w-full">
-                <h3 className="text-lg font-medium text-foreground">
-                  {modelMetrics[modelName].label || t("Unknown Item")}
-                </h3>
-                <div className="flex space-x-4 text-sm text-muted-foreground">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className="truncate text-sm font-medium text-foreground" title={modelMetrics[modelName].label}>{modelMetrics[modelName].key_metadata ? modelMetrics[modelName].label || t("usagePolish.unlinkedKey") : usageModelLabel(modelMetrics[modelName].label)}</h3>
+                  {modelMetrics[modelName].team_label && <p className="mt-1 truncate text-xs text-muted-foreground">{t("usagePolish.team", { name: modelMetrics[modelName].team_label! })}</p>}
+                  {!modelMetrics[modelName].key_metadata && (!modelMetrics[modelName].label || modelMetrics[modelName].label === "unknown") && <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">{t("usagePolish.missingModelHint")}</p>}
+                </div>
+                <div className="flex shrink-0 gap-4 text-sm tabular-nums text-muted-foreground">
                   <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
                   <span>
                     {t("{value0} requests", {
@@ -424,7 +430,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
             }
           >
             <ModelSection
-              modelName={modelName || t("Unknown Model")}
+              modelName={usageModelLabel(modelName)}
               metrics={modelMetrics[modelName]}
               hidePromptCachingMetrics={hidePromptCachingMetrics}
             />
@@ -435,18 +441,12 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
   );
 };
 
-// Helper function to format key label
-export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
-  const keyAlias = keyActivityLabel(modelData.metadata, `key-hash-${model}`);
-  const teamId = modelData.metadata.team_id;
-  if (teamId) {
-    const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);
-    return teamAlias ? `${keyAlias} (team: ${teamAlias})` : `${keyAlias} (team_id: ${teamId})`;
-  }
-  return keyAlias;
+/** 返回请求时密钥名称或稳定标识；团队由独立字段呈现，避免长标题及英文拼接。空 ID 保持为空，由视图解释未关联密钥。 */
+export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, _teams: Team[]): string => {
+  return keyActivityLabel(modelData.metadata, model);
 };
 
-// Process data function
+/** 按日报聚合模型或密钥活动；参数为真实日报和维度，返回不丢失费用的明细。名称仅使用请求快照，团队标签单独解析。 */
 export const processActivityData = (
   dailyActivity: { results: DailyData[] },
   key: "models" | "model_groups" | "api_keys" | "mcp_servers" | "entities",
@@ -464,7 +464,8 @@ export const processActivityData = (
               : key === "entities"
                 ? (modelData as any).metadata?.agent_name || (modelData as any).metadata?.team_alias || model
                 : model,
-          ...(key === "api_keys" ? { key_metadata: (modelData as KeyMetricWithMetadata).metadata } : {}),
+          ...(key === "api_keys" ? { key_metadata: (modelData as KeyMetricWithMetadata).metadata,
+            team_label: resolveTeamAliasFromTeamID((modelData as KeyMetricWithMetadata).metadata.team_id ?? "", teams) || (modelData as KeyMetricWithMetadata).metadata.team_id || undefined } : {}),
           total_requests: 0,
           total_successful_requests: 0,
           total_failed_requests: 0,

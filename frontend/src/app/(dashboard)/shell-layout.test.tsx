@@ -65,7 +65,7 @@ vi.mock("@/contexts/ThemeContext", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => ({ data: undefined }),
+  useHealthReadinessDetails: () => ({ data: { litellm_version: "xhub-dev" } }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
@@ -126,8 +126,11 @@ describe("ai-gateway admin shell", () => {
     expect(sidebar?.className).not.toMatch(/bg-\[#343a40\]/);
     expect(shell).toContainElement(header);
     expect(shell).toContainElement(sidebar as HTMLElement);
+    expect(shell).toHaveAttribute("data-dashboard-shell");
+    expect(screen.queryByText("vxhub-dev")).not.toBeInTheDocument();
     expect(content).toHaveTextContent("dashboard body");
     expect(content.className).toMatch(/\bp-6\b/);
+    expect(content).toHaveClass("min-h-0", "overscroll-contain");
     expect(screen.getByRole("link", { name: "XHub home" })).toBeInTheDocument();
 
     expect(await screen.findByRole("link", { name: "Projects" })).toBeInTheDocument();

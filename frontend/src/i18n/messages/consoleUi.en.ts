@@ -37,6 +37,9 @@ export const consoleUi = {
   tryModel: "Open playground",
   modelsDescription: "Explore your models, compare prices and start a conversation.",
   units: "USD / 1M tokens",
+  tieredPrice: "Tiered pricing",
+  tierPriceHelp:
+    "The full request input length selects one price tier. Prices shown are the rates currently applied to this deployment.",
   priceHelp: "About pricing",
   tokenLimit: "{count} tokens",
   usageDescription: "Track spending and activity in the selected period.",

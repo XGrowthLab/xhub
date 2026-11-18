@@ -12,8 +12,11 @@ import {
   Brain,
   ImageIcon,
   Database,
+  CircleHelp,
 } from "lucide-react";
-import { ConsolePageHeader, HelpDisclosure } from "@/components/console/ConsolePrimitives";
+import { ConsolePageHeader } from "@/components/console/ConsolePrimitives";
+import { ConsoleSelect } from "@/components/console/ConsoleSelect";
+import { Popover, PopoverTrigger, PopoverContent, PopoverTitle, PopoverDescription } from "@/components/ui/popover";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { t, useT, useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
@@ -23,25 +26,20 @@ import { cn } from "@/lib/cva.config";
 import { uiHref } from "@/utils/uiHref";
 import type { MyModelCard } from "./grantedModelCards";
 import { MyModelDetail, type ModelDetailTab } from "./MyModelDetail";
+import { formatModelPrice, modelPriceRange } from "./modelPriceSummary";
+import { displayModelCategory } from "./modelCategory";
 
 export type { MyModelCard };
 
 type SortOrder = "name" | "input" | "output";
 
-/** 格式化卡片费率；参数为每百万 Token 单价，返回金额或缺价提示；供模型卡片使用，无副作用。 */
-function priceText(value: number | null): string {
-  if (value == null) return t("Price unavailable");
-  return "$" + new Intl.NumberFormat("en-US", { maximumSignificantDigits: 8 }).format(value);
-}
-
 /** 返回模型类别的展示名称；参数为后台类别，返回本地化名称，未知类别原样展示；供列表分组使用。 */
 function categoryLabel(category: string): string {
   const labels: Record<string, string> = {
     chat: t("Chat"),
+    vision: t("priceCatalog.vision"),
     embedding: t("Embeddings"),
-    embeddings: t("Embeddings"),
     image: t("Image"),
-    image_generation: t("Image"),
     audio: t("Audio"),
     speech: t("Speech"),
     transcription: t("Transcription"),
@@ -49,11 +47,13 @@ function categoryLabel(category: string): string {
     moderation: t("Moderation"),
     other: t("Other"),
   };
-  return labels[category] ?? category;
+  const displayed = displayModelCategory(category);
+  return labels[displayed] ?? displayed;
 }
 
 /** 展示授权模型摘要及详情、调试两个入口；参数为模型及打开回调，返回卡片。
- * 供我的模型列表调用；只按实际绑定展示可用状态，不因目录分类推断接口。 */
+ * 供我的模型列表调用；五个子网格行按相邻卡片的真实内容共同伸展，使价格与操作对齐而不写死高度。
+ * 只按实际绑定展示可用状态，不因目录分类推断接口；分档价只读已确认快照。 */
 function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelDetailTab) => void }) {
   const { t, locale } = useI18n();
   const capabilityIcons: Record<string, typeof Wrench> = {
@@ -63,11 +63,13 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
     vision: ImageIcon,
     caching: Database,
   };
+  const cacheRead = modelPriceRange(model, "cache_read");
+  const cacheWrite = modelPriceRange(model, "cache_write");
   const unavailable = Boolean(model.unavailable_reason) || model.endpoints?.length === 0;
   return (
     <article
       data-testid={"my-model-" + model.id}
-      className="flex min-w-0 flex-col rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
+      className="row-span-5 grid min-w-0 grid-rows-subgrid gap-y-0 rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex items-start gap-3">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background">
@@ -92,7 +94,8 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           {t(unavailable ? "myModels.needsConfiguration" : "myModels.available")}
         </Badge>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 flex flex-wrap content-start gap-2">
+        {model.price_tiers?.length ? <Badge variant="secondary">{t("consoleUi.tieredPrice")}</Badge> : null}
         <Badge variant="outline" className="font-mono text-xs">
           {categoryLabel(model.category)}
         </Badge>
@@ -106,65 +109,71 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
           );
         })}
       </div>
-      {(model.max_input_tokens || model.max_output_tokens) && (
-        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-          {model.max_input_tokens != null && (
-            <span>
-              {t("priceCatalog.maxInput")}{" "}
-              <strong className="font-medium text-foreground">
-                {t("consoleUi.tokenLimit", {
-                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
-                    model.max_input_tokens,
-                  ),
-                })}
-              </strong>
-            </span>
-          )}
-          {model.max_output_tokens != null && (
-            <span>
-              {t("priceCatalog.maxOutput")}{" "}
-              <strong className="font-medium text-foreground">
-                {t("consoleUi.tokenLimit", {
-                  count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
-                    model.max_output_tokens,
-                  ),
-                })}
-              </strong>
-            </span>
-          )}
-        </div>
-      )}
-      <dl className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4">
-        {[
-          { label: t("Input"), value: model.input_price },
-          { label: t("Output"), value: model.output_price },
-        ].map(({ label, value }) => (
-          <div key={label} className="min-w-0">
-            <dt className="text-xs text-muted-foreground">{label}</dt>
-            <dd className="mt-1 flex flex-wrap items-baseline gap-1.5">
-              <span className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold tabular-nums"}>
-                {priceText(value)}
+      <div data-testid="model-limits" className="min-w-0">
+        {(model.max_input_tokens || model.max_output_tokens) && (
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+            {model.max_input_tokens != null && (
+              <span>
+                {t("priceCatalog.maxInput")}{" "}
+                <strong className="font-medium text-foreground">
+                  {t("consoleUi.tokenLimit", {
+                    count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                      model.max_input_tokens,
+                    ),
+                  })}
+                </strong>
               </span>
-              {value != null && <span className="sr-only">{t("consoleUi.units")}</span>}
-            </dd>
+            )}
+            {model.max_output_tokens != null && (
+              <span>
+                {t("priceCatalog.maxOutput")}{" "}
+                <strong className="font-medium text-foreground">
+                  {t("consoleUi.tokenLimit", {
+                    count: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(
+                      model.max_output_tokens,
+                    ),
+                  })}
+                </strong>
+              </span>
+            )}
           </div>
-        ))}
-      </dl>
-      {(model.cache_read_price != null || model.cache_write_price != null) && (
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {model.cache_read_price != null && (
-            <span>
-              {t("Cache Read")} {priceText(model.cache_read_price)}
-            </span>
-          )}
-          {model.cache_write_price != null && (
-            <span>
-              {t("Cache Write")} {priceText(model.cache_write_price)}
-            </span>
-          )}
-        </div>
-      )}
-      <div className="mt-5 flex items-center gap-2 border-t pt-4">
+        )}
+      </div>
+      <div data-testid="model-price-summary" className="mt-5 border-t border-border pt-4">
+        <dl className="grid grid-cols-2 gap-3">
+          {[
+            { label: t("Input"), value: modelPriceRange(model, "input") },
+            { label: t("Output"), value: modelPriceRange(model, "output") },
+          ].map(({ label, value }) => (
+            <div key={label} className="min-w-0">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="mt-1 flex flex-wrap items-baseline gap-1.5">
+                <span
+                  className={value == null ? "text-sm text-muted-foreground" : "text-xl font-semibold tabular-nums"}
+                >
+                  {formatModelPrice(value) || t("Price unavailable")}
+                </span>
+                {value != null && <span className="sr-only">{t("consoleUi.units")}</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {(cacheRead || cacheWrite) && (
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            {cacheRead != null && (
+              <span>
+                {t("Cache Read")} {formatModelPrice(cacheRead)}
+              </span>
+            )}
+            {cacheWrite != null && (
+              <span>
+                {t("Cache Write")} {formatModelPrice(cacheWrite)}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+      <div data-testid="model-actions" className="mt-5 flex items-center gap-2 border-t pt-4">
         <Button variant="outline" className="min-w-0 flex-1" onClick={() => onOpen("pricing")}>
           {t("consoleUi.modelDetails")}
         </Button>
@@ -197,7 +206,7 @@ export function MyModels({
   const [sort, setSort] = useState<SortOrder>("name");
   const [showFilters, setShowFilters] = useState(false);
   const categories = useMemo(
-    () => ["all", ...Array.from(new Set(models.map((model) => model.category))).sort()],
+    () => ["all", ...Array.from(new Set(models.map((model) => displayModelCategory(model.category)))).sort()],
     [models],
   );
   const providers = useMemo(
@@ -212,7 +221,7 @@ export function MyModels({
     const search = query.trim().toLowerCase();
     return models
       .filter((model) => {
-        if (category !== "all" && model.category !== category) return false;
+        if (category !== "all" && displayModelCategory(model.category) !== category) return false;
         if (provider !== "all" && (model.provider ?? "unknown") !== provider) return false;
         return (
           !search ||
@@ -224,9 +233,15 @@ export function MyModels({
       })
       .sort((a, b) => {
         if (sort === "input")
-          return (a.input_price ?? Infinity) - (b.input_price ?? Infinity) || a.id.localeCompare(b.id);
+          return (
+            (modelPriceRange(a, "input")?.min ?? Infinity) - (modelPriceRange(b, "input")?.min ?? Infinity) ||
+            a.id.localeCompare(b.id)
+          );
         if (sort === "output")
-          return (a.output_price ?? Infinity) - (b.output_price ?? Infinity) || a.id.localeCompare(b.id);
+          return (
+            (modelPriceRange(a, "output")?.min ?? Infinity) - (modelPriceRange(b, "output")?.min ?? Infinity) ||
+            a.id.localeCompare(b.id)
+          );
         return a.id.localeCompare(b.id);
       });
   }, [category, models, provider, query, sort]);
@@ -257,19 +272,18 @@ export function MyModels({
                 onChange={(event) => setQuery(event.target.value)}
               />
             </div>
-            <label className="flex h-11 items-center gap-2 rounded-lg border border-input bg-background px-3 text-sm sm:w-56">
-              <ArrowDownUp aria-hidden="true" className="size-4 text-muted-foreground" />
-              <select
-                aria-label={t("myModels.sort")}
-                className="min-w-0 flex-1 border-0 bg-transparent py-0 pl-0 text-sm shadow-none outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={sort}
-                onChange={(event) => setSort(event.target.value as SortOrder)}
-              >
-                <option value="name">{t("myModels.sortName")}</option>
-                <option value="input">{t("myModels.sortInput")}</option>
-                <option value="output">{t("myModels.sortOutput")}</option>
-              </select>
-            </label>
+            <ConsoleSelect
+              label={t("myModels.sort")}
+              value={sort}
+              onValueChange={(value) => setSort(value as SortOrder)}
+              className="h-11 data-[size=default]:h-11 sm:w-60 sm:shrink-0"
+              icon={<ArrowDownUp aria-hidden className="size-4 text-muted-foreground" />}
+              options={[
+                { value: "name", label: t("myModels.sortName") },
+                { value: "input", label: t("myModels.sortInput") },
+                { value: "output", label: t("myModels.sortOutput") },
+              ]}
+            />
             <Button
               type="button"
               variant="outline"
@@ -284,9 +298,12 @@ export function MyModels({
             </Button>
           </div>
           {showFilters && (
-            <div id="my-model-filters" className="mt-3 space-y-5 rounded-lg border border-border bg-card p-5">
+            <div
+              id="my-model-filters"
+              className="mt-3 grid items-start gap-4 rounded-lg border border-border bg-card p-4 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)]"
+            >
               <div>
-                <p className="mb-3 text-sm font-medium">{t("Category")}</p>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">{t("Category")}</p>
                 <div className="flex flex-wrap gap-2" role="group" aria-label={t("Category")}>
                   {categories.map((item) => (
                     <Button
@@ -302,25 +319,21 @@ export function MyModels({
                   ))}
                 </div>
               </div>
-              <label className="flex flex-wrap items-center gap-3 text-sm">
-                {t("Provider")}
-                <select
-                  aria-label={t("Provider")}
-                  className="h-9 max-w-full rounded-md border border-input bg-background px-3"
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">{t("Provider")}</p>
+                <ConsoleSelect
+                  label={t("Provider")}
                   value={provider}
-                  onChange={(event) => setProvider(event.target.value)}
-                >
-                  <option value="all">{t("myModels.allProviders")}</option>
-                  {providers.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                  {models.some((model) => model.provider == null) && (
-                    <option value="unknown">{t("myModels.unknownProvider")}</option>
-                  )}
-                </select>
-              </label>
+                  onValueChange={setProvider}
+                  options={[
+                    { value: "all", label: t("myModels.allProviders") },
+                    ...providers.map((item) => ({ value: item, label: item })),
+                    ...(models.some((model) => model.provider == null)
+                      ? [{ value: "unknown", label: t("myModels.unknownProvider") }]
+                      : []),
+                  ]}
+                />
+              </div>
             </div>
           )}
           <div className="my-5 flex flex-wrap items-center justify-between gap-3 text-sm">
@@ -335,7 +348,18 @@ export function MyModels({
           </div>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>{t("consoleUi.units")}</span>
-            <HelpDisclosure title={t("consoleUi.priceHelp")}>{t("myModels.units")}</HelpDisclosure>
+            <Popover>
+              <PopoverTrigger
+                render={<Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" />}
+              >
+                <CircleHelp className="size-3.5" aria-hidden />
+                {t("consoleUi.priceHelp")}
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] gap-2">
+                <PopoverTitle>{t("consoleUi.priceHelp")}</PopoverTitle>
+                <PopoverDescription className="leading-relaxed">{t("myModels.units")}</PopoverDescription>
+              </PopoverContent>
+            </Popover>
           </div>
           {isError && (
             <div
@@ -357,14 +381,14 @@ export function MyModels({
             <div className="space-y-6">
               {Array.from(
                 visible.reduce((groups, model) => {
-                  const key = model.category || "other";
+                  const key = displayModelCategory(model.category);
                   groups.set(key, [...(groups.get(key) ?? []), model]);
                   return groups;
                 }, new Map<string, MyModelCard[]>()),
               ).map(([group, items]) => (
                 <section key={group} aria-label={categoryLabel(group)}>
                   <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{categoryLabel(group)}</h2>
-                  <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
                     {items.map((model) => (
                       <ModelCard key={model.id} model={model} onOpen={(tab) => setDetail({ model, tab })} />
                     ))}

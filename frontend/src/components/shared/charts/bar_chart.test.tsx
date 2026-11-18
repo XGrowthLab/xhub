@@ -62,7 +62,8 @@ describe("BarChart", () => {
     expect(onValueChange).toHaveBeenCalledWith(expectedClickItem);
   });
 
-  it("renders category labels on the y axis in vertical layout", () => {
+  // 数字轴宽与自动轴宽均须保留完整分类名称和真实柱子；使用 Recharts DOM，结束自动清理。
+  it.each([120, "auto"] as const)("renders category labels with %s axis width in vertical layout", (width) => {
     render(
       <BarChart
         data={[
@@ -73,7 +74,7 @@ describe("BarChart", () => {
         categories={["spend"]}
         colors={["cyan"]}
         layout="vertical"
-        yAxisWidth={120}
+        yAxisWidth={width}
       />,
     );
 
@@ -157,4 +158,12 @@ describe("BarChart", () => {
     );
     expect(new Set(xPositions).size).toBe(2);
   });
+});
+
+/** 单日期柱状图使用真实 SVG 验证默认宽度上限，防止占满图表；允许调用方显式覆盖且不改变值，测试自动清理 DOM。 */
+it("caps a single bar to forty pixels unless explicitly configured", () => {
+  const { container, rerender } = render(<BarChart data={[{ date: "2026-11-18", spend: 1.25 }]} index="date" categories={["spend"]} />);
+  expect(Number(container.querySelector("path.recharts-rectangle")?.getAttribute("width"))).toBeLessThanOrEqual(40);
+  rerender(<BarChart data={[{ date: "2026-11-18", spend: 1.25 }]} index="date" categories={["spend"]} maxBarSize={28} />);
+  expect(Number(container.querySelector("path.recharts-rectangle")?.getAttribute("width"))).toBe(28);
 });

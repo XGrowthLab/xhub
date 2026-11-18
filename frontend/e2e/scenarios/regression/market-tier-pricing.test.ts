@@ -33,7 +33,10 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
   const cost = async () => {
     const response = await page.request.post(GATEWAY + "/v1/chat/completions", {
       headers,
-      data: { model: "e2e-tier-deployment", messages: [{ role: "user", content: `Verify tier billing ${++sequence}.` }] },
+      data: {
+        model: "e2e-tier-deployment",
+        messages: [{ role: "user", content: `Verify tier billing ${++sequence}.` }],
+      },
     });
     expect(response.status(), await response.text()).toBe(200);
     return Number(response.headers()["x-litellm-response-cost"]);
@@ -42,6 +45,18 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     const before = await cost();
     expect(before).toBeGreaterThan(0);
     await stableGoto(page, "/price-data");
+    // 管理员目录的筛选与本地档案也使用统一控件，真实数据从价格同步接口加载。
+    await page.getByRole("combobox", { name: "模型排序", exact: true }).click();
+    await page.getByRole("option", { name: "输入价格", exact: true }).click();
+    await page.getByRole("combobox", { name: "上下文长度", exact: true }).click();
+    await page.getByRole("option", { name: "不限", exact: true }).click();
+    await page.getByRole("tab", { name: "本地模型列表", exact: true }).click();
+    await page.getByRole("combobox", { name: "本地模型状态", exact: true }).click();
+    await page.getByRole("option", { name: "已下架", exact: true }).click();
+    await page.getByRole("combobox", { name: "本地模型状态", exact: true }).click();
+    await page.getByRole("option", { name: "全部", exact: true }).click();
+    await page.getByRole("textbox", { name: "搜索本地模型", exact: true }).fill("e2e-market-tier");
+    await expect(page.getByRole("row").filter({ hasText: "e2e-market-tier" })).toHaveCount(1);
     await page.getByRole("tab", { name: "部署价格更新", exact: true }).click();
     const section = page.getByRole("region", { name: "部署价格更新", exact: true });
     const row = section.getByRole("row").filter({ hasText: "e2e-tier-deployment" });
@@ -61,6 +76,24 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     await expect(page.getByRole("row").filter({ hasText: "e2e-tier-deployment" })).toContainText(
       "Input tokens: 0 < amount ≤ 5",
     );
+    // 真实授权卡片必须显示当前已确认档位，不再将分档部署标为缺价；语言切换不影响账单。
+    await stableGoto(page, "/mine-models");
+    await page.getByRole("textbox", { name: "Search", exact: true }).fill("e2e-tier-deployment");
+    const card = page.getByRole("article").filter({ hasText: "e2e-tier-deployment" });
+    await expect(card).toContainText("$1–$2");
+    await expect(card).toContainText("$2–$3");
+    await expect(card).not.toContainText("Price unavailable");
+    await card.getByRole("button", { name: "Model details", exact: true }).click();
+    const detail = page.getByRole("dialog");
+    await expect(detail.getByRole("table", { name: "Input tokens: 0 < amount ≤ 5", exact: true })).toBeVisible();
+    await expect(
+      detail.getByRole("table", { name: "Input tokens: 5 < amount ≤ 99,999,999", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "中文", exact: true }).click();
+    await card.getByRole("button", { name: "模型详情", exact: true }).click();
+    await expect(detail.getByRole("table", { name: "输入 Token：5 < 数量 ≤ 99,999,999", exact: true })).toBeVisible();
+    expect(await cost()).toBeCloseTo(0.000022, 10);
   } finally {
     expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
   }

@@ -1,10 +1,9 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
-import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { useTheme } from "@/contexts/ThemeContext";
-import { Badge } from "@/components/ui/badge";
+import { XHubMark } from "@/components/console/XHubMark";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -236,6 +235,8 @@ export const getBreadcrumb = (pathname: string, t: TFunction = tRuntime): { sect
   return { section: null, title: prettify(route) };
 };
 
+/** 渲染工作区导航及品牌；参数控制折叠和既有入口，权限仍由会话能力决定。
+ * 未配置自定义品牌时展示 XHub 原创标记；内部构建版本不作为用户导航内容。 */
 const Sidebar_: React.FC<SidebarProps> = ({
   collapsed = false,
   onToggleCollapsed,
@@ -252,10 +253,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { data: teams } = useTeams();
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
-  const version = healthData?.litellm_version;
   const currentRoute = routeForPathname(usePathname());
   const selectedKey = findMenuItemKey(currentRoute);
 
@@ -413,19 +412,14 @@ const Sidebar_: React.FC<SidebarProps> = ({
                   />
                 </>
               ) : (
-                <span className="truncate text-lg font-semibold tracking-tight text-sidebar-foreground group-data-[collapsed=true]/sidebar:hidden">
-                  {t("site.product")}
-                </span>
+                <>
+                  <XHubMark className="size-7 shrink-0" />
+                  <span className="ml-2.5 truncate text-lg font-semibold tracking-tight text-sidebar-foreground group-data-[collapsed=true]/sidebar:hidden">
+                    {t("site.product")}
+                  </span>
+                </>
               )}
             </Link>
-            {version && (
-              <Badge
-                variant="outline"
-                className="border-sidebar-border px-1.5 py-0 font-mono text-[10px] font-medium text-sidebar-foreground group-data-[collapsed=true]/sidebar:hidden"
-              >
-                v{version}
-              </Badge>
-            )}
           </div>
           {onToggleCollapsed && (
             <Button

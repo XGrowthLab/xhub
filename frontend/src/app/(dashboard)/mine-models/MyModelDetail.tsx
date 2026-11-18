@@ -15,6 +15,7 @@ import { uiHref } from "@/utils/uiHref";
 import type { MyModelCard } from "./grantedModelCards";
 import { invocationSteps } from "./modelInvocation";
 import { protocolParameters } from "./protocolParameters";
+import { ModelPriceDetails } from "./ModelPriceDetails";
 
 export type ModelDetailTab = "pricing" | "access" | "api" | "docs";
 
@@ -67,7 +68,7 @@ export function MyModelDetail({
 }) {
   const t = useT();
   const [tab, setTab] = useState<ModelDetailTab>(initialTab);
-  const endpoints = model.unavailable_reason ? [] : (model.endpoints ?? []);
+  const endpoints = model.unavailable_reason ? [] : model.endpoints ?? [];
   const [path, setPath] = useState(endpoints[0]?.path ?? "");
   const endpoint = endpoints.find((item) => item.path === path) ?? endpoints[0];
   const rawBase = getProxyBaseUrl();
@@ -102,34 +103,38 @@ export function MyModelDetail({
           </TabsList>
           <TabsContent value="pricing" className="space-y-4">
             <p className="text-sm leading-6 text-muted-foreground">{t("myModels.priceNote")}</p>
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full text-left text-sm">
-                <caption className="sr-only">{t("myModels.pricing")}</caption>
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="p-4">{t("myModels.item")}</th>
-                    <th className="p-4">{t("myModels.rate")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    [t("Input"), model.input_price],
-                    [t("Output"), model.output_price],
-                    [t("Cache Read"), model.cache_read_price],
-                    [t("Cache Write"), model.cache_write_price],
-                  ].map(([label, value]) => (
-                    <tr key={String(label)} className="border-t">
-                      <td className="p-4">{label}</td>
-                      <td className="p-4 font-mono">
-                        {typeof value === "number"
-                          ? "$" + value.toLocaleString("en-US", { maximumSignificantDigits: 8 })
-                          : t("Price unavailable")}
-                      </td>
+            {model.price_tiers?.length || model.rates?.length ? (
+              <ModelPriceDetails model={model} />
+            ) : (
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full text-left text-sm">
+                  <caption className="sr-only">{t("myModels.pricing")}</caption>
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className="p-4">{t("myModels.item")}</th>
+                      <th className="p-4">{t("myModels.rate")}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {[
+                      [t("Input"), model.input_price],
+                      [t("Output"), model.output_price],
+                      [t("Cache Read"), model.cache_read_price],
+                      [t("Cache Write"), model.cache_write_price],
+                    ].map(([label, value]) => (
+                      <tr key={String(label)} className="border-t">
+                        <td className="p-4">{label}</td>
+                        <td className="p-4 font-mono">
+                          {typeof value === "number"
+                            ? "$" + value.toLocaleString("en-US", { maximumSignificantDigits: 8 })
+                            : t("Price unavailable")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </TabsContent>
           <TabsContent value="access" className="space-y-5">
             <dl className="grid gap-4 rounded-lg border bg-muted/20 p-4 sm:grid-cols-2">
@@ -177,7 +182,12 @@ export function MyModelDetail({
               </p>
             ) : (
               <>
-                <EndpointPicker endpoints={endpoints} value={endpoint?.path} onChange={value=>setPath(value??endpoints[0]?.path??"")} label={t("myModels.selectEndpoint")}/>
+                <EndpointPicker
+                  endpoints={endpoints}
+                  value={endpoint?.path}
+                  onChange={(value) => setPath(value ?? endpoints[0]?.path ?? "")}
+                  label={t("myModels.selectEndpoint")}
+                />
                 <Button variant="outline" size="sm" onClick={() => setTab("docs")}>
                   {t("myModels.viewParameters")}
                 </Button>

@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
+import { NextRequest } from "next/server";
 
-import { appPageWritePath, dashboardAppPath, documentationAssetRequest } from "./middleware";
+import { appPageWritePath, brandIconReadPath, dashboardAppPath, documentationAssetRequest, middleware } from "./middleware";
+
+/** 前置为真实 Next 请求；品牌 SVG 的 GET/HEAD 精确路径交给 Next，/ui 别名保留查询参数，无网络或持久化数据。 */
+it.each(["GET", "HEAD"])("serves exact brand icon %s requests through Next", (method) => {
+  expect(brandIconReadPath(method, "/icon.svg")).toBe("/icon.svg");
+  expect(brandIconReadPath(method, "/ui/icon.svg")).toBe("/icon.svg");
+  const direct = middleware(new NextRequest("https://console.example/icon.svg?revision=2", { method }));
+  expect(direct.headers.get("x-middleware-next")).toBe("1");
+  expect(direct.headers.get("x-middleware-rewrite")).toBeNull();
+  const alias = middleware(new NextRequest("https://console.example/ui/icon.svg?revision=2", { method }));
+  expect(alias.headers.get("x-middleware-rewrite")).toBe("https://console.example/icon.svg?revision=2");
+});
+
+/** 前置为写请求或近似路径；不扩大静态资源白名单，仍按原规则代理网关且保留查询参数，无数据清理。 */
+it.each([
+  ["POST", "/icon.svg"],
+  ["PUT", "/ui/icon.svg"],
+  ["DELETE", "/icon.svg"],
+  ["GET", "/icon.svg/metadata"],
+  ["GET", "/ui/icon.svg/metadata"],
+  ["GET", "/icon.svg-api"],
+  ["HEAD", "/ui/icon.svg-api"],
+])("keeps %s %s on the gateway", (method, pathname) => {
+  expect(brandIconReadPath(method, pathname)).toBeNull();
+  const response = middleware(new NextRequest(`https://console.example${pathname}?revision=2`, { method }));
+  const apiPath = pathname.startsWith("/ui/") ? pathname.slice(3) : pathname;
+  const expected = new URL(apiPath + "?revision=2", process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000").href;
+  expect(response.headers.get("x-middleware-rewrite")).toBe(expected);
+});
 
 /** 目的：帮助配图读取不误代理到网关；前置实际分流函数，正常读取通过，写入及相似路径拒绝，无业务数据清理。 */
 it("routes only documentation screenshot reads to public assets", () => {

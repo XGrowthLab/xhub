@@ -120,7 +120,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   // separate routes that likewise keep the old Navbar.
   if (!isGateway) {
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div data-dashboard-shell className="flex h-dvh flex-col overflow-hidden bg-background">
         <Navbar accessToken={accessToken} isPublicPage={false} />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
@@ -135,7 +135,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   // Admin shell: a full-height sidebar beside a column of navbar and padded content. Both follow the active theme.
   return (
-    <div data-testid="admin-shell" className="flex h-screen overflow-hidden bg-canvas">
+    <div data-dashboard-shell data-testid="admin-shell" className="flex h-dvh overflow-hidden bg-canvas">
       <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader />
@@ -143,7 +143,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <NoRedisWarningBanner accessToken={accessToken} />
         <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
-        <main data-testid="admin-content" className="min-w-0 flex-1 overflow-y-auto bg-canvas p-4 lg:p-6">
+        <main data-testid="admin-content" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-canvas p-4 [scrollbar-gutter:stable] lg:p-6">
           <DashboardPageTransition>{children}</DashboardPageTransition>
         </main>
       </div>

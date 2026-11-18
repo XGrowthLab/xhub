@@ -143,7 +143,7 @@ describe("KeyModelUsageView", () => {
       },
     ];
     render(<KeyModelUsageView topModels={modelsWithMissingModel} />);
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("Model not recorded")).toBeInTheDocument();
   });
 
   it("should display zero values correctly", () => {

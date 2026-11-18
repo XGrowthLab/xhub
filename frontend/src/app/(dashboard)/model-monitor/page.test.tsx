@@ -1,4 +1,5 @@
 import React from "react";
+import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,11 +97,12 @@ describe("model monitor view", () => {
     );
     await screen.findAllByRole("rowheader", { name: "original-model" });
     expect(screen.getByRole("region", { name: "Requests" })).toHaveTextContent("4");
-    fireEvent.change(screen.getByLabelText("Supplier connection"), { target: { value: "supplier-a" } });
+    await userEvent.click(screen.getByRole("combobox", { name: "Supplier connection" }));
+    await userEvent.click(await screen.findByRole("option", { name: "supplier-a" }));
     expect(screen.getByRole("region", { name: "Requests" })).toHaveTextContent("2");
     expect(screen.getAllByRole("rowheader")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.getByLabelText("Supplier connection")).toHaveValue(""));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Supplier connection" })).toHaveTextContent("All suppliers"));
   });
   /** 前置空统计，验证空态与零计数，缺失性能不显示虚假数值；afterEach 清理替身与 DOM。 */
   it("renders an empty monitor without invented samples", async () => {
@@ -130,11 +132,12 @@ describe("model monitor view", () => {
     );
     expect(await screen.findByText("No completed requests in this period.")).toBeVisible();
     expect(screen.getByRole("region", { name: "Requests" })).toHaveTextContent("0");
-    expect(screen.getByRole("option", { name: "configured-a" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "unused-model" })).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Supplier connection"), { target: { value: "configured-a" } });
+    await userEvent.click(screen.getByRole("combobox", { name: "Supplier connection" }));
+    await userEvent.click(await screen.findByRole("option", { name: "configured-a" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Actual model" }));
+    expect(await screen.findByRole("option", { name: "unused-model" })).toBeVisible();
     await waitFor(() => expect(screen.queryByRole("option", { name: "another-model" })).not.toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("Actual model"), { target: { value: "unused-model" } });
+    await userEvent.click(await screen.findByRole("option", { name: "unused-model" }));
     expect(screen.getByText("No completed requests in this period.")).toBeVisible();
     expect(screen.getByRole("region", { name: "Requests" })).toHaveTextContent("0");
   });
@@ -158,8 +161,8 @@ describe("model monitor view", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ options: [row], summary: row, models: [row], trend: [], start_date: "2026-01-01", end_date: "2026-01-02" }) }));
     render(<NuqsTestingAdapter hasMemory searchParams="?supplier=revoked&model=old" onUrlUpdate={onUrlUpdate}><I18nProvider initialLocale="en"><ModelMonitorView accessToken="session" /></I18nProvider></NuqsTestingAdapter>);
     expect(await screen.findByRole("rowheader", { name: "original-model" })).toBeVisible();
-    expect(screen.getByLabelText("Supplier connection")).toHaveValue("");
-    expect(screen.getByLabelText("Actual model")).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Supplier connection" })).toHaveTextContent("All suppliers");
+    expect(screen.getByRole("combobox", { name: "Actual model" })).toHaveTextContent("All models");
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     const update = onUrlUpdate.mock.lastCall?.[0];
     expect(update.searchParams.has("supplier")).toBe(false);
@@ -171,8 +174,8 @@ describe("model monitor view", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ options: [row], summary: row, models: [row], trend: [], start_date: "2026-01-01", end_date: "2026-01-02" }) }));
     render(<NuqsTestingAdapter hasMemory searchParams="?supplier=supplier-a&model=original-model" onUrlUpdate={onUrlUpdate}><I18nProvider initialLocale="en"><ModelMonitorView accessToken="session" /></I18nProvider></NuqsTestingAdapter>);
     expect(await screen.findByRole("rowheader", { name: "original-model" })).toBeVisible();
-    expect(screen.getByLabelText("Supplier connection")).toHaveValue("supplier-a");
-    expect(screen.getByLabelText("Actual model")).toHaveValue("original-model");
+    expect(screen.getByRole("combobox", { name: "Supplier connection" })).toHaveTextContent("supplier-a");
+    expect(screen.getByRole("combobox", { name: "Actual model" })).toHaveTextContent("original-model");
     expect(onUrlUpdate).not.toHaveBeenCalled();
   });
   /** 前置尚未完成的请求及随后发生的错误，验证未知候选时不会清除地址筛选；清理由 afterEach 完成。 */
@@ -187,4 +190,17 @@ describe("model monitor view", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Unable to load");
     expect(onUrlUpdate).not.toHaveBeenCalled();
   });
+  /** 多日窗口仅一天有 TPS 样本时展示单日摘要；缺失日期不补为零，保留模型原名和单位，无网络写入，afterEach 清理。 */
+  it("shows a single measured day as a summary instead of an isolated point", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      options: [row], summary: row, models: [row], trend: [{ ...row, day: "2026-01-02", avg_tps: 12.5 }],
+      start_date: "2026-01-01", end_date: "2026-01-03",
+    }) }));
+    render(<NuqsTestingAdapter hasMemory><I18nProvider initialLocale="en"><ModelMonitorView accessToken="session" /></I18nProvider></NuqsTestingAdapter>);
+    const summary = await screen.findByRole("region", { name: "One recorded date" });
+    expect(summary).toHaveTextContent("2026-01-02");
+    expect(summary).toHaveTextContent("supplier-a / original-model");
+    expect(summary).toHaveTextContent("12.5");
+  });
+
 });

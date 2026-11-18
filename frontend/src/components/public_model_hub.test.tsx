@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
 import PublicModelHub from "./public_model_hub";
 import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
+import { setActiveLocale } from "@/i18n/runtime";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
 
@@ -133,6 +134,21 @@ beforeEach(() => {
 });
 
 describe("PublicModelHub", () => {
+  /** 前置公开配置仍返回开发版本；中英文页面保留自定义说明但不显示内部版本，DOM 与查询夹具由框架清理。 */
+  it.each(["en", "zh-CN"] as const)("keeps the build version out of the public About section in %s", async (locale) => {
+    setActiveLocale(locale);
+    vi.mocked(getPublicModelHubInfo).mockResolvedValueOnce({
+      docs_title: "XHub Gateway",
+      custom_docs_description: "Shared model catalog",
+      litellm_version: "xhub-dev",
+      useful_links: {},
+    });
+    renderHub();
+    expect(await screen.findByText("Shared model catalog")).toBeInTheDocument();
+    expect(screen.queryByText("vxhub-dev", { exact: true })).not.toBeInTheDocument();
+    expect(getPublicModelHubInfo).toHaveBeenCalledOnce();
+  });
+
   it("renders", () => {
     const { container } = renderHub();
     expect(container).toBeInTheDocument();

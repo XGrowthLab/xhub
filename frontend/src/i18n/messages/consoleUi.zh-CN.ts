@@ -37,6 +37,8 @@ export const consoleUi = {
   tryModel: "打开调试台",
   modelsDescription: "查看可用模型、比较价格，开始一次对话。",
   units: "美元 / 百万 Token",
+  tieredPrice: "按输入长度分档",
+  tierPriceHelp: "根据整次请求的输入长度选择一个档位，并非分段累进计费。以下为当前部署已采用的价格。",
   priceHelp: "价格说明",
   tokenLimit: "{count} Token",
   usageDescription: "查看所选时段的消费与调用情况。",

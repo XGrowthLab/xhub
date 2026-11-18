@@ -22,10 +22,7 @@ import {
   X,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
-import SyntaxHighlighter from "@/components/SyntaxHighlighter";
-import coy from "react-syntax-highlighter/dist/esm/styles/prism/coy";
 
-import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { v4 as uuidv4 } from "uuid";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
@@ -53,7 +50,6 @@ import ChatComposer, { CodeInterpreterToggle } from "./ChatComposer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
 import CodeInterpreterTool from "./CodeInterpreterTool";
-import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 
 import { isModelCompatibleWithEndpoint } from "./EndpointUtils";
 import { EndpointPicker } from "@/components/llm_calls/EndpointPicker";
@@ -78,7 +74,7 @@ import { useChatHistory } from "../../hooks/useChatHistory";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -93,11 +89,6 @@ import {
   validateImageEditFile,
 } from "./uploadValidation";
 import { useT } from "@/i18n";
-
-const SDK_ITEMS = [
-  { value: "openai", labelKey: "OpenAI SDK" },
-  { value: "azure", labelKey: "Azure SDK" },
-] as const;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -121,7 +112,8 @@ const NO_VECTOR_STORES: string[] = [];
 
 /** ChatUI 提供模型调试工作区；参数为会话、权限及可选固定模型，返回 React 界面。
  * 先选择模型与端点，连接和标签配置按需展开；原生任务交给独立面板执行。
- * 调用：Playground 与 Agent Builder；切换端点保持原有能力校验和请求清理行为。 */
+ * 调用：Playground 与 Agent Builder；切换端点保持原有能力校验和请求清理行为。
+ * 调用示例复用协议请求构造器，仅在有效模型和端点就绪时生成；不将当前会话密钥写入示例。 */
 /** 调试台保留现有端点、会话和发送行为；统一设置区宽度，示例提示词固定英文，用户输入原样传递。 */
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -134,7 +126,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   fixedModel,
 }) => {
   const t = useT();
-  const syntaxTheme = useSyntaxTheme(coy);
   const canViewPolicies = useCan("viewPolicies");
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [mcpToolsets, setMCPToolsets] = useState<MCPToolset[]>([]);
@@ -217,7 +208,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const selectedModelInfo = modelInfo.find((model) => model.model_group === selectedModel);
   const supportedEndpoints = modelEndpoints(selectedModelInfo);
   const selectedBinding = supportedEndpoints.find((endpoint) => endpoint.path === endpointPath);
-  const endpointType = selectedBinding ? (endpointUIType(selectedBinding) ?? selectedBinding.path) : null;
+  const endpointType = selectedBinding ? endpointUIType(selectedBinding) ?? selectedBinding.path : null;
   const isNativeBinding = selectedBinding?.kind === "bypass";
   const [requestFailure, setRequestFailure] = useState<RequestFailure | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -272,8 +263,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [uploadedAudio, setUploadedAudio] = useState<File | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
-  const [generatedCode, setGeneratedCode] = useState("");
-  const [selectedSdk, setSelectedSdk] = useState<"openai" | "azure">("openai");
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
@@ -311,49 +300,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       console.error(`Error fetching tools for server ${serverId}:`, error);
     }
   };
-
-  useEffect(() => {
-    if (isGetCodeModalVisible && endpointType !== null) {
-      const code = generateCodeSnippet({
-        apiKeySource,
-        accessToken,
-        apiKey,
-        inputMessage,
-        chatHistory,
-        selectedTags,
-        selectedVectorStores,
-        selectedGuardrails,
-        selectedPolicies,
-        selectedMCPServers,
-        mcpServers,
-        mcpServerToolRestrictions,
-        endpointType,
-        selectedModel: selectedModel ?? undefined,
-        selectedSdk,
-        selectedVoice,
-        proxySettings,
-      });
-      setGeneratedCode(code);
-    }
-  }, [
-    isGetCodeModalVisible,
-    selectedSdk,
-    apiKeySource,
-    accessToken,
-    apiKey,
-    inputMessage,
-    chatHistory,
-    selectedTags,
-    selectedVectorStores,
-    selectedGuardrails,
-    selectedPolicies,
-    selectedMCPServers,
-    mcpServers,
-    mcpServerToolRestrictions,
-    endpointType,
-    selectedModel,
-    proxySettings,
-  ]);
 
   useEffect(() => {
     try {
@@ -603,7 +549,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
    */
   const handleEndpointChange = (value: string | null) => {
     setEndpointPath(value);
-    setGeneratedCode("");
     setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
@@ -756,8 +701,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
 
     const historyForRequest = requestHistoryWithAttachments(chatHistory, attachmentPayloads.current);
-    const resumesOnServer = !isNativeBinding && endpointType === EndpointType.RESPONSES && useApiSessionManagement && !!responsesSessionId;
-    const sendsChatHistory = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES || endpointType === EndpointType.ANTHROPIC_MESSAGES;
+    const resumesOnServer =
+      !isNativeBinding && endpointType === EndpointType.RESPONSES && useApiSessionManagement && !!responsesSessionId;
+    const sendsChatHistory =
+      endpointType === EndpointType.CHAT ||
+      endpointType === EndpointType.RESPONSES ||
+      endpointType === EndpointType.ANTHROPIC_MESSAGES;
     if (!historyForRequest && !resumesOnServer && sendsChatHistory) {
       toast.error(t("playgroundAttachment.expired"));
       return;
@@ -805,7 +754,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     }
     // Handle image for chat completions API
-    else if ((endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage) {
+    else if (
+      (endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) &&
+      chatUploadedImage
+    ) {
       try {
         newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
       } catch (error) {
@@ -836,7 +788,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
         responsesImagePreviewUrl || undefined,
         responsesUploadedImage.name,
       );
-    } else if ((endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage) {
+    } else if (
+      (endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) &&
+      chatUploadedImage
+    ) {
       displayMessage = createChatDisplayMessage(
         inputMessage,
         true,
@@ -875,10 +830,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             base: customProxyBaseUrl || getProxyBaseUrl(),
             key: effectiveApiKey,
             model: selectedModel,
-            messages: [
-              ...(historyForRequest ?? []),
-              newUserMessage,
-            ],
+            messages: [...(historyForRequest ?? []), newUserMessage],
             onText: (chunk) => updateTextUI("assistant", chunk, selectedModel),
             onUsage: updateUsageData,
             onTiming: updateTimingData,
@@ -890,14 +842,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         } else if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
           // For chat completions, we preserve the multimodal content structure
-          const apiChatHistory = [
-            ...(historyForRequest ?? []),
-            newUserMessage,
-          ];
+          const apiChatHistory = [...(historyForRequest ?? []), newUserMessage];
 
           const requestProxyBaseUrl =
             simplified && proxySettings
-              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
+              ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined
               : customProxyBaseUrl || undefined;
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -1018,10 +967,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             sessionId,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
-          const apiChatHistory = [
-            ...(historyForRequest ?? []),
-            newUserMessage,
-          ];
+          const apiChatHistory = [...(historyForRequest ?? []), newUserMessage];
 
           await makeAnthropicMessagesRequest(
             apiChatHistory,
@@ -1175,11 +1121,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setShowCustomModelInput(value === "custom");
   };
 
-  const requestContext = [
-    apiKeySource,
-    apiKeySource === "session" ? accessToken : apiKey,
-    customProxyBaseUrl,
-  ].join("\n");
+  const requestContext = [apiKeySource, apiKeySource === "session" ? accessToken : apiKey, customProxyBaseUrl].join(
+    "\n",
+  );
   // 模型或端点变化保持对话身份，只清理不可跨入口使用的响应游标并取消旧请求。
   const routeContext = selectedModel + "\n" + endpointPath;
   const previousRoute = useRef(routeContext);
@@ -1229,7 +1173,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (!modelInfo.length) return;
     const options = modelEndpoints(modelInfo.find((model) => model.model_group === selectedModel));
     setEndpointPath((previous) =>
-      options.some((item) => item.path === previous) ? previous : (options[0]?.path ?? null),
+      options.some((item) => item.path === previous) ? previous : options[0]?.path ?? null,
     );
   }, [selectedModel, modelInfo]);
   let modelEmptyText = "No models available for this key";
@@ -1268,6 +1212,25 @@ const ChatUI: React.FC<ChatUIProps> = ({
       : endpointType === EndpointType.TRANSCRIPTION
         ? !uploadedAudio
         : !inputMessage.trim());
+
+  // 调用代码与真实发送共享附件还原：刷新后无法恢复文件时明确阻止复制，服务端 Responses 续接仍可只发新草稿。
+  const codeHistory = isGetCodeModalVisible
+    ? requestHistoryWithAttachments(chatHistory, attachmentPayloads.current)
+    : [];
+  const codeUsesHistory =
+    endpointType === EndpointType.CHAT ||
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES;
+  const codeResumesOnServer =
+    !isNativeBinding && endpointType === EndpointType.RESPONSES && useApiSessionManagement && !!responsesSessionId;
+  const codeHistoryExpired = codeUsesHistory && codeHistory === null && !codeResumesOnServer;
+  let codeImage: File | null = null;
+  if (endpointType === EndpointType.RESPONSES) codeImage = responsesUploadedImage;
+  if (endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES)
+    codeImage = chatUploadedImage;
+  let codeFiles: File[] | undefined;
+  if (uploadedAudio) codeFiles = [uploadedAudio];
+  if (endpointType === EndpointType.IMAGE_EDITS) codeFiles = uploadedImages;
 
   return (
     <div className={`min-h-0 min-w-0 bg-card ${simplified ? "flex h-full w-full flex-col" : "h-full w-full"}`}>
@@ -1347,7 +1310,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <label className="mb-2 flex items-center text-sm font-medium text-foreground">
                     <Wrench className="mr-2 size-4" aria-hidden="true" /> {t("myModels.customerEndpoint")}
                   </label>
-                  <EndpointPicker endpoints={supportedEndpoints} value={selectedBinding ? endpointPath : null} onChange={handleEndpointChange} disabled={!selectedModel || !supportedEndpoints.length} label={t("myModels.customerEndpoint")} />
+                  <EndpointPicker
+                    endpoints={supportedEndpoints}
+                    value={selectedBinding ? endpointPath : null}
+                    onChange={handleEndpointChange}
+                    disabled={!selectedModel || !supportedEndpoints.length}
+                    label={t("myModels.customerEndpoint")}
+                  />
 
                   {endpointType === EndpointType.SPEECH && (
                     <div className="mb-4">
@@ -1595,60 +1564,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       <Eraser className="size-3.5" />
                       {t("Clear Chat")}
                     </Button>
-                    {!simplified && !isNativeBinding && (
-                      <Button type="button" variant="outline" size="sm" onClick={() => setIsGetCodeModalVisible(true)}>
+                    {!simplified && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!selectedModel || !selectedBinding}
+                        title={!selectedModel || !selectedBinding ? t("consoleDetails.chooseModelForCode") : undefined}
+                        onClick={() => setIsGetCodeModalVisible(true)}
+                      >
                         <Code2 className="size-3.5" />
-                        {t("Get Code")}
+                        {t("consoleDetails.viewCode")}
                       </Button>
                     )}
                   </div>
                 </div>
                 <div className="min-h-0 min-w-0 flex-1 overflow-auto p-3 pb-0 sm:p-4 sm:pb-0">
-                  {selectedBinding && selectedModel && (
-                    <ChatCurlGuide
-                      options={{
-                        endpoint: selectedBinding,
-                        model: selectedModel,
-                        input: inputMessage,
-                        messages: chatHistory
-                          .filter((message) => !message.isImage && !message.isAudio)
-                          .map(({ role, content }) => ({ role, content })),
-                        stream: streamingEnabled,
-                        temperature: useAdvancedParams ? temperature : undefined,
-                        maxTokens: useAdvancedParams ? maxTokens : undefined,
-                        voice: selectedVoice,
-                        vectorStores: selectedVectorStores,
-                        guardrails: selectedGuardrails,
-                        policies: selectedPolicies,
-                        selectedMCPServers,
-                        mcpServers,
-                        mcpToolsets,
-                        mcpServerToolRestrictions,
-                        previousResponseId: useApiSessionManagement ? responsesSessionId : null,
-                        codeInterpreter: codeInterpreter.enabled,
-                        mockFallbacks: mockTestFallbacks,
-                        base:
-                          (simplified && proxySettings
-                            ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL)
-                            : customProxyBaseUrl) || getProxyBaseUrl(),
-                      }}
-                      tags={selectedTags}
-                      image={
-                        endpointType === EndpointType.RESPONSES
-                          ? responsesUploadedImage
-                          : endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES
-                            ? chatUploadedImage
-                            : null
-                      }
-                      files={
-                        endpointType === EndpointType.IMAGE_EDITS
-                          ? uploadedImages
-                          : uploadedAudio
-                            ? [uploadedAudio]
-                            : undefined
-                      }
-                    />
-                  )}
                   {requestFailure && <RequestDiagnostic failure={requestFailure} />}
                   {chatHistory.length === 0 && !requestFailure && (
                     <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
@@ -1831,13 +1762,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     />
                   )}
 
-                  {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && chatUploadedImage && (
-                    <FilePreviewCard
-                      file={chatUploadedImage}
-                      previewUrl={chatImagePreviewUrl}
-                      onRemove={handleRemoveChatImage}
-                    />
-                  )}
+                  {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) &&
+                    chatUploadedImage && (
+                      <FilePreviewCard
+                        file={chatUploadedImage}
+                        previewUrl={chatImagePreviewUrl}
+                        onRemove={handleRemoveChatImage}
+                      />
+                    )}
 
                   {!isNativeBinding && endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                     <div className="mb-2 space-y-2">
@@ -1896,16 +1828,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     showSuggestions={chatHistory.length === 0 && !isLoading && endpointType !== EndpointType.MCP}
                     suggestions={
                       endpointType === EndpointType.A2A_AGENTS
-                        ? [
-                            t("consoleUi.examples.help"),
-                            t("consoleUi.examples.about"),
-                            t("consoleUi.examples.tasks"),
-                          ]
-                        : [
-                            t("consoleUi.examples.poem"),
-                            t("consoleUi.examples.quantum"),
-                            t("consoleUi.examples.email"),
-                          ]
+                        ? [t("consoleUi.examples.help"), t("consoleUi.examples.about"), t("consoleUi.examples.tasks")]
+                        : [t("consoleUi.examples.poem"), t("consoleUi.examples.quantum"), t("consoleUi.examples.email")]
                     }
                     onSuggestionSelect={setInputMessage}
                     tools={
@@ -1918,14 +1842,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             onRemoveImage={handleRemoveResponsesImage}
                           />
                         )}
-                        {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) && !chatUploadedImage && (
-                          <ChatImageUpload
-                            chatUploadedImage={chatUploadedImage}
-                            chatImagePreviewUrl={chatImagePreviewUrl}
-                            onImageUpload={handleChatImageUpload}
-                            onRemoveImage={handleRemoveChatImage}
-                          />
-                        )}
+                        {(endpointType === EndpointType.CHAT || endpointType === EndpointType.ANTHROPIC_MESSAGES) &&
+                          !chatUploadedImage && (
+                            <ChatImageUpload
+                              chatUploadedImage={chatUploadedImage}
+                              chatImagePreviewUrl={chatImagePreviewUrl}
+                              onImageUpload={handleChatImageUpload}
+                              onRemoveImage={handleRemoveChatImage}
+                            />
+                          )}
                         {canInterpret && (
                           <CodeInterpreterToggle
                             enabled={codeInterpreter.enabled}
@@ -1979,57 +1904,53 @@ const ChatUI: React.FC<ChatUIProps> = ({
       </div>
 
       <Dialog open={isGetCodeModalVisible} onOpenChange={setIsGetCodeModalVisible}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="flex max-h-[85dvh] min-w-0 flex-col gap-4 sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>{t("Generated Code")}</DialogTitle>
+            <DialogTitle>{t("consoleDetails.codeTitle")}</DialogTitle>
+            <DialogDescription>{t("consoleDetails.codeDescription")}</DialogDescription>
           </DialogHeader>
-          <div className="my-2 flex items-end justify-between gap-3">
-            <div>
-              <p className="mb-1 text-sm font-medium text-foreground">{t("SDK Type")}</p>
-              <ShadcnSelect
-                items={SDK_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
-                value={selectedSdk}
-                onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}
+          <div className="min-h-0 min-w-0 overflow-y-auto overscroll-contain">
+            {codeHistoryExpired && (
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive"
               >
-                <SelectTrigger className="w-[150px]" size="sm" aria-label={t("SDK Type")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SDK_ITEMS.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {t(item.labelKey)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </ShadcnSelect>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void navigator.clipboard.writeText(generatedCode).then(
-                  () => toast.success(t("Copied to clipboard!")),
-                  () => toast.error(t("Unable to copy to clipboard")),
-                );
-              }}
-            >
-              {t("Copy to Clipboard")}
-            </Button>
+                {t("playgroundAttachment.expired")}
+              </p>
+            )}
+            {selectedBinding && selectedModel && !codeHistoryExpired && (
+              <ChatCurlGuide
+                presentation="panel"
+                options={{
+                  endpoint: selectedBinding,
+                  model: selectedModel,
+                  input: inputMessage,
+                  messages: codeHistory ?? [],
+                  stream: streamingEnabled,
+                  temperature: useAdvancedParams ? temperature : undefined,
+                  maxTokens: useAdvancedParams ? maxTokens : undefined,
+                  voice: selectedVoice,
+                  vectorStores: selectedVectorStores,
+                  guardrails: selectedGuardrails,
+                  policies: selectedPolicies,
+                  selectedMCPServers,
+                  mcpServers,
+                  mcpToolsets,
+                  mcpServerToolRestrictions,
+                  previousResponseId: useApiSessionManagement ? responsesSessionId : null,
+                  codeInterpreter: codeInterpreter.enabled,
+                  mockFallbacks: mockTestFallbacks,
+                  base:
+                    (simplified && proxySettings
+                      ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL
+                      : customProxyBaseUrl) || getProxyBaseUrl(),
+                }}
+                tags={selectedTags}
+                image={codeImage}
+                files={codeFiles}
+              />
+            )}
           </div>
-          <SyntaxHighlighter
-            language="python"
-            style={syntaxTheme}
-            wrapLines={true}
-            wrapLongLines={true}
-            className="rounded-md"
-            customStyle={{
-              maxHeight: "60vh",
-              overflowY: "auto",
-            }}
-          >
-            {generatedCode}
-          </SyntaxHighlighter>
         </DialogContent>
       </Dialog>
     </div>

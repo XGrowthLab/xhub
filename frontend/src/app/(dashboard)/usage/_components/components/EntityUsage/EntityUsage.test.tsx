@@ -703,33 +703,17 @@ describe("EntityUsage", () => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+    expect(screen.getByText("Model spend")).toBeInTheDocument();
   });
 
-  it("defaults Model Activity to public model names and toggles to litellm models", async () => {
-    const { container } = render(<EntityUsage {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(mockTagDailyActivityCall).toHaveBeenCalled();
-    });
-
-    act(() => {
-      fireEvent.click(screen.getByText("Model Activity"));
-    });
-
+  /** 实体用量沿用默认模型聚合并移除同源双模式；完整保留模型活动，不制造上游维度；测试环境清理 DOM。 */
+  it("uses one model activity source without duplicate naming controls", async () => {
+    render(<EntityUsage {...defaultProps} />);
+    await waitFor(() => expect(mockTagDailyActivityCall).toHaveBeenCalled());
+    act(() => fireEvent.click(screen.getByText("Model Activity")));
     expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
-
-    act(() => {
-      fireEvent.click(showingText("XHub Model Name"));
-    });
-
-    expect(showingCount("metrics-source:models")).toBeGreaterThan(0);
-
-    act(() => {
-      fireEvent.click(showingText("Public Model Name"));
-    });
-
-    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
+    expect(screen.queryByText("XHub Model Name")).not.toBeInTheDocument();
+    expect(screen.queryByText("Public Model Name")).not.toBeInTheDocument();
   });
 
   it("should display Top Agents title for agent entity type", async () => {

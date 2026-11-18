@@ -41,7 +41,6 @@ import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
-import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
@@ -131,7 +130,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // 请求切换范围或失败时内容会卸载，选中标签保留在页面状态中，恢复后继续当前视图。
   const [activeTab, setActiveTab] = useState("cost");
-  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showCostBreakdown, setShowCostBreakdown] = useState(false);
@@ -166,7 +164,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
 
-  const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
+  // 后台两套模型维度同源；沿用原默认聚合，不将相同数据标成“上游模型”。
+  const modelBreakdownKey = "model_groups";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
 
@@ -383,7 +382,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
   const summaryTiles = [...buildSummaryTiles(spendData.metadata, showFlatCost), ...breakdownTiles];
 
-  const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
+
 
   const costPanel = (
     <div className="grid grid-cols-2 gap-2 w-full">
@@ -439,8 +438,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <p className="text-info">{t("Total Spend: ${value0}", { value0: (formatNumberWithCommas(data.metrics.spend, 2)) })}</p>
                     )}
                     <p className="text-muted-foreground">{t("Total Requests: {value0}", { value0: (data.metrics.api_requests) })}</p>
-                    <p className="text-muted-foreground">Successful: {data.metrics.successful_requests}</p>
-                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                    <p className="text-muted-foreground">{t("Successful")}: {data.metrics.successful_requests}</p>
+                    <p className="text-muted-foreground">{t("Failed")}: {data.metrics.failed_requests}</p>
                     <p className="text-muted-foreground">{t("Total Tokens: {value0}", { value0: (data.metrics.total_tokens) })}</p>
                     <p className="text-muted-foreground">
                       {t("Total {capitalizedEntityLabel}s: {entityCount}", { capitalizedEntityLabel, entityCount })}
@@ -484,12 +483,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               <p className="text-xs text-muted-foreground">{t("Showing Top 5 by Spend")}</p>
               <div className="flex items-center text-sm text-muted-foreground">
                 <span>{t("Get Started by Tracking cost per {capitalizedEntityLabel}", { capitalizedEntityLabel })} </span>
-                
+
                   {t("here")}
-                
+
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div>
                 <BarChart
                   className="mt-4 h-52"
@@ -507,11 +506,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     return (
                       <div className="bg-card p-4 shadow-lg rounded-lg border">
                         <p className="font-bold">{data.metadata.alias}</p>
-                        <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                        <p className="text-muted-foreground">Requests: {data.metrics.api_requests.toLocaleString()}</p>
-                        <p className="text-success">Successful: {data.metrics.successful_requests.toLocaleString()}</p>
-                        <p className="text-destructive">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
-                        <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
+                        <p className="text-info">{t("Spend")}: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                        <p className="text-muted-foreground">{t("Requests")}: {data.metrics.api_requests.toLocaleString()}</p>
+                        <p className="text-success">{t("Successful")}: {data.metrics.successful_requests.toLocaleString()}</p>
+                        <p className="text-destructive">{t("Failed")}: {data.metrics.failed_requests.toLocaleString()}</p>
+                        <p className="text-muted-foreground">{t("Tokens")}: {data.metrics.total_tokens.toLocaleString()}</p>
                       </div>
                     );
                   }}
@@ -566,9 +565,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <CardContent>
             <div className="flex justify-between items-center">
               <h3 className="text-lg font-medium text-foreground">
-                {entityType === "agent" ? t("Top Agents") : modelViewTitle}
+                {entityType === "agent" ? t("Top Agents") : t("usagePolish.modelSpend")}
               </h3>
-              <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+
             </div>
             <TopModelView
               topModels={getTopModels(spendData.results, modelBreakdownKey, topModelsLimit)}
@@ -622,7 +621,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       content: (
         <>
           <div className="flex justify-end mt-2 mb-4">
-            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+
           </div>
           <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
         </>

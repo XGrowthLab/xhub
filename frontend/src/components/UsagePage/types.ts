@@ -73,6 +73,8 @@ export interface TopModelData {
 export interface ModelActivityData {
   label: string;
   key_metadata?: KeyMetadata;
+  /** 用于独立展示历史团队归属，不与用户自定义名称拼接。 */
+  team_label?: string;
   total_requests: number;
   total_successful_requests: number;
   total_failed_requests: number;

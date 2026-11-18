@@ -1,4 +1,7 @@
 "use client";
+import { ConsoleSelect } from "@/components/console/ConsoleSelect";
+import { SinglePointSummary } from "@/components/shared/charts/SinglePointSummary";
+import { usageModelLabel } from "@/components/UsagePage/usageIdentityLabel";
 import React, { useEffect, useMemo, useState } from "react";
 import { parseAsString, useQueryStates } from "nuqs";
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
@@ -104,6 +107,8 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
   const shown = rows.slice(0, 8),
     keys = shown.map(seriesKey);
   const plot = data ? chartRows(data, metric, keys) : [];
+  // 性能指标缺失样本保持 null；只有一天有实际样本时显示摘要，不将补齐的空日期画成伪趋势。
+  const measuredPlot = plot.filter((point) => keys.some((key) => typeof point[key] === "number" && Number.isFinite(point[key])));
   /** format 展示有限指标，缺失性能样本显示本地化占位；金额美元六位精度，页面各视图调用，无副作用。 */
   const format = (value: number | null | undefined, money = false) =>
     value == null || !Number.isFinite(value)
@@ -111,7 +116,7 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
       : (money ? "$" : "") + value.toLocaleString(locale, { maximumFractionDigits: money ? 6 : 2 });
   /** label 为连接名称及实际模型生成图例；空身份使用翻译占位，不修改原始模型字符串。 */
   const label = (row: MonitorRow) =>
-    (row.supplier || t("monitor.unassigned")) + " / " + (row.model || t("monitor.unknownModel"));
+    (row.supplier || t("monitor.unassigned")) + " / " + usageModelLabel(row.model);
   return (
     <main className="mx-auto w-full min-w-0 max-w-[1600px] space-y-6 text-foreground">
       <div className="flex flex-wrap items-end justify-between gap-6">
@@ -197,55 +202,24 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
             ))}
           </div>
           <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4">
-            <label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
-              {t("monitor.supplier")}
-              <select
-                className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm font-normal shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                aria-label={t("monitor.supplier")}
-                value={activeSupplier}
-                onChange={(e) => {
-                  void setFilters({ supplier: e.target.value, model: "" });
-                }}
-              >
-                <option value="">{t("monitor.allSuppliers")}</option>
-                {Array.from(new Set(options.map((r) => r.supplier)))
-                  .filter(Boolean)
-                  .map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-              </select>
-            </label>
-            <label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
-              {t("monitor.model")}
-              <select
-                className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm font-normal shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                aria-label={t("monitor.model")}
-                value={activeModel}
-                onChange={(e) => void setFilters({ model: e.target.value })}
-              >
-                <option value="">{t("monitor.allModels")}</option>
-                {Array.from(new Set(options.filter((r) => !activeSupplier || r.supplier === activeSupplier).map((r) => r.model)))
-                  .filter(Boolean)
-                  .map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-              </select>
-            </label>
-            <label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
-              {t("monitor.metric")}
-              <select
-                className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm font-normal shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                aria-label={t("monitor.metric")}
-                value={metric}
-                onChange={(e) => void setFilters({ metric: e.target.value })}
-              >
-                {metrics.map((value) => (
-                  <option key={value} value={value}>
-                    {t("monitor." + value)}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
+              <span>{t("monitor.supplier")}</span>
+              <ConsoleSelect label={t("monitor.supplier")} value={activeSupplier}
+                options={[{ value: "", label: t("monitor.allSuppliers") }, ...Array.from(new Set(options.map((row) => row.supplier))).filter(Boolean).map((value) => ({ value, label: value }))]}
+                onValueChange={(value) => void setFilters({ supplier: value, model: "" })} />
+            </div>
+            <div className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
+              <span>{t("monitor.model")}</span>
+              <ConsoleSelect label={t("monitor.model")} value={activeModel}
+                options={[{ value: "", label: t("monitor.allModels") }, ...Array.from(new Set(options.filter((row) => !activeSupplier || row.supplier === activeSupplier).map((row) => row.model))).filter(Boolean).map((value) => ({ value, label: value }))]}
+                onValueChange={(value) => void setFilters({ model: value })} />
+            </div>
+            <div className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">
+              <span>{t("monitor.metric")}</span>
+              <ConsoleSelect label={t("monitor.metric")} value={metric}
+                options={metrics.map((value) => ({ value, label: t("monitor." + value) }))}
+                onValueChange={(value) => void setFilters({ metric: value })} />
+            </div>
           </div>
           <section className="rounded-lg border bg-card p-5" aria-label={t("monitor.trend")}>
             <h2 className="text-base font-semibold">{t("monitor.trend")}</h2>
@@ -254,7 +228,7 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
             )}
             {rows.length > 0 ? (
               <div className="mt-4 h-auto">
-                <ResponsiveContainer width="100%" height={288}>
+                {measuredPlot.length === 1 ? <SinglePointSummary row={measuredPlot[0]} index="day" categories={keys} labels={Object.fromEntries(shown.map((row, index) => [keys[index], label(row)]))} valueFormatter={(value) => format(value, metric === "cost")} /> : <ResponsiveContainer width="100%" height={288}>
                   <LineChart data={plot} accessibilityLayer>
                     <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
                     <XAxis
@@ -293,7 +267,7 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
                       />
                     ))}
                   </LineChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer>}
                 <ul aria-label={t("consoleUi.legend")} className="mt-4 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
                   {shown.map((row, i) => <li key={keys[i]} className="flex min-w-0 items-center gap-2" title={label(row)}><span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: colors[i] }} aria-hidden /><span className="truncate text-muted-foreground">{label(row)}</span></li>)}
                 </ul>
@@ -341,7 +315,7 @@ export function ModelMonitorView({ accessToken }: { accessToken: string | null }
                       {row.supplier || t("monitor.unassigned")}
                     </td>
                     <th className="border-b px-4 py-3 text-left text-sm font-medium whitespace-nowrap" scope="row">
-                      {row.model || t("monitor.unknownModel")}
+                      {usageModelLabel(row.model)}
                     </th>
                     {(
                       [

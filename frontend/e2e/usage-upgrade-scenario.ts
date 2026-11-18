@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -73,12 +74,13 @@ export function registerUsageUpgradeScenario(locale: "en" | "zh-CN") {
       const activity = await loaded; expect(activity.status()).toBe(200);
       const metadata = (await activity.json()).metadata;
       expect(metadata.total_api_requests).toBeGreaterThanOrEqual(2);
-      for (const [title, field] of [["Total Requests", "total_api_requests"], ["Total Tokens", "total_tokens"]]) {
+      // 按当前语言的卡片标题定位，用升级后真实用量接口的计数核对页面。
+      for (const [title, field] of [["Total Requests", "total_api_requests"], ["usagePolish.totalTokens", "total_tokens"]]) {
         const heading = page.getByRole("heading", { name: tr(title), exact: true }).first();
         await expect(heading.locator("xpath=ancestor::*[p][1]").locator(":scope > p")).toHaveText(metadata[field].toLocaleString());
       }
       await stableGoto(page, "/model-monitor");
-      await page.getByLabel(tr("monitor.model"), { exact: true }).selectOption(model);
+      await selectMonitorOption(page, tr("monitor.model"), model);
       await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
       await expect(page.getByRole("region", { name: tr("monitor.requests"), exact: true })).toContainText("2");
       await info.attach("usage-upgrade-contract", { body: JSON.stringify({ calls, metrics, metadata }, null, 2), contentType: "application/json" });

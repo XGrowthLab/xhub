@@ -1,3 +1,4 @@
+import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -62,8 +63,8 @@ export function registerModelMonitorTPSScenario(locale: "en" | "zh-CN") {
       // 真实页面从新口径聚合读取数据；语言刷新后等待数据可交互，再选择测试模型。
       await stableGoto(page, "/model-monitor");
       await expect(page.getByRole("button", { name: tr("monitor.refresh"), exact: true })).toBeEnabled();
-      await page.getByLabel(tr("monitor.model"), { exact: true }).selectOption(model);
-      await page.getByLabel(tr("monitor.metric"), { exact: true }).selectOption("avg_tps");
+      await selectMonitorOption(page, tr("monitor.model"), model);
+      await selectMonitorOption(page, tr("monitor.metric"), tr("monitor.avg_tps"));
       await expect(page.getByText(tr("monitor.measurement"), { exact: true })).toBeVisible();
       const row = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: model, exact: true }) });
       await expect(row).toHaveCount(1);

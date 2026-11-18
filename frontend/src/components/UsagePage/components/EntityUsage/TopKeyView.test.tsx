@@ -6,6 +6,7 @@ import { KeyResponse } from "../../../key_team_helpers/key_list";
 import * as transformKeyInfo from "../../../key_team_helpers/transform_key_info";
 import * as networking from "../../../networking";
 import TopKeyView from "./TopKeyView";
+import { I18nProvider } from "@/i18n";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   __esModule: true,
@@ -64,23 +65,23 @@ describe("TopKeyView", () => {
 
   it("should render", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Table" })).toBeInTheDocument();
   });
 
   it("should display table view button", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Table View" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Table" })).toBeInTheDocument();
   });
 
   it("should display chart view button", () => {
     render(<TopKeyView {...baseProps} />);
-    expect(screen.getByRole("button", { name: "Chart View" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chart" })).toBeInTheDocument();
   });
 
   it("should display base table column headers", () => {
     render(<TopKeyView {...baseProps} />);
     expect(screen.getByText("Key ID")).toBeInTheDocument();
-    expect(screen.getByText("Key Alias")).toBeInTheDocument();
+    expect(screen.getByText("Recorded name")).toBeInTheDocument();
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
@@ -122,7 +123,7 @@ describe("TopKeyView", () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
+    const chartViewButton = screen.getByRole("button", { name: "Chart" });
     await user.click(chartViewButton);
 
     expect(chartViewButton).toHaveClass("bg-info/15");
@@ -148,12 +149,12 @@ describe("TopKeyView", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    await user.click(screen.getByRole("button", { name: "Chart" }));
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(1);
     expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
-    expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("A Very Long Key Alias").length).toBeGreaterThan(0);
 
     fireEvent.click(bars[0]);
 
@@ -171,8 +172,8 @@ describe("TopKeyView", () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const chartViewButton = screen.getByRole("button", { name: "Chart View" });
-    const tableViewButton = screen.getByRole("button", { name: "Table View" });
+    const chartViewButton = screen.getByRole("button", { name: "Chart" });
+    const tableViewButton = screen.getByRole("button", { name: "Table" });
 
     await user.click(chartViewButton);
     await user.click(tableViewButton);
@@ -220,7 +221,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("Unnamed key")).toBeInTheDocument();
   });
 
   it("should format spend values with two decimal places", () => {
@@ -632,7 +633,7 @@ describe("TopKeyView", () => {
   it("should handle empty key list", () => {
     render(<TopKeyView {...baseProps} topKeys={[]} />);
     expect(screen.getByText("Key ID")).toBeInTheDocument();
-    expect(screen.getByText("Key Alias")).toBeInTheDocument();
+    expect(screen.getByText("Recorded name")).toBeInTheDocument();
   });
 
   it("should display full key alias in table view", () => {
@@ -664,6 +665,30 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getByText("Unnamed key")).toBeInTheDocument();
   });
+  /** 双语历史排行保留已删除测试密钥名称与费用，空 ID 明确未关联且点击不发请求；每例由测试环境清理 DOM 和网络替身。 */
+  it.each(["en", "zh-CN"] as const)("explains historical names and unlinked usage in %s", async (locale) => {
+    render(<I18nProvider initialLocale={locale}><TopKeyView {...baseProps} topKeys={[
+      { api_key: "historic-id", key_alias: "codex-model-smoke", spend: 1.25 },
+      { api_key: "", key_alias: null, spend: 0.25 },
+    ]} /></I18nProvider>);
+    expect(screen.getByText("codex-model-smoke")).toBeVisible();
+    expect(screen.getByText("$1.25")).toBeVisible();
+    const summary = screen.getByText(locale === "en" ? "Names recorded with requests" : "请求发生时的名称");
+    await userEvent.click(summary);
+    expect(screen.getByText(locale === "en" ? /This is usage history, not your current key list/ : /这里展示历史用量，不是当前密钥列表/)).toBeVisible();
+    await userEvent.click(screen.getAllByText(locale === "en" ? "No linked key" : "未关联密钥")[0]);
+    expect(mockKeyInfoV1Call).not.toHaveBeenCalled();
+  });
+
+  /** 历史密钥详情读取失败时保留费用并提供可读原因，不把网络错误误报成删除；无真实网络，afterEach 清理。 */
+  it("explains unavailable key details without discarding recorded spend", async () => {
+    mockKeyInfoV1Call.mockRejectedValueOnce(new Error("not found"));
+    render(<TopKeyView {...baseProps} topKeys={[{ api_key: "historic-id", key_alias: "old-test", spend: 1.25 }]} />);
+    await userEvent.click(screen.getByText("historic-id"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Historical usage is still included");
+    expect(screen.getByText("$1.25")).toBeVisible();
+  });
+
 });

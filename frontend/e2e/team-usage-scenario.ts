@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { formatConsoleMoney } from "../src/components/console/money";
+import { translate } from "../src/i18n/translate";
 
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto, t, watchGateway } from "./helpers";
 
@@ -8,19 +10,22 @@ import { GATEWAY, loginAdmin, sessionBearer, stableGoto, t, watchGateway } from 
 async function assertUsageTiles(page: import("@playwright/test").Page, metadata: Record<string, number>) {
   // 切换视图后可能保留模型活动标签，先回到成本标签再比较预算和用量卡片。
   await page.getByRole("tab", { name: t("pages.usage.cost"), exact: true }).click();
-  for (const [title, key] of [["Total Requests", "total_api_requests"], ["Successful Requests", "total_successful_requests"], ["Failed Requests", "total_failed_requests"], ["Total Tokens", "total_tokens"]]) {
+  for (const [title, key] of [["Total Requests", "total_api_requests"], ["Successful Requests", "total_successful_requests"], ["Failed Requests", "total_failed_requests"], ["usagePolish.totalTokens", "total_tokens"]]) {
     const heading = page.getByRole("heading", { name: t(title), exact: true }).first();
     // 成功/失败标题可能含提示容器，选取最近含数字段落的卡片，避免绑定固定父层级。
     await expect(heading.locator("xpath=ancestor::*[p][1]").locator(":scope > p")).toHaveText(metadata[key].toLocaleString());
   }
-  // 全局费用使用四位小数，实体总览使用两位；均按界面的实际显示精度对账。
+  // 实体总览固定两位小数，时段支出使用控制台的美元格式；两处都以接口金额为准。
   const spendHeading = page.getByRole("heading", { name: t("Total Spend"), exact: true });
   const spendLabel = page.getByText(t("usageBudget.rangeSpend"), { exact: false }).filter({ visible: true });
   const entityView = await spendHeading.count() > 0;
   const spendValue = entityView
     ? spendHeading.locator("xpath=ancestor::*[p][1]").locator(":scope > p")
     : spendLabel.locator("..").locator("p").last();
-  await expect(spendValue).toHaveText("$" + metadata.total_spend.toLocaleString("en-US", { minimumFractionDigits: entityView ? 2 : 4, maximumFractionDigits: entityView ? 2 : 4 }));
+  const expectedSpend = entityView
+    ? "$" + metadata.total_spend.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : formatConsoleMoney(metadata.total_spend, "zh-CN");
+  await expect(spendValue).toHaveText(expectedSpend);
 }
 /** 用途：注册独立场景「team usage displays recorded calls without requesting the removed Agent endpoint」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC242() {
@@ -91,7 +96,8 @@ test("team usage displays recorded calls without requesting the removed Agent en
       await page.getByRole("tab", { name: t("pages.usage.modelActivity"), exact: true }).click();
       await expect(page.getByText("gpt-4o-mini", { exact: true }).filter({ visible: true }).first()).toBeVisible();
       await page.getByRole("tab", { name: t("Key Activity"), exact: true }).click();
-      await expect(page.getByRole("button", { name: /^team-usage-probe \(team:/ })).toBeVisible();
+      const keyRow = page.getByRole("button").filter({ has: page.getByRole("heading", { name: "team-usage-probe", exact: true }) });
+      await expect(keyRow.getByText(translate("zh-CN", "usagePolish.team", { name: team.team_alias }), { exact: true })).toBeVisible();
       await expect(page.getByRole("tab", { name: t("pages.usage.agentActivity"), exact: true })).toHaveCount(0);
       await expect(page.getByText(t("Top Agents Driving Spend"), { exact: true })).toHaveCount(0);
     }
@@ -156,11 +162,11 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
     await stableGoto(page, "/usage");
     const initialBody = await (await initial).json();
     await assertUsageTiles(page, initialBody.metadata);
-    await page.getByRole("button", { name: new RegExp("^" + t("Total Tokens")) }).click();
+    await page.getByRole("button").filter({ has: page.getByRole("heading", { name: t("usagePolish.totalTokens"), exact: true }) }).click();
     await expect(page.getByRole("heading", { name: t("Input Tokens"), exact: true })).toBeVisible();
     // 显示零价及未知供应商后逐行对账，避免失败和免费调用在费用表中消失。
-    await page.getByText(t("Show Zero Spend"), { exact: true }).locator("..").getByRole("switch").check();
-    await page.getByText(t("Show Unknown"), { exact: true }).locator('xpath=ancestor::*[descendant::*[@role="switch"]][1]').getByRole("switch").check();
+    await page.getByRole("switch", { name: t("Show Zero Spend"), exact: true }).check();
+    await page.getByRole("switch", { name: t("usagePolish.missingProviderToggle"), exact: true }).check();
     const providers: Record<string, any> = {};
     for (const day of initialBody.results) for (const [name, bucket] of Object.entries(day.breakdown.providers ?? {})) {
       const metrics = (bucket as any).metrics;
@@ -192,7 +198,8 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
       await expect(page.getByText(modelName, { exact: true }).filter({ visible: true }).first()).toBeVisible();
       await page.getByRole("tab", { name: t("Key Activity"), exact: true }).click();
       await page.getByRole("textbox", { name: t("Search keys"), exact: true }).fill(modelName);
-      await expect(page.getByRole("button", { name: new RegExp("^" + modelName + " [(]team:") })).toBeVisible();
+      const keyRow = page.getByRole("button").filter({ has: page.getByRole("heading", { name: modelName, exact: true }) });
+      await expect(keyRow.getByText(translate("zh-CN", "usagePolish.team", { name: modelName }), { exact: true })).toBeVisible();
       await page.getByRole("tab", { name: t("Endpoint Activity"), exact: true }).click();
       // 日报按网关规范化后的端点聚合，用真实响应标识定位并逐列核对，避免写死 /v1 前缀。
       const endpoints: Record<string, any> = {};

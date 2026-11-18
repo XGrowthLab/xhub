@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import { ActivityMetrics } from "@/components/activity_metrics";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 
+import { UsageHistoryNote } from "./UsageHistoryNote";
 import { filterKeyActivity } from "../keyActivityFilter";
 import type { ModelActivityData } from "../types";
 import { useT } from "@/i18n";
@@ -13,6 +14,7 @@ interface KeyActivityPanelProps {
   hidePromptCachingMetrics?: boolean;
 }
 
+/** 展示并搜索历史密钥用量；参数为已授权汇总，返回筛选与活动明细，不读取或改变当前密钥状态。 */
 const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePromptCachingMetrics = false }) => {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -23,7 +25,8 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
 
   return (
     <div className="space-y-4">
-      <div className="mt-2 flex items-center gap-3">
+      <UsageHistoryNote />
+      <div className="mt-2 flex flex-wrap items-center gap-3">
         <InputGroup className="max-w-md">
           <InputGroupAddon>
             <Search className="size-4 text-muted-foreground" />
