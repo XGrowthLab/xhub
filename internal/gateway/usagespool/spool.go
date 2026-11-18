@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -73,17 +74,20 @@ type replayBatch struct {
 
 // Spool 独占本机目录；mu 保护文件更新、容量预留、重放批次及失败重试时间。
 type Spool struct {
-	mu             sync.Mutex
-	root           *os.Root
-	lock           *flock.Flock
-	config         Config
-	reserved       map[string]bool
-	activeDelivery map[string]bool
-	replaying      *replayBatch
-	generation     uint64
-	retry          map[string]time.Time
-	lastErr        error
-	closed         bool
+	mu sync.Mutex
+	// admissionTicket 在等待 mu 前分配。probedThrough 只覆盖开始实写探针前已经取票的调用。
+	admissionTicket atomic.Uint64
+	probedThrough   uint64
+	root            *os.Root
+	lock            *flock.Flock
+	config          Config
+	reserved        map[string]bool
+	activeDelivery  map[string]bool
+	replaying       *replayBatch
+	generation      uint64
+	retry           map[string]time.Time
+	lastErr         error
+	closed          bool
 }
 
 // Open 创建或打开专用目录并取得非阻塞进程锁，返回可恢复队列或错误；网关启动调用。
@@ -433,10 +437,19 @@ func (s *Spool) statusLocked() (Status, error) {
 	return result, nil
 }
 
+// finishLocked 在磁盘操作退出时持锁清除失效探针，再归还互斥锁；result 指向当前调用的返回错误。
+// 已排队的准入不能沿用中途读写失败之前的探针，即使后一次写入恢复了队列状态。
+func (s *Spool) finishLocked(result *error) {
+	if *result != nil {
+		s.probedThrough = 0
+	}
+	s.mu.Unlock()
+}
+
 // Status 返回本机队列健康/容量快照，供准入和诊断测试使用；无调用方请求正文，关闭或读取失败返回错误。
-func (s *Spool) Status() (Status, error) {
+func (s *Spool) Status() (status Status, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	if s.closed {
 		return Status{}, ErrUnavailable
 	}
@@ -447,11 +460,18 @@ func (s *Spool) Status() (Status, error) {
 // 并发在途与待结算共同受字节/条数限制；磁盘满、权限错误、隔离证据时拒绝，调用结束必须Release。
 // 预留限制本队列并发容量，不承诺抵抗外部进程在准入后耗尽磁盘或硬件故障。
 func (s *Spool) Reserve(callID string) error {
+	return s.reserve(callID, s.probeWritableLocked)
+}
+
+// reserve 是 Reserve 的准入实现。callID 标识当前独立预留，probe 在 mu 内执行完整真实写盘探针。
+// 每个请求先取票，随后逐个检查权限与容量；只有在其取票后才开始并已成功的探针可以共享。
+func (s *Spool) reserve(callID string, probe func() error) (err error) {
 	if callID == "" {
 		return ErrUnavailable
 	}
+	ticket := s.admissionTicket.Add(1)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
 	}
@@ -472,6 +492,24 @@ func (s *Spool) Reserve(callID string) error {
 	if err != nil || info.Mode().Perm() != 0700 {
 		return ErrUnavailable
 	}
+	if ticket > s.probedThrough || s.lastErr != nil {
+		// 取票截止点必须先于写入。即使另一个调用在本次 fsync 返回前到达，
+		// 只要探针已经开始，它仍需下一个实际探针，不能复用先前或空闲期的结果。
+		through := s.admissionTicket.Load()
+		if err := probe(); err != nil {
+			s.lastErr = err
+			return err
+		}
+		s.lastErr = nil
+		s.probedThrough = through
+	}
+	s.reserved[callID] = true
+	return nil
+}
+
+// probeWritableLocked 用一次独立文件创建、写入、fsync、删除和目录 fsync 验证卷能持久写入。
+// 由 reserve 在互斥锁内调用；任一步骤失败都返回错误，不发布本次探针的取票截止点。
+func (s *Spool) probeWritableLocked() error {
 	suffix, err := token()
 	if err != nil {
 		return err
@@ -479,7 +517,6 @@ func (s *Spool) Reserve(callID string) error {
 	name := ".probe-" + suffix
 	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		s.lastErr = err
 		return err
 	}
 	_, writeErr := file.Write([]byte("usage-spool-probe\n"))
@@ -487,13 +524,7 @@ func (s *Spool) Reserve(callID string) error {
 	closeErr := file.Close()
 	removeErr := s.root.Remove(name)
 	dirErr := s.syncDirectoryLocked(".")
-	if err = errors.Join(writeErr, syncErr, closeErr, removeErr, dirErr); err != nil {
-		s.lastErr = err
-		return err
-	}
-	s.lastErr = nil
-	s.reserved[callID] = true
-	return nil
+	return errors.Join(writeErr, syncErr, closeErr, removeErr, dirErr)
 }
 
 // Release 归还尚未写入的在途容量；无返回值，重复或未知callID安全，不删除持久文件。
@@ -511,13 +542,13 @@ func (s *Spool) Release(callID string) {
 
 // Put 先写完整临时记录并fsync，再原子改名及dirfsync；返回成功仅表示快照可由新进程恢复，不表示账单已入库。
 // 相同RequestID/内容幂等；冲突保留两份证据并返回错误；失败不截断正文，准入后的磁盘故障交由调用方尝试其他持久介质。
-func (s *Spool) Put(record iam.UsageRecord) error {
+func (s *Spool) Put(record iam.UsageRecord) (err error) {
 	raw, err := encode(record)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	return s.putLocked(record, raw)
 }
 
@@ -580,7 +611,7 @@ func (s *Spool) putLocked(record iam.UsageRecord, raw []byte) error {
 
 // BeginDelivery 持久化零费用未确认标记并将其标记为当前实例在途；参数只包含脱敏账单元数据。
 // 返回错误时不允许把标记视为持久化；在途标记不由后台重放，进程退出后才允许作为未知结果恢复。
-func (s *Spool) BeginDelivery(record iam.UsageRecord) error {
+func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
 	if !record.DeliveryPending || !record.DeliverySpoolOnly || !record.DeliveryUnconfirmed || record.Cost != 0 || record.Status != "error" || record.RequestBody != "" || record.ResponseBody != "" || record.ProxyRequest != "" {
 		return fmt.Errorf("invalid delivery marker")
 	}
@@ -589,7 +620,7 @@ func (s *Spool) BeginDelivery(record iam.UsageRecord) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	name := basename(record.RequestID)
 	if s.activeDelivery[name] {
 		return ErrConflict
@@ -607,7 +638,7 @@ func (s *Spool) BeginDelivery(record iam.UsageRecord) error {
 
 // CompleteDelivery 原子替换当前实例持有的未确认标记为写出终态；参数为同一次调用的完整最终快照。
 // 写入或目录同步失败时保留未知结果证据并阻止本实例重放；成功后后台可恢复最终账单。
-func (s *Spool) CompleteDelivery(record iam.UsageRecord) error {
+func (s *Spool) CompleteDelivery(record iam.UsageRecord) (err error) {
 	if !record.DeliveryPending || !record.DeliverySpoolOnly || record.DeliveryUnconfirmed {
 		return fmt.Errorf("invalid delivery final snapshot")
 	}
@@ -619,7 +650,7 @@ func (s *Spool) CompleteDelivery(record iam.UsageRecord) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	name := basename(record.RequestID)
 	if s.closed || !s.activeDelivery[name] {
 		return ErrUnavailable
@@ -658,9 +689,9 @@ func (s *Spool) CompleteDelivery(record iam.UsageRecord) error {
 // DiscardUnconfirmedDelivery 清理已由数据库严格结算的磁盘标记或相同终态。
 // record 为数据库已确认的完整终态；仅归属一致的未确认标记或逐字相同的终态可删除。
 // 调用方必须先完成严格结算；删除或目录同步失败返回错误，保留后续恢复机会。
-func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) error {
+func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
 	}
@@ -774,13 +805,13 @@ func (s *Spool) acknowledgeLocked(name string, raw []byte) error {
 }
 
 // Acknowledge 在调用方确认账单事务成功后删除同一快照；record必须是Put时完整值，不可仅凭RequestID删除新内容。
-func (s *Spool) Acknowledge(record iam.UsageRecord) error {
+func (s *Spool) Acknowledge(record iam.UsageRecord) (err error) {
 	raw, err := encode(record)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
 	}
@@ -836,7 +867,7 @@ func (s *Spool) runReplay(ctx context.Context, limit int, commit func(context.Co
 		batch.exhausted = n < limit && err == nil
 		s.replaying = nil
 		close(batch.done)
-		s.mu.Unlock()
+		s.finishLocked(&err)
 	}()
 	return s.replayLocked(ctx, limit, commit, batch)
 }

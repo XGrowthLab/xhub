@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -732,5 +733,141 @@ func TestReplayWaitDoesNotChaseFutureWrites(t *testing.T) {
 	s.mu.Unlock()
 	if err := <-done; err != nil {
 		t.Fatalf("当前请求误等待后来才发布的账单: %v", err)
+	}
+}
+
+// awaitAdmissionTickets 等待指定数量的准入调用真实地进入临界区之前的取票阶段；
+// 调用方暂持 mu 或阻塞探针。超时报告实际票数，不用固定睡眠猜测调度顺序。
+func awaitAdmissionTickets(t *testing.T, s *Spool, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.admissionTicket.Load() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("等待准入取票超时: 已进入 %d，期望 %d", s.admissionTicket.Load(), want)
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestReserveOnlySharesOverlappingProbes 用真实磁盘探针及已取票的并发请求检查复用次数。
+// 每笔仍独立检查字节、条数、权限、隔离区；失败探针后必须重试。临时目录、权限和预留由夹具回收。
+func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		config                  Config
+		wantProbes, wantAllowed int
+		wantErr                 error
+	}{
+		{"overlap", Config{}, 1, 4, nil},
+		{"probe-failure", Config{}, 2, 3, ErrUnavailable},
+		{"entry-cap", Config{MaxEntries: 2}, 1, 2, ErrFull},
+		{"byte-cap", Config{MaxBytes: 8192, MaxRecordBytes: 4096}, 1, 2, ErrFull},
+		{"directory-permissions", Config{}, 1, 1, ErrUnavailable},
+		{"quarantine", Config{}, 1, 1, ErrCorrupt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openSpool(t, tc.config)
+			defer os.Chmod(s.config.Dir, 0700)
+			probes := 0
+			probe := func() error {
+				probes++ // 探针由同一把目录锁串行执行。
+				if tc.name == "probe-failure" && probes == 1 {
+					return ErrUnavailable
+				}
+				if err := s.probeWritableLocked(); err != nil {
+					return err
+				}
+				if probes == 1 {
+					switch tc.name {
+					case "directory-permissions":
+						return os.Chmod(s.config.Dir, 0500)
+					case "quarantine":
+						return os.WriteFile(filepath.Join(s.config.Dir, "quarantine", "corrupt"), []byte("fixture"), 0600)
+					}
+				}
+				return nil
+			}
+			results := make(chan error, 4)
+			func() {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				for i := range 4 {
+					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), probe) }()
+				}
+				awaitAdmissionTickets(t, s, 4)
+			}()
+			allowed := 0
+			for range 4 {
+				err := <-results
+				if err == nil {
+					allowed++
+					continue
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Errorf("准入拒绝类型错误: got=%v want=%v", err, tc.wantErr)
+				}
+			}
+			if probes != tc.wantProbes || allowed != tc.wantAllowed || len(s.reserved) != allowed {
+				t.Fatalf("探针或预留数量错误: probes=%d allowed=%d reserved=%d", probes, allowed, len(s.reserved))
+			}
+		})
+	}
+}
+
+// TestReserveRequiresProbeStartedAfterArrival 让新请求在前一个探针已经开始、尚未完成时取票，
+// 验证它要获得下一次真实探针；之后单独调用也要实测。独立队列自动关闭并清理。
+func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
+	s := openSpool(t, Config{})
+	started, allow := make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	first := make(chan error, 1)
+	go func() {
+		first <- s.reserve("earlier", func() error {
+			probes.Add(1)
+			close(started)
+			<-allow
+			return s.probeWritableLocked()
+		})
+	}()
+	<-started
+	second := make(chan error, 1)
+	probe := func() error { probes.Add(1); return s.probeWritableLocked() }
+	go func() { second <- s.reserve("during-probe", probe) }()
+	func() {
+		defer close(allow)
+		awaitAdmissionTickets(t, s, 2)
+	}()
+	if a, b := <-first, <-second; a != nil || b != nil || probes.Load() != 2 {
+		t.Fatalf("探针开始后进入的请求复用了旧探针: first=%v second=%v probes=%d", a, b, probes.Load())
+	}
+	if err := s.reserve("later", probe); err != nil || probes.Load() != 3 {
+		t.Fatalf("空闲后单次调用未重新探测: err=%v probes=%d", err, probes.Load())
+	}
+}
+
+// TestSpoolErrorInvalidatesSharedProbe 在成功探针后制造一次真实确认冲突，再正常持久化一份新快照。
+// 验证成功的其他写入无法清除故障后必须重新探针的要求；隔离文件及记录随临时目录回收。
+func TestSpoolErrorInvalidatesSharedProbe(t *testing.T) {
+	s := openSpool(t, Config{})
+	original := spoolRecord("original")
+	if err := s.Put(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reserve("earlier"); err != nil || s.probedThrough == 0 {
+		t.Fatalf("缺少成功的实际探针: %v", err)
+	}
+	different := original
+	different.Cost++
+	if err := s.Acknowledge(different); !errors.Is(err, ErrConflict) {
+		t.Fatalf("错误确认未被拒绝: %v", err)
+	}
+	if err := s.Put(spoolRecord("another")); err != nil {
+		t.Fatal(err)
+	}
+	if s.probedThrough != 0 {
+		t.Fatal("中途确认失败后仍可复用早先探针")
+	}
+	if err := s.Reserve("after-recovery"); err != nil || s.probedThrough == 0 {
+		t.Fatalf("独立探针未能恢复: %v", err)
 	}
 }
