@@ -72,7 +72,7 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 		// 在途同步标记保留容量但尚无最终账单，不能让每次准入反复解析全部在途文件。
 		if err == nil && state.Replayable > 0 {
 			stage = "spool_replay"
-			err = s.FlushLocalUsage(r.Context())
+			err = s.flushLocalUsage(r.Context(), true)
 		}
 		if err != nil {
 			util.Error("billing admission pending stage=%s cause=%s", stage, billingPendingCause(err))

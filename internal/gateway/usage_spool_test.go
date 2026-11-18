@@ -68,6 +68,8 @@ func TestBrowserUsageSpoolControlBoundaries(t *testing.T) {
 		status                  int
 	}{
 		{"/other", "POST", `{}`, "", false, 200},
+		{"/usage-spool/defer", "POST", `{"model":"spool-browser-test"}`, "postgres://unused/?search_path=e2e_test", true, 409},
+		{"/usage-spool/defer", "POST", `{"model":"spool-browser-test"}`, "postgres://unused/?search_path=public", true, 400},
 		{"/usage-spool/fail", "GET", `{}`, "postgres://unused/?search_path=e2e_test", true, 400},
 		{"/usage-spool/fail", "POST", `{"model":"real-model"}`, "postgres://unused/?search_path=e2e_test", true, 400},
 		{"/usage-spool/fail", "POST", `{"model":"spool-browser-test"}`, "postgres://unused/?search_path=public", true, 400},

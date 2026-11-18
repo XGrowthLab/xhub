@@ -185,6 +185,29 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await selectMonitorOption(page, t("monitor.model"), model);
       await expect(page.getByRole("rowheader", { name: model, exact: true })).toHaveCount(1);
       await expect(page.getByRole("region", { name: t("monitor.requests"), exact: true })).toContainText(String(expectedCalls));
+      // 只拒绝夹具指定的一张零费用账单。网关仍能鉴权，退避中的磁盘证据必须连续阻止新调用。
+      injected = true;
+      const deferred = await page.request.post(control + "/usage-spool/defer", { data: { model } });
+      expect(deferred.status(), await deferred.text()).toBe(200);
+      expect(await deferred.json()).toEqual({ pending: 1, quarantined: 0 });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
+          headers,
+          data: { model, messages: [{ role: "user", content: "Check admission while settlement is pending." }] },
+        });
+        expect(refused.status(), await refused.text()).toBe(503);
+        expect((await refused.json()).error.type).toBe("billing_storage_pending");
+      }
+      const cleared = await page.request.post(control + "/usage-spool/recover", { data: { model } });
+      expect(cleared.status(), await cleared.text()).toBe(200);
+      expect(await cleared.json()).toEqual({ pending: 0, quarantined: 0 });
+      injected = false;
+      const resumed = await page.request.post(GATEWAY + "/v1/chat/completions", {
+        headers,
+        data: { model, messages: [{ role: "user", content: "Verify admission after settlement." }] },
+      });
+      expect(resumed.status(), await resumed.text()).toBe(200);
+      expect((await resumed.json()).choices[0].message.content).toBe("e2e-ok");
     } finally {
       if (injected)
         expect((await page.request.post(control + "/usage-spool/recover", { data: { model } })).status()).toBe(200);

@@ -3,12 +3,17 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
@@ -35,10 +40,24 @@ func (b *browserSpoolTransport) RoundTrip(r *http.Request) (*http.Response, erro
 // 只允许私有e2e schema、无Redis和专属模型，关闭真实连接后可重建连接与队列，退出必须调用cleanup。
 func newBrowserUsageSpoolControl(s *Server, dir string) (func(http.ResponseWriter, *http.Request) bool, func()) {
 	var mu sync.Mutex
+	var blockedRecord *iam.UsageRecord
 	active := false
 	original := s.Client.Transport
 	spoolDir := filepath.Join(dir, "usage-spool")
 	recoverDB := func() error {
+		// 只撤销本测试私有 schema 的约束。和正常前台一样，严格入账成功后才能确认磁盘证据。
+		if blockedRecord != nil {
+			if _, err := s.IAM.Engine.Exec("ALTER TABLE usage_events DROP CONSTRAINT IF EXISTS e2e_spool_admission"); err != nil {
+				return err
+			}
+			if err := s.IAM.RecordUsageExact(context.Background(), []iam.UsageRecord{*blockedRecord}); err != nil {
+				return err
+			}
+			if err := s.usageSpool.Acknowledge(*blockedRecord); err != nil {
+				return err
+			}
+			blockedRecord = nil
+		}
 		if !active {
 			return nil
 		}
@@ -89,6 +108,27 @@ func newBrowserUsageSpoolControl(s *Server, dir string) (func(http.ResponseWrite
 				}
 				s.Client.Transport = &browserSpoolTransport{base: base, db: s.IAM}
 				active = true
+			}
+		case "/usage-spool/defer":
+			if active || blockedRecord != nil || s.usageSpool == nil {
+				http.Error(w, "spool must be healthy and initialized", 409)
+				return true
+			}
+			// 检查约束仅拒绝专属前缀的零费用测试账单，鉴权与正常推理仍可访问数据库。
+			// 先让后台真实触发 PostgreSQL 23514，再由浏览器观察退避期间请求的 503。
+			_, err = s.IAM.Engine.Exec(`ALTER TABLE usage_events ADD CONSTRAINT e2e_spool_admission
+				CHECK (request_id NOT LIKE 'e2e-spool-admission-%') NOT VALID`)
+			if err == nil {
+				blockedRecord = &iam.UsageRecord{RequestID: "e2e-spool-admission-" + body.Model, TS: time.Now().UTC(),
+					Model: "private-spool-evidence", Status: "success", HTTPStatus: 200}
+				err = s.usageSpool.Put(*blockedRecord)
+			}
+			if err == nil {
+				failure := s.FlushLocalUsage(r.Context())
+				var pg *pgconn.PgError
+				if !errors.As(failure, &pg) || pg.SQLState() != "23514" {
+					err = fmt.Errorf("expected isolated spool constraint failure, got %v", failure)
+				}
 			}
 		case "/usage-spool/recover":
 			err = recoverDB()

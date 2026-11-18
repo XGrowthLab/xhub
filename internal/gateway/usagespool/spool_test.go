@@ -1015,3 +1015,130 @@ func TestReplayDeadlineRequiresDurableAcknowledgement(t *testing.T) {
 		})
 	}
 }
+
+// TestReplayAdmissionAfterLeaderCancellation 使用虚拟时钟及同步通道固定领先回放的超时点。
+// 只有完全属于该调用的超时可由等待者立即重做；混合持久化冲突须保留证据和退避。临时文件由夹具清理。
+func TestReplayAdmissionAfterLeaderCancellation(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict=%v", mixed), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				if err := s.Put(spoolRecord("leader")); err != nil {
+					t.Fatal(err)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				defer cancel()
+				leader := make(chan error, 1)
+				go func() {
+					_, err := s.Replay(ctx, 5, func(context.Context, iam.UsageRecord) error {
+						close(started)
+						<-release
+						cause := fmt.Errorf("fixture: %w", ctx.Err())
+						if mixed {
+							return errors.Join(cause, iam.ErrConflict)
+						}
+						return errors.Join(cause, ctx.Err())
+					})
+					leader <- err
+				}()
+				<-started
+				waiter := &replayWaitContext{Context: t.Context(), entered: make(chan struct{})}
+				follower := make(chan error, 1)
+				var commits atomic.Int32
+				commit := func(context.Context, iam.UsageRecord) error { commits.Add(1); return nil }
+				go func() { _, err := s.ReplayForAdmission(waiter, 5, commit); follower <- err }()
+				<-waiter.entered
+				<-ctx.Done()
+				close(release)
+				if err := <-leader; !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, iam.ErrConflict) != mixed {
+					t.Fatalf("领先回放丢失原故障: %v", err)
+				}
+				err := <-follower
+				if !mixed {
+					if err != nil || commits.Load() != 1 {
+						t.Fatalf("超时污染健康后继: 结算=%d err=%v", commits.Load(), err)
+					}
+					return
+				}
+				if !errors.Is(err, iam.ErrConflict) || commits.Load() != 0 {
+					t.Fatalf("跟随准入越过真实冲突: 结算=%d err=%v", commits.Load(), err)
+				}
+
+				// 后台可以跳过失败项并提交新账单；同时等待它的准入调用不能把后台成功当作全部结清。
+				if err := s.Put(spoolRecord("good")); err != nil {
+					t.Fatal(err)
+				}
+				started, release = make(chan struct{}), make(chan struct{})
+				go func() {
+					_, err := s.Replay(t.Context(), 5, func(_ context.Context, r iam.UsageRecord) error {
+						if r.RequestID != "good" {
+							return errors.New("退避期内重试了失败文件")
+						}
+						close(started)
+						<-release
+						return nil
+					})
+					leader <- err
+				}()
+				<-started
+				waiter = &replayWaitContext{Context: t.Context(), entered: make(chan struct{})}
+				go func() { _, err := s.ReplayForAdmission(waiter, 5, commit); follower <- err }()
+				<-waiter.entered
+				close(release)
+				if err := <-leader; err != nil {
+					t.Fatalf("后台未能恢复其余账单: %v", err)
+				}
+				if err := <-follower; !errors.Is(err, iam.ErrConflict) {
+					t.Fatalf("后台退避导致同时准入放行: %v", err)
+				}
+				if n, err := s.ReplayForAdmission(t.Context(), 5, commit); n != 0 || !errors.Is(err, iam.ErrConflict) || commits.Load() != 0 {
+					t.Fatalf("独立新准入越过退避证据: n=%d 结算=%d err=%v", n, commits.Load(), err)
+				}
+				time.Sleep(31 * time.Second)
+				if n, err := s.ReplayForAdmission(t.Context(), 5, commit); n != 1 || err != nil || commits.Load() != 1 {
+					t.Fatalf("退避结束后未能恢复: n=%d 结算=%d err=%v", n, commits.Load(), err)
+				}
+				if state, err := s.Status(); err != nil || state.Pending != 0 {
+					t.Fatalf("已核销账单未删除: %+v %v", state, err)
+				}
+			})
+		})
+	}
+}
+
+// TestReplayAdmissionMustCoverSnapshot 验证一次限量回放与扫描时才发现损坏的文件都不能导致过早准入。
+// 前置两笔真实临时快照，检查下一轮正常恢复或保留隔离证据；所有磁盘文件均由测试清理。
+func TestReplayAdmissionMustCoverSnapshot(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%v", corrupt), func(t *testing.T) {
+			s := openSpool(t, Config{})
+			for _, id := range []string{"a", "b"} {
+				if err := s.Put(spoolRecord(id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if corrupt {
+				if err := os.WriteFile(filepath.Join(s.config.Dir, basename("b")), []byte("bad envelope"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commit := func(context.Context, iam.UsageRecord) error { return nil }
+			want := ErrPending
+			if corrupt {
+				want = ErrCorrupt
+			}
+			if n, err := s.ReplayForAdmission(t.Context(), 1, commit); n != 1 || !errors.Is(err, want) {
+				t.Fatalf("未结或隔离证据被当作成功: n=%d err=%v", n, err)
+			}
+			n, err := s.ReplayForAdmission(t.Context(), 1, commit)
+			if corrupt {
+				if n != 0 || !errors.Is(err, ErrCorrupt) {
+					t.Fatalf("已知隔离证据未阻止新准入: n=%d err=%v", n, err)
+				}
+			} else if n != 1 || err != nil {
+				t.Fatalf("第二批全部核销后未恢复: n=%d err=%v", n, err)
+			}
+		})
+	}
+}

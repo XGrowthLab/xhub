@@ -37,6 +37,7 @@ var (
 	ErrFull        = errors.New("usage spool capacity exhausted")
 	ErrCorrupt     = errors.New("usage spool has quarantined evidence")
 	ErrConflict    = errors.New("usage spool request snapshot conflict")
+	ErrPending     = errors.New("usage spool batch still has unsettled records")
 )
 
 // Config 为启动时固定的目录和容量；目录必须专属于一个网关实例，多个实例应挂不同持久卷。
@@ -65,11 +66,19 @@ type envelope struct {
 
 // replayBatch 记录一次目录枚举中仍待检查的文件名。只在 Spool.mu 下访问，不复制账单正文。
 type replayBatch struct {
-	pending    map[string]bool
-	generation uint64
-	done       chan struct{}
-	err        error
-	exhausted  bool
+	pending        map[string]bool
+	generation     uint64
+	done           chan struct{}
+	err            error
+	exhausted      bool
+	leaderCanceled bool
+	unsettled      error
+}
+
+// replayFailure 为尚未确认的文件保留上次失败及可重试时刻；前台能识别待结错误而不提前重试数据库。
+type replayFailure struct {
+	after time.Time
+	cause error
 }
 
 // Spool 独占本机目录；mu 保护文件更新、容量预留、重放批次及失败重试时间。
@@ -85,7 +94,7 @@ type Spool struct {
 	activeDelivery  map[string]bool
 	replaying       *replayBatch
 	generation      uint64
-	retry           map[string]time.Time
+	retry           map[string]replayFailure
 	lastErr         error
 	closed          bool
 }
@@ -160,7 +169,7 @@ func Open(config Config) (*Spool, error) {
 	s := &Spool{
 		root: root, lock: lock, config: config,
 		reserved: make(map[string]bool), activeDelivery: make(map[string]bool),
-		retry: make(map[string]time.Time),
+		retry: make(map[string]replayFailure),
 	}
 	if len(entries) == 0 {
 		marker, createErr := root.OpenFile(".spool-format", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -778,6 +787,7 @@ func (s *Spool) syncSettledRemovalLocked(name string) error {
 	if err := s.syncDirectoryLocked("."); err != nil {
 		return err
 	}
+	delete(s.retry, name)
 	if s.replaying != nil {
 		delete(s.replaying.pending, name)
 	}
@@ -800,7 +810,6 @@ func (s *Spool) acknowledgeLocked(name string, raw []byte) error {
 	if err = s.root.Remove(name); err != nil {
 		return err
 	}
-	delete(s.retry, name)
 	return s.syncSettledRemovalLocked(name)
 }
 
@@ -822,6 +831,18 @@ func (s *Spool) Acknowledge(record iam.UsageRecord) (err error) {
 // 参数ctx取消即停止，返回本轮成功数和合并错误；单条冲突不阻塞其他记录，不包含正文的错误可供运维观察。
 // 本轮候选与目录枚举一起在锁内登记；提交期间释放锁，其他请求确认入账后可撤下旧候选。
 func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error) (int, error) {
+	return s.replay(ctx, limit, commit, false)
+}
+
+// ReplayForAdmission 在付费请求准入前调用，参数与 Replay 相同。返回实际结算数及本次水位仍有待结证据的错误；
+// 即使本轮由于退避或条数上限没有再次尝试，也不能将尚未核销的费用当作已结清。
+func (s *Spool) ReplayForAdmission(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error) (int, error) {
+	return s.replay(ctx, limit, commit, true)
+}
+
+// replay 供后台和准入共享同一次物理回放。requireSettled 指定是否必须结清进入时的水位；
+// 等待者的上下文独立，只有完全由领先调用取消引起的错误可以立即接手重试。
+func (s *Spool) replay(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error, requireSettled bool) (int, error) {
 	if limit < 1 || commit == nil {
 		return 0, ErrUnavailable
 	}
@@ -837,7 +858,11 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 		if active == nil {
 			batch := &replayBatch{done: make(chan struct{}), generation: s.generation}
 			s.replaying = batch
-			return s.runReplay(ctx, limit, commit, batch)
+			n, err := s.runReplay(ctx, limit, commit, batch)
+			if err == nil && requireSettled {
+				err = batch.unsettled
+			}
+			return n, err
 		}
 		s.mu.Unlock()
 		select {
@@ -847,13 +872,38 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 		}
 		// 本次开始时已有但上一轮没看到的快照，以及达到批量上限的剩余文件，要重新枚举。
 		// 其他调用者已处理的文件不计为本次成功数；共享失败，不能让并发准入跳过存储错误。
-		if active.err != nil && !errors.Is(active.err, context.Canceled) && !errors.Is(active.err, context.DeadlineExceeded) {
+		if active.err != nil && !active.leaderCanceled {
 			return 0, active.err
 		}
 		if active.exhausted && active.generation >= observed {
+			if requireSettled {
+				return 0, active.unsettled
+			}
 			return 0, nil
 		}
 		s.mu.Lock()
+	}
+}
+
+// onlyReplayCancellation 判断回调错误的所有叶子是否都来自本轮 ctx 的取消原因；
+// commit、确认及多文件批处理都可能包装或合并错误。混入任何其他错误时必须保留该失败。
+func onlyReplayCancellation(err, canceled error) bool {
+	if canceled == nil || err == nil {
+		return false
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := wrapped.Unwrap()
+		for _, cause := range causes {
+			if !onlyReplayCancellation(cause, canceled) {
+				return false
+			}
+		}
+		return len(causes) > 0
+	case interface{ Unwrap() error }:
+		return onlyReplayCancellation(wrapped.Unwrap(), canceled)
+	default:
+		return errors.Is(err, canceled)
 	}
 }
 
@@ -864,6 +914,20 @@ func (s *Spool) runReplay(ctx context.Context, limit int, commit func(context.Co
 	defer func() {
 		s.mu.Lock()
 		batch.err = err
+		batch.leaderCanceled = onlyReplayCancellation(err, ctx.Err())
+		// pending 仅包含本轮水位内未获耐久确认的终态。后台可跳过退避文件，
+		// 但同批的准入调用必须取得其失败原因；条数上限也不能让剩余证据被当作已处理。
+		for name := range batch.pending {
+			if batch.unsettled != nil {
+				break
+			}
+			if failure, ok := s.retry[name]; ok {
+				batch.unsettled = failure.cause
+			}
+		}
+		if batch.unsettled == nil && len(batch.pending) > 0 {
+			batch.unsettled = ErrPending
+		}
 		batch.exhausted = n < limit && err == nil
 		s.replaying = nil
 		close(batch.done)
@@ -876,6 +940,22 @@ func (s *Spool) runReplay(ctx context.Context, limit int, commit func(context.Co
 // 它在所有返回路径都已释放 mu。Replay 统一向同批等待者广播结果，已确认删除可在提交过程中撤下候选。
 func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error, batch *replayBatch) (int, error) {
 	if err := s.scanLocked(true); err != nil {
+		s.mu.Unlock()
+		return 0, err
+	}
+	quarantine, err := s.root.Open("quarantine")
+	if err == nil {
+		var entries []os.DirEntry
+		entries, err = quarantine.ReadDir(1)
+		quarantine.Close()
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+		if len(entries) != 0 {
+			batch.unsettled = ErrCorrupt
+		}
+	}
+	if err != nil {
 		s.mu.Unlock()
 		return 0, err
 	}
@@ -926,7 +1006,7 @@ func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context
 			s.mu.Unlock()
 			continue
 		}
-		if time.Now().Before(s.retry[name]) {
+		if time.Now().Before(s.retry[name].after) {
 			s.mu.Unlock()
 			continue
 		}
@@ -948,8 +1028,12 @@ func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context
 			err = s.acknowledgeLocked(name, raw)
 		}
 		if err != nil {
-			s.retry[name] = time.Now().Add(30 * time.Second)
-			failures = append(failures, fmt.Errorf("usage spool record %s: %w", name, err))
+			failure := fmt.Errorf("usage spool record %s: %w", name, err)
+			// 领先请求自行取消时保留文件但不惩罚健康后继；数据库失败或混合冲突仍须退避。
+			if !onlyReplayCancellation(err, ctx.Err()) && batch.pending[name] {
+				s.retry[name] = replayFailure{after: time.Now().Add(30 * time.Second), cause: failure}
+			}
+			failures = append(failures, failure)
 		} else {
 			count++
 		}

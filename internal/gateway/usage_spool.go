@@ -96,6 +96,12 @@ func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID 
 // FlushLocalUsage 重放本机完整账单，供周期/显式Flush及启动恢复调用；返回错误便于可观察诊断。
 // 只在数据库确认事务成功后删除；#63的核销fence一致时nil可确认、冲突保留，不调用上游且不重算价格。
 func (s *Server) FlushLocalUsage(ctx context.Context) error {
+	return s.flushLocalUsage(ctx, false)
+}
+
+// flushLocalUsage 在限时上下文内结算磁盘快照。后台跳过退避中的失败以便处理其余记录；
+// requireSettled 用于新请求准入，只有本次水位已结清才能继续核对预算。
+func (s *Server) flushLocalUsage(ctx context.Context, requireSettled bool) error {
 	if !s.usageSpoolEnabled {
 		return nil
 	}
@@ -108,7 +114,11 @@ func (s *Server) FlushLocalUsage(ctx context.Context) error {
 	// 限制单轮数据库故障等待，避免后台重放长期占住退出流程。
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_, err := s.usageSpool.Replay(ctx, 500, func(ctx context.Context, record iam.UsageRecord) error {
+	replay := s.usageSpool.Replay
+	if requireSettled {
+		replay = s.usageSpool.ReplayForAdmission
+	}
+	_, err := replay(ctx, 500, func(ctx context.Context, record iam.UsageRecord) error {
 		if record.DeliveryPending {
 			if record.Cost > 0 && (record.Status != "success" || record.HTTPStatus >= 400) {
 				return fmt.Errorf("invalid delivery charge")

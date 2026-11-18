@@ -1,6 +1,7 @@
 package regression
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/sunqirui1987/xhub/benchmarks/load"
 	"github.com/sunqirui1987/xhub/internal/gateway"
+	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
 
@@ -246,4 +248,66 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
+}
+
+// TestUsageSpoolUnsettledEvidenceBlocksUpstream 在真实 PostgreSQL 账本与持久目录构造同一请求的冲突快照。
+// 后台已进入退避时，密钥和会话的新请求均须明确返回 503，且无上游调用或费用变化。夹具回收凭据、数据库和磁盘。
+func TestUsageSpoolUnsettledEvidenceBlocksUpstream(t *testing.T) {
+	const model = "spool-admission-conflict"
+	dir := filepath.Join(t.TempDir(), "spool")
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
+	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
+	h := newHarness(t, chatDeployment(model))
+	t.Cleanup(func() { _ = h.gw.CloseUsageSpool() })
+	scope := h.openScope(t, h.adminSession(), model)
+	h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest(model, "Verify normal admission."))
+	h.flushSpend()
+	before := h.moneyOf(t, scope)
+	existing := iam.UsageRecord{RequestID: "durable-conflict", TS: time.Now().UTC(), Model: model, Status: "success", Cost: 0}
+	if err := h.db.RecordUsageExact(t.Context(), []iam.UsageRecord{existing}); err != nil {
+		t.Fatal(err)
+	}
+	existing.Cost = 1
+	// 另一私有目录用产品序列化器创建完整快照；关闭后原子移入当前队列，模拟此前留下的耐久证据。
+	source := filepath.Join(t.TempDir(), "recovery")
+	sp, err := usagespool.Open(usagespool.Config{Dir: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sp.Close() })
+	if err = sp.Put(existing); err != nil {
+		t.Fatal(err)
+	}
+	if err = sp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(source, "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("缺少持久化快照: %v %v", files, err)
+	}
+	name := filepath.Join(dir, filepath.Base(files[0]))
+	if err := os.Rename(files[0], name); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.gw.FlushLocalUsage(t.Context()); !errors.Is(err, iam.ErrConflict) {
+		t.Fatalf("后台未检出账本冲突: %v", err)
+	}
+	if err := h.gw.FlushLocalUsage(t.Context()); err != nil {
+		t.Fatalf("后台未进入退避: %v", err)
+	}
+	for _, token := range []string{scope.key, scope.session} {
+		r := h.do(http.MethodPost, "/v1/chat/completions", token, chatRequest(model, "Check unresolved billing admission."))
+		if r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "billing_storage_pending") {
+			t.Fatalf("未结清账单时未明确拒绝: %s", r.describe())
+		}
+	}
+	if got := len(h.upstreamCalls()); got != 1 {
+		t.Fatalf("冲突后重复访问上游: 总调用=%d 正常对照=1", got)
+	}
+	if !h.moneyOf(t, scope).grewBy(before, 0) {
+		t.Fatal("拒绝准入时仍产生使用费用")
+	}
+	if _, err := os.Stat(name); err != nil {
+		t.Fatalf("冲突持久证据丢失: %v", err)
+	}
 }
