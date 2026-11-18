@@ -241,6 +241,7 @@ func newHarness(t *testing.T, models ...config.ModelEntry) *harness {
 
 // openHarness 和 newHarness 一样，只是可以关掉花费日志里的请求正文。
 // 产品默认不存正文，管理员开关能把它打开；套件里大多数用例要核对日志，所以 newHarness 仍然打开。
+// t 负责在处理器结束后刷写账单，再关闭本机队列和 Redis；返回的 harness 使用独立 schema 和本地上游。
 func openHarness(t *testing.T, storePrompts bool, models ...config.ModelEntry) *harness {
 	t.Helper()
 	h := &harness{t: t, master: "sk-regression-" + strconv.FormatInt(time.Now().UnixNano(), 36)}
@@ -304,6 +305,7 @@ func openHarness(t *testing.T, storePrompts bool, models ...config.ModelEntry) *
 		// the next private schema can ingest this harness's shared Redis queue.
 		h.server.Close()
 		h.flushSpend()
+		_ = h.gw.CloseUsageSpool()
 		_ = h.gw.Live.Close()
 	})
 	return h

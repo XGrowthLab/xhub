@@ -403,6 +403,50 @@ func TestSpoolRecoveryAndCorruption(t *testing.T) {
 	}
 }
 
+// TestSpoolReplayAfterConcurrentRemoval 在第一笔账单提交时处理同一批次的第二笔，稳定复现列目录后的竞争窗口。
+// 两种已确认清理都只提交剩余账单，未经确认的文件消失必须报错；每个子用例独占临时目录并自动关闭、清理。
+func TestSpoolReplayAfterConcurrentRemoval(t *testing.T) {
+	for _, removal := range []string{"acknowledge", "discard-settled-delivery", "unexpected-loss"} {
+		t.Run(removal, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			records := []iam.UsageRecord{spoolRecord("first"), spoolRecord("second")}
+			for _, record := range records {
+				if err := s.Put(record); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			calls := 0
+			count, err := s.Replay(t.Context(), 2, func(_ context.Context, current iam.UsageRecord) error {
+				calls++
+				other := records[0]
+				if current.RequestID == other.RequestID {
+					other = records[1]
+				}
+				// 不依赖文件系统的枚举顺序。两份文件均已列入本轮，而下一份尚未读取。
+				switch removal {
+				case "acknowledge":
+					return s.Acknowledge(other)
+				case "discard-settled-delivery":
+					return s.DiscardUnconfirmedDelivery(other)
+				default:
+					return os.Remove(filepath.Join(s.config.Dir, basename(other.RequestID)))
+				}
+			})
+			if count != 1 || calls != 1 {
+				t.Fatalf("已处理的候选不能再次提交: count=%d callbacks=%d", count, calls)
+			}
+			if removal == "unexpected-loss" {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("未经确认的文件消失必须返回读取错误: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("已确认入账的文件被误报为存储故障: %v", err)
+			}
+		})
+	}
+}
+
 // TestSpoolFailureRetentionAndBackoff 验证数据库冲突保留原文且不阻塞其他有效记录，重复Flush不会忙重试同一失败。
 // 前置两份快照，提交器模拟一份冲突一份成功；只确认成功记录，测试关闭并删除目录。
 func TestSpoolFailureRetentionAndBackoff(t *testing.T) {
