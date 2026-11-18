@@ -30,8 +30,8 @@ type groupCrashReceipt struct {
 	Stream bool
 }
 
-// TestUsageGroupProcessRecovery 通过同一用户的八条并发真实 HTTP 请求检查两次进程硬中断。
-// 父进程保留私有 PG 和模拟上游，在八份终态仅存磁盘时杀死网关，再在首笔 PG 提交后、本机确认前杀死重放者。
+// TestUsageGroupProcessRecovery 通过同一用户的八条并发真实 HTTP 请求检查三次进程硬中断。
+// 父进程保留私有 PG 和模拟上游，在八份终态仅存磁盘、PG 已插入但事务尚未提交、PG 已提交但本机尚未确认处依次杀死进程。
 // 全新网关必须恢复每笔成功用量和五层费用，重复启动不得重扣或重发上游。测试框架回收进程、schema、目录和一次性密钥。
 func TestUsageGroupProcessRecovery(t *testing.T) {
 	const model = "group-crash"
@@ -130,12 +130,60 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 	if n, err := h.db.Engine.Table("usage_events").Where("key_id = ?", owner.keyID).Count(); err != nil || n != 0 {
 		t.Fatalf("断库期间账本应为空: n=%d err=%v", n, err)
 	}
+	// 在专属表已插入行但事务尚未提交时终止整个重放进程，验证事务回滚且磁盘证据没有被提前确认。
+	if _, err := h.db.Engine.Exec(`CREATE FUNCTION pause_charge_before_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_advisory_xact_lock(TG_RELID::bigint); RETURN NEW; END $$;
+		CREATE TRIGGER pause_charge AFTER INSERT ON usage_events FOR EACH ROW EXECUTE FUNCTION pause_charge_before_commit()`); err != nil {
+		t.Fatal(err)
+	}
+	gate := h.db.Engine.NewSession().Context(ctx)
+	defer gate.Close()
+	if err := gate.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	defer gate.Rollback()
+	if _, err := gate.Exec(`SELECT pg_advisory_xact_lock('usage_events'::regclass::oid::bigint)`); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var blocked bool
+				_, err := h.db.Engine.Context(ctx).SQL(`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=0 AND objid='usage_events'::regclass::oid AND NOT granted)`).Get(&blocked)
+				if err == nil && blocked {
+					select {
+					case checkpoints <- nil:
+					case <-ctx.Done():
+					}
+					return
+				}
+			}
+		}
+	}()
+	if received := killAtCheckpoint("during-transaction"); len(received) != 0 {
+		t.Fatal("事务尚未提交，子进程却报告了提交成功")
+	}
+	if err := gate.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	// DDL 等待被杀进程的事务结束，随后读取计数能可靠区分数据库提交和回滚。
+	if _, err := h.db.Engine.Exec("DROP TRIGGER pause_charge ON usage_events"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := h.db.Engine.Table("usage_events").Where("key_id = ?", owner.keyID).Count(); err != nil || n != 0 || !h.readMoneyOf(t, owner).grewBy(before, 0) {
+		t.Fatalf("进程退出后未提交账单或部分费用仍可见: rows=%d err=%v", n, err)
+	}
 	committed := killAtCheckpoint("replay")
 	if len(committed) != 1 {
-		t.Fatal("第二个检查点缺少已提交请求 ID")
+		t.Fatal("提交后的检查点缺少请求 ID")
 	}
 	if _, err := h.db.GetUsageEvent(t.Context(), iam.UsageQuery{}, committed[0].ID); err != nil {
-		t.Fatalf("第二次中断前 PG 尚未提交: %v", err)
+		t.Fatalf("最后一次中断前 PG 尚未提交: %v", err)
 	}
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(dir, "spool"))
 	for range 2 {
@@ -197,7 +245,7 @@ func TestUsageGroupProcessChild(t *testing.T) {
 		}
 	}
 	spoolDir := filepath.Join(dir, "spool")
-	if stage == "replay" {
+	if stage == "replay" || stage == "during-transaction" {
 		sp, err := usagespool.Open(usagespool.Config{Dir: spoolDir})
 		if err != nil {
 			t.Fatal(err)
@@ -206,6 +254,7 @@ func TestUsageGroupProcessChild(t *testing.T) {
 			if r.DeliveryUnconfirmed {
 				return errors.New("客户端已收到完整答复，回放却只有未确认标记")
 			}
+			var err error
 			if r.DeliveryPending {
 				err = db.SettleConfirmedDelivery(ctx, r)
 			} else {

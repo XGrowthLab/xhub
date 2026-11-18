@@ -141,10 +141,17 @@ func (h *harness) setModelDefault(t *testing.T, admin, model string, weights map
 	})
 }
 
-// moneyOf 读五层当前花费。拒绝之后这五个数都不该动。
+// moneyOf 先结清测试网关可回放的账单，再返回 c 在五层的当前花费，供完成请求后的断言使用。
 func (h *harness) moneyOf(t *testing.T, c chained) scopeMoney {
 	t.Helper()
 	h.flushSpend()
+	return h.readMoneyOf(t, c)
+}
+
+// readMoneyOf 从私有 PG 只读取得 c 的五层已提交费用；供进程中断测试检查事务边界，读数期间不能触发待结算账单。
+// 任一主体不存在或连接失败时令测试失败，数据库生命周期由 harness 管理。
+func (h *harness) readMoneyOf(t *testing.T, c chained) scopeMoney {
+	t.Helper()
 	var m scopeMoney
 	user, err := h.db.GetUser(t.Context(), c.userID)
 	if err != nil {
