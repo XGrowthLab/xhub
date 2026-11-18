@@ -571,3 +571,166 @@ func TestDeliveryMarkerRejectsInvalidAndCorruptTransitions(t *testing.T) {
 		t.Fatalf("确认后仍有残留: status=%+v err=%v", status, err)
 	}
 }
+
+// replayWaitContext 让测试获知等待者已经进入 Replay 的可取消等待，无需用睡眠推断调度顺序。
+type replayWaitContext struct {
+	context.Context
+	entered chan struct{}
+	steps   chan struct{}
+	once    sync.Once
+}
+
+// Done 返回原上下文的取消通知；首次监听时通知测试线程，渠道仅用于该测试实例。
+func (c *replayWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	if c.steps != nil {
+		c.steps <- struct{}{}
+	}
+	return c.Context.Done()
+}
+
+// TestReplaySharesOnlyCoveredWork 用阻塞提交器模拟前后台同轮恢复，验证每份只提交一次、
+// 新发布的文件能被等待者观察，取消不影响持有者，失败原样返回；独占临时目录自动关闭清理。
+func TestReplaySharesOnlyCoveredWork(t *testing.T) {
+	for _, mode := range []string{"same", "new-record", "bounded-batch", "cancel", "failure", "failure-with-new-record", "panic"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			if err := s.Put(spoolRecord("one")); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "bounded-batch" {
+				if err := s.Put(spoolRecord("two")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			started, resume := make(chan struct{}), make(chan struct{})
+			persistErr := errors.New("fixture could not commit")
+			first := make(chan error, 1)
+			go func() {
+				if mode == "panic" {
+					defer func() {
+						if recover() == persistErr {
+							first <- persistErr
+						}
+					}()
+				}
+				limit := 8
+				if mode == "bounded-batch" {
+					limit = 1
+				}
+				_, err := s.Replay(t.Context(), limit, func(context.Context, iam.UsageRecord) error {
+					close(started)
+					<-resume
+					if mode == "panic" {
+						panic(persistErr)
+					}
+					if mode == "failure" || mode == "failure-with-new-record" {
+						return persistErr
+					}
+					return nil
+				})
+				first <- err
+			}()
+			<-started
+			if mode == "new-record" || mode == "failure-with-new-record" {
+				if err := s.Put(spoolRecord("new")); err != nil {
+					close(resume)
+					t.Fatal(err)
+				}
+			}
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w := &replayWaitContext{Context: base, entered: make(chan struct{})}
+			type result struct {
+				n   int
+				err error
+			}
+			follower := make(chan result, 1)
+			var commits atomic.Int32
+			go func() {
+				n, err := s.Replay(w, 8, func(context.Context, iam.UsageRecord) error { commits.Add(1); return nil })
+				follower <- result{n, err}
+			}()
+			<-w.entered
+			if mode == "cancel" {
+				cancel()
+				if got := <-follower; got.n != 0 || !errors.Is(got.err, context.Canceled) {
+					t.Errorf("取消的等待者未退出: %+v", got)
+				}
+			}
+			close(resume)
+			err := <-first
+			if mode == "panic" {
+				got := <-follower
+				if err != persistErr || !errors.Is(got.err, ErrUnavailable) {
+					t.Fatalf("提交异常未唤醒等待者: %v %+v", err, got)
+				}
+				n, err := s.Replay(t.Context(), 1, func(context.Context, iam.UsageRecord) error { return nil })
+				if err != nil || n != 1 {
+					t.Fatalf("异常后的快照未可重放: %d %v", n, err)
+				}
+				return
+			}
+			if mode == "failure" || mode == "failure-with-new-record" {
+				got := <-follower
+				if !errors.Is(err, persistErr) || !errors.Is(got.err, persistErr) || commits.Load() != 0 {
+					t.Fatalf("等待者未共享失败: %v %+v", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "cancel" {
+				return
+			}
+			want := 0
+			if mode == "new-record" || mode == "bounded-batch" {
+				want = 1
+			}
+			if got := <-follower; got.err != nil || got.n != want || int(commits.Load()) != want {
+				t.Fatalf("等待者重复提交或遗漏新工作: %+v 写入=%d 期望=%d", got, commits.Load(), want)
+			}
+		})
+	}
+}
+
+// TestReplayWaitDoesNotChaseFutureWrites 固定请求到达时的快照水位，控制两个并行批次的完成顺序，
+// 验证后来持续到达的快照不会迫使旧请求等第三个批次或继承其失败；所有文件由临时目录清理。
+func TestReplayWaitDoesNotChaseFutureWrites(t *testing.T) {
+	s := openSpool(t, Config{})
+	if err := s.Put(spoolRecord("admitted")); err != nil {
+		t.Fatal(err)
+	}
+	first := &replayBatch{generation: 0, done: make(chan struct{})}
+	second := &replayBatch{generation: s.generation, done: make(chan struct{})}
+	third := &replayBatch{done: make(chan struct{}), err: errors.New("later batch failed")}
+	s.replaying = first
+	ctx := &replayWaitContext{Context: t.Context(), entered: make(chan struct{}), steps: make(chan struct{}, 3)}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Replay(ctx, 10, func(context.Context, iam.UsageRecord) error {
+			return errors.New("waiter unexpectedly started a new batch")
+		})
+		done <- err
+	}()
+	<-ctx.steps
+	if err := s.Put(spoolRecord("newer")); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	first.exhausted = true
+	s.replaying = second
+	close(first.done)
+	s.mu.Unlock()
+	<-ctx.steps
+	s.mu.Lock()
+	second.exhausted = true
+	s.replaying = third
+	close(third.done)
+	close(second.done)
+	s.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("当前请求误等待后来才发布的账单: %v", err)
+	}
+}

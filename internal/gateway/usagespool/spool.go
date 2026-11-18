@@ -64,7 +64,11 @@ type envelope struct {
 
 // replayBatch 记录一次目录枚举中仍待检查的文件名。只在 Spool.mu 下访问，不复制账单正文。
 type replayBatch struct {
-	pending map[string]bool
+	pending    map[string]bool
+	generation uint64
+	done       chan struct{}
+	err        error
+	exhausted  bool
 }
 
 // Spool 独占本机目录；mu 保护文件更新、容量预留、重放批次及失败重试时间。
@@ -75,7 +79,8 @@ type Spool struct {
 	config         Config
 	reserved       map[string]bool
 	activeDelivery map[string]bool
-	replayBatches  map[*replayBatch]struct{}
+	replaying      *replayBatch
+	generation     uint64
 	retry          map[string]time.Time
 	lastErr        error
 	closed         bool
@@ -151,7 +156,7 @@ func Open(config Config) (*Spool, error) {
 	s := &Spool{
 		root: root, lock: lock, config: config,
 		reserved: make(map[string]bool), activeDelivery: make(map[string]bool),
-		replayBatches: make(map[*replayBatch]struct{}), retry: make(map[string]time.Time),
+		retry: make(map[string]time.Time),
 	}
 	if len(entries) == 0 {
 		marker, createErr := root.OpenFile(".spool-format", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -567,7 +572,10 @@ func (s *Spool) putLocked(record iam.UsageRecord, raw []byte) error {
 		s.lastErr = ErrFull
 		return ErrFull
 	}
-	return s.writeLocked(raw, name)
+	err = s.writeLocked(raw, name)
+	// 即使写入失败，临时文件也可能需要恢复；已开始的旧批次不能替新证据作确认。
+	s.generation++
+	return err
 }
 
 // BeginDelivery 持久化零费用未确认标记并将其标记为当前实例在途；参数只包含脱敏账单元数据。
@@ -638,6 +646,7 @@ func (s *Spool) CompleteDelivery(record iam.UsageRecord) error {
 	if int64(len(raw)) > s.config.MaxRecordBytes || status.Bytes-int64(len(oldRaw))+int64(len(raw))+reservedBytes > s.config.MaxBytes {
 		return ErrFull
 	}
+	s.generation++
 	if err := s.writeLocked(raw, name); err != nil {
 		return err
 	}
@@ -738,8 +747,8 @@ func (s *Spool) syncSettledRemovalLocked(name string) error {
 	if err := s.syncDirectoryLocked("."); err != nil {
 		return err
 	}
-	for batch := range s.replayBatches {
-		delete(batch.pending, name)
+	if s.replaying != nil {
+		delete(s.replaying.pending, name)
 	}
 	return nil
 }
@@ -786,10 +795,55 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 		return 0, ErrUnavailable
 	}
 	s.mu.Lock()
-	if s.closed {
+	// 只需覆盖该请求进入恢复时已发布的证据。持续到达的新请求不应反复移动等待目标。
+	observed := s.generation
+	for {
+		if s.closed {
+			s.mu.Unlock()
+			return 0, ErrUnavailable
+		}
+		active := s.replaying
+		if active == nil {
+			batch := &replayBatch{done: make(chan struct{}), generation: s.generation}
+			s.replaying = batch
+			return s.runReplay(ctx, limit, commit, batch)
+		}
 		s.mu.Unlock()
-		return 0, ErrUnavailable
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-active.done:
+		}
+		// 本次开始时已有但上一轮没看到的快照，以及达到批量上限的剩余文件，要重新枚举。
+		// 其他调用者已处理的文件不计为本次成功数；共享失败，不能让并发准入跳过存储错误。
+		if active.err != nil && !errors.Is(active.err, context.Canceled) && !errors.Is(active.err, context.DeadlineExceeded) {
+			return 0, active.err
+		}
+		if active.exhausted && active.generation >= observed {
+			return 0, nil
+		}
+		s.mu.Lock()
 	}
+}
+
+// runReplay 接管 Replay 持有的目录锁并执行一次批处理，向等待者广播处理结果。
+// 提交回调意外退出也会唤醒等待者并保留文件；成功数只计入真正提交它们的调用。
+func (s *Spool) runReplay(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error, batch *replayBatch) (n int, err error) {
+	err = ErrUnavailable
+	defer func() {
+		s.mu.Lock()
+		batch.err = err
+		batch.exhausted = n < limit && err == nil
+		s.replaying = nil
+		close(batch.done)
+		s.mu.Unlock()
+	}()
+	return s.replayLocked(ctx, limit, commit, batch)
+}
+
+// replayLocked 从持有 mu 的目录快照恢复至多 limit 项；扫描结束即放锁，提交函数在锁外执行。
+// 它在所有返回路径都已释放 mu。Replay 统一向同批等待者广播结果，已确认删除可在提交过程中撤下候选。
+func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context.Context, iam.UsageRecord) error, batch *replayBatch) (int, error) {
 	if err := s.scanLocked(true); err != nil {
 		s.mu.Unlock()
 		return 0, err
@@ -805,19 +859,13 @@ func (s *Spool) Replay(ctx context.Context, limit int, commit func(context.Conte
 		s.mu.Unlock()
 		return 0, err
 	}
-	batch := &replayBatch{pending: make(map[string]bool, len(entries))}
+	batch.pending = make(map[string]bool, len(entries))
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name(), ".json") {
 			batch.pending[entry.Name()] = true
 		}
 	}
-	s.replayBatches[batch] = struct{}{}
 	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.replayBatches, batch)
-		s.mu.Unlock()
-	}()
 	count, attempted := 0, 0
 	var failures []error
 	for _, entry := range entries {

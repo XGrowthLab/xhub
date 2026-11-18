@@ -20,21 +20,33 @@ func usageFingerprint(record UsageRecord) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// checkPendingUsageSnapshot 在当前结算事务核对同ID待结算证据，JSONB比较忽略对象字段顺序但保留全部值。
-// 供strict分支在核销fence之后调用；已有不同快照返回冲突，不能结算旧载荷后确认当前磁盘文件。
-func checkPendingUsageSnapshot(s *xorm.Session, record UsageRecord) error {
+// exactUsageState 在既有 schema 写锁下同时核对待结算 JSON 和已提交指纹，返回是否已入账。
+// record 是调用方已验证并冻结时间的快照。内容冲突或旧账单缺少指纹时返回错误；
+// 重放已确认快照可以省去 INSERT，预占冲突和人工核销仍分别由原结算步骤校验。
+func exactUsageState(s *xorm.Session, record UsageRecord) (bool, error) {
 	payload, err := json.Marshal(record)
 	if err != nil {
-		return err
+		return false, err
 	}
-	rows, err := s.QueryString("SELECT request_id FROM usage_pending WHERE request_id = ? AND payload <> CAST(? AS jsonb)", record.RequestID, string(payload))
+	sum := sha256.Sum256(payload)
+	rows, err := s.QueryString(`SELECT
+        EXISTS (SELECT 1 FROM usage_pending WHERE request_id=? AND payload <> CAST(? AS jsonb)) AS conflicting,
+        COALESCE((SELECT CASE WHEN usage_fingerprint=? THEN 'same' ELSE 'different' END
+                   FROM usage_events WHERE request_id=?), 'new') AS ledger`,
+		record.RequestID, string(payload), hex.EncodeToString(sum[:]), record.RequestID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if len(rows) > 0 {
-		return fmt.Errorf("%w: pending usage snapshot differs", ErrConflict)
+	if len(rows) != 1 {
+		return false, fmt.Errorf("missing usage snapshot state")
 	}
-	return nil
+	if rows[0]["conflicting"] == "true" {
+		return false, fmt.Errorf("%w: pending usage snapshot differs", ErrConflict)
+	}
+	if rows[0]["ledger"] == "different" {
+		return false, fmt.Errorf("%w: committed usage snapshot differs or has no fingerprint", ErrConflict)
+	}
+	return rows[0]["ledger"] == "same", nil
 }
 
 // checkCommittedUsageSnapshot 在insertEvent发现重复ID后严格核对完整指纹；SQL插入冲突等待并发事务完成，当前事务保证判重后才退款。

@@ -28,6 +28,15 @@ func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
 	}
 	scope := h.openScope(t, h.adminSession(), model)
 	before := h.moneyOf(t, scope)
+	// BEFORE INSERT 会在 ON CONFLICT 去重之前执行。私有 schema 的序列因回滚也不会减小，
+	// 因此可区分「最终账单数正确」和「每个成功调用只尝试一次写入」。
+	if _, err := h.db.Engine.Exec(`CREATE SEQUENCE billed_attempts START 1;
+        CREATE FUNCTION count_billed_attempts() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN PERFORM nextval('billed_attempts'); RETURN NEW; END $$;
+        CREATE TRIGGER count_billed BEFORE INSERT ON usage_events FOR EACH ROW
+          WHEN (NEW.model = 'spool-concurrent-chat') EXECUTE FUNCTION count_billed_attempts()`); err != nil {
+		t.Fatal(err)
+	}
 	// 在上游作答前检查真实队列的在途状态，防止因关闭队列绕过并发故障而误通过。
 	h.onUpstream(model, sync.OnceFunc(func() {
 		if pending, err := h.gw.HasPendingLocalUsage(t.Context()); err != nil || !pending {
@@ -78,6 +87,10 @@ func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
 		if event.Streamed {
 			streamBills++
 		}
+	}
+	var inserts int
+	if _, err := h.db.Engine.SQL("SELECT last_value FROM billed_attempts").Get(&inserts); err != nil || inserts != succeeded {
+		t.Errorf("结算发生冗余写入：成功=%d 实际INSERT尝试=%d err=%v", succeeded, inserts, err)
 	}
 	if len(events) != succeeded || streamBills != streamed {
 		t.Errorf("成功请求与账单条数不一致: 成功=%d 账单=%d 流式成功=%d 流式账单=%d", succeeded, len(events), streamed, streamBills)

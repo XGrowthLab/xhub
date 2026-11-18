@@ -278,7 +278,34 @@ func (db *DB) RecordUsage(ctx context.Context, records []UsageRecord) error {
 // RecordUsageExact 原子结算指定完整快照并严格确认重复内容，供独立磁盘恢复/PG待结算使用。
 // 参数是已冻结账单，返回nil只表示同一快照已提交或核销fence已确认；旧无指纹/冲突返回ErrConflict且不释放占用。
 func (db *DB) RecordUsageExact(ctx context.Context, records []UsageRecord) error {
-	return db.recordUsage(ctx, records, true)
+	// 同一张磁盘和 PG 快照可能分别由准入、前台或恢复提交。只合并完整内容相同的单笔，
+	// 零时间由结算现场冻结，批量提交仍保留原来的事务边界。
+	if len(records) != 1 || records[0].TS.IsZero() {
+		return db.recordUsage(ctx, records, true)
+	}
+	record := records[0]
+	record.TS = record.TS.UTC()
+	key, err := usageFingerprint(record)
+	if err != nil {
+		return err
+	}
+	for ctx.Err() == nil {
+		done := db.exactWrites.DoChan(key, func() (any, error) {
+			err := db.recordUsage(ctx, []UsageRecord{record}, true)
+			return ctx.Err() != nil, err
+		})
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-done:
+			// 其他调用者的上下文结束不能让本请求放弃自己的结算机会。
+			if result.Err != nil && result.Val == true && ctx.Err() == nil {
+				continue
+			}
+			return result.Err
+		}
+	}
+	return ctx.Err()
 }
 
 // recordUsage 共享普通写入与严格恢复事务，exact控制重复快照确认；任何冲突回滚账单、预占和聚合。
@@ -306,14 +333,18 @@ func (db *DB) recordUsage(ctx context.Context, records []UsageRecord, exact bool
 			if resolved {
 				continue
 			}
+			alreadySettled := false
 			if exact {
-				if err := checkPendingUsageSnapshot(s, r); err != nil {
+				alreadySettled, err = exactUsageState(s, r)
+				if err != nil {
 					return err
 				}
-
 			}
 			if err := settleBudgetHold(s, r); err != nil {
 				return err
+			}
+			if alreadySettled {
+				continue
 			}
 			fresh, err := insertEvent(s, r)
 			if err != nil {

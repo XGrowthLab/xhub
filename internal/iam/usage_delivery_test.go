@@ -497,3 +497,48 @@ func TestDeliveryResultRecorded(t *testing.T) {
 		t.Fatalf("损坏快照不得认为已确认: %t %v", got, err)
 	}
 }
+
+// TestAcknowledgePendingUsageRequiresMatchingEvidence 模拟同一请求完成入账后 PG 快照被替换，
+// 验证恢复方报告冲突并保留新证据，仅匹配的快照可删除，并发重复确认幂等；隔离 schema 自动回收。
+func TestAcknowledgePendingUsageRequiresMatchingEvidence(t *testing.T) {
+	db := testDB(t)
+	saved := pendingUsage{RequestID: "changed-after-commit", Payload: `{"Cost":1}`}
+	if _, err := db.Engine.Exec(`INSERT INTO usage_pending (request_id,payload) VALUES (?,?::jsonb)`, saved.RequestID, saved.Payload); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := pendingUsage{RequestID: saved.RequestID, Payload: `{"Cost":2}`}
+	if err := db.acknowledgePendingUsage(t.Context(), conflicting); !errors.Is(err, ErrConflict) {
+		t.Fatalf("错误快照应报告冲突: %v", err)
+	}
+	if n := pendingCount(t, db); n != 1 {
+		t.Fatalf("错误快照删除了持久证据: %d", n)
+	}
+	for range 2 {
+		if err := db.acknowledgePendingUsage(t.Context(), saved); err != nil {
+			t.Fatalf("匹配快照或同内容重复确认失败: %v", err)
+		}
+	}
+	if n := pendingCount(t, db); n != 0 {
+		t.Fatalf("匹配快照未清理: %d", n)
+	}
+}
+
+// TestConfirmedRecoveryNormalizesTimeBeforeAcknowledgement 模拟前台已将标记转为 UTC 的 PG 待结算快照，
+// 然后以相同时刻的非 UTC 磁盘快照恢复，必须只入账一次并真正删除 pending；测试 schema 自动回收。
+func TestConfirmedRecoveryNormalizesTimeBeforeAcknowledgement(t *testing.T) {
+	db := testDB(t)
+	record := usageRecord("spool-time-zone", "", 0.5)
+	record.TS = time.Now().In(time.FixedZone("UTC+08", 8*60*60))
+	if err := db.PrepareDelivery(t.Context(), record, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ConfirmDelivery(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SettleConfirmedDelivery(t.Context(), record); err != nil {
+		t.Fatalf("相同时间的磁盘和 PG 快照未能确认: %v", err)
+	}
+	if pendingCount(t, db) != 0 || countEvents(t, db, record.RequestID) != 1 {
+		t.Fatal("非 UTC 快照恢复后遗留待结算证据或重复入账")
+	}
+}

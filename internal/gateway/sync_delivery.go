@@ -55,10 +55,17 @@ func (s *Server) finishSyncDelivery(ctx context.Context, record iam.UsageRecord,
 	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.IAM.ConfirmDelivery(persistCtx, record); err != nil {
-		util.Error("delivery confirmation failed request=%s: %v", record.RequestID, err)
 		if diskSaved && record.DeliverySpoolOnly && errors.Is(err, iam.ErrDeliveryMarkerGone) {
-			_ = s.FlushLocalUsage(persistCtx)
+			// 另一条恢复路径已接管此标记。只严格结算当前已持久化的终态，
+			// 无需阻塞本次响应去遍历其他请求的整个磁盘队列。
+			if err := s.IAM.SettleConfirmedDelivery(persistCtx, record); err != nil {
+				util.Error("concurrent delivery settlement pending request=%s: %v", record.RequestID, err)
+			} else if err := s.usageSpool.Acknowledge(record); err != nil {
+				util.Error("concurrent delivery acknowledgement failed request=%s: %v", record.RequestID, err)
+			}
+			return
 		}
+		util.Error("delivery confirmation failed request=%s: %v", record.RequestID, err)
 		if !diskSaved && s.Live != nil {
 			// Redis 同时冻结终态和各预算主体的热费用，数据库恢复后再严格核对并确认队列。
 			raw, marshalErr := json.Marshal(record)

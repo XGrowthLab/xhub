@@ -15,6 +15,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/config"
 	dpcontract "github.com/sunqirui1987/xhub/internal/dataplane/contract"
 	"github.com/sunqirui1987/xhub/internal/gateway/billing"
+	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
 	"github.com/sunqirui1987/xhub/internal/util"
 )
@@ -26,6 +27,30 @@ type budgetAttempt struct {
 	SoftPrice     billing.SoftPricePlan
 	TokenOnly     bool
 	SearchBilling bool
+}
+
+// billingPendingCause 将准入恢复错误转为可聚合的安全类别或数据库 SQLSTATE，
+// 仅供内部日志定位失败；不记录原始 SQL、请求正文、账号或连接详情。
+func billingPendingCause(err error) string {
+	var pg interface{ SQLState() string }
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, iam.ErrConflict), errors.Is(err, usagespool.ErrConflict):
+		return "snapshot_conflict"
+	case errors.Is(err, usagespool.ErrCorrupt):
+		return "corrupt_spool"
+	case errors.Is(err, usagespool.ErrFull):
+		return "full_spool"
+	case errors.Is(err, usagespool.ErrUnavailable):
+		return "unavailable_spool"
+	case errors.As(err, &pg):
+		return "postgres_" + pg.SQLState()
+	default:
+		return "other"
+	}
 }
 
 // PrepareBudgetAttempt 为所有模型协议执行软预算准入，不再按输入窗口预占或改写输出上限。
@@ -42,23 +67,29 @@ func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p 
 	}
 	// 尚未持久化的账单不能被当成余额；沿用磁盘队列故障保护，不影响已经放行的调用。
 	if s.usageSpool != nil {
+		stage := "spool_status"
 		state, err := s.usageSpool.Status()
 		// 在途同步标记保留容量但尚无最终账单，不能让每次准入反复解析全部在途文件。
 		if err == nil && state.Replayable > 0 {
+			stage = "spool_replay"
 			err = s.FlushLocalUsage(r.Context())
 		}
 		if err != nil {
+			util.Error("billing admission pending stage=%s cause=%s", stage, billingPendingCause(err))
 			util.WriteTypedError(w, r.URL.Path, 503, "billing_storage_pending", "pending token charges must settle before another request")
 			return nil, false
 		}
 	}
 	// 无Redis时失败账单可能只保存在PG；先恢复，失败才拒绝。
 	// 并发结算会短暂产生正常pending，恢复成功后不能因新出现的在途记录误拒503。
+	stage := "pg_pending_count"
 	pending, err := s.IAM.Engine.Context(r.Context()).Table("usage_pending").Count()
 	if err == nil && pending > 0 {
+		stage = "pg_pending_replay"
 		err = s.IAM.FlushPendingUsage(r.Context(), 100)
 	}
 	if err != nil {
+		util.Error("billing admission pending stage=%s cause=%s", stage, billingPendingCause(err))
 		util.WriteTypedError(w, r.URL.Path, 503, "billing_storage_pending", "pending token charges must settle before another request")
 		return nil, false
 	}

@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/sunqirui1987/xhub/internal/util"
+	"golang.org/x/sync/singleflight"
 	"xorm.io/xorm"
 )
 
@@ -79,6 +81,10 @@ var (
 // read live rows.
 type DB struct {
 	Engine *xorm.Engine
+	// 本机等待者先排队，再借用连接；跨网关仍由数据库事务锁裁决。
+	writeGateOnce sync.Once
+	writeGate     chan struct{}
+	exactWrites   singleflight.Group
 }
 
 // Open connects with the pgx driver and applies the schema. The engine keeps xorm's default time zones — DatabaseTZ and TZLocation both Local — and they must agree with the session zone. xorm formats atime.Time into the database zone on the way in and re-labels the value it reads back into the application zone, while pgx returns the instant in the session zone. Pinning any one of the three to UTC while the others stayed Local made stored timestamps land eight hours off on a UTC+8 machine: created _at and updated_at disagreed with columns PostgreSQL filled in itself, because DEFAULT now() is computed by the server and never passes through this conversion. Setting all three together is what makes the round trip lossless. It matters that the session zone is named explicitly rather than left tothe server, since a server whose zone differs from the machine's would reintroduce the same skew.
@@ -152,6 +158,13 @@ func (db *DB) Close() error { return db.Engine.Close() }
 // 调用：iam/keys.go、iam/teams.go、iam/usage.go、iam/users.go
 // 测试：无直接单测
 func (db *DB) tx(ctx context.Context, fn func(*xorm.Session) error) error {
+	db.writeGateOnce.Do(func() { db.writeGate = make(chan struct{}, 1) })
+	select {
+	case db.writeGate <- struct{}{}:
+		defer func() { <-db.writeGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	s := db.Engine.NewSession().Context(ctx)
 	defer s.Close()
 	if err := s.Begin(); err != nil {

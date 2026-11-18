@@ -136,9 +136,11 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await row.click();
       await expect(page.getByRole("dialog")).toContainText(model);
       await expect(page.getByRole("dialog").getByRole("note")).toContainText(t("logsUX.captureStorageFailed"));
-      // 队列恢复后仍然启用。用唯一提示词同时发送四个正常请求，核对流结束、请求 ID 和所有成功账单。
+      // 恢复后的一批交错普通/SSE请求验证前台结算、并发准入和恢复者可以共享同一账单确认。
+      // 每个请求都产生独立 ID，下面逐笔验证费用、Token 与监控汇总。
       const concurrentIDs = await Promise.all(
-        [false, true, false, true].map(async (stream, index) => {
+        Array.from({ length: 8 }, async (_, index) => {
+          const stream = index % 2 === 1;
           const reply = await page.request.post(GATEWAY + "/v1/chat/completions", {
             headers,
             data: {

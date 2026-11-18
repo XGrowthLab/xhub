@@ -190,10 +190,19 @@ func (db *DB) SettleConfirmedDelivery(ctx context.Context, record UsageRecord) e
 			return fmt.Errorf("%w: delivery marker and ledger are missing", ErrConflict)
 		}
 	}
+	// 前台可能已消费 PG 标记，磁盘仍保留原时区。结算与确认须使用相同的 UTC 快照，
+	// 否则同一时刻的不同 JSON 表示会被误判成两份账单。
+	record.TS = stamp(record.TS)
 	if err := db.RecordUsageExact(ctx, []UsageRecord{record}); err != nil {
 		return err
 	}
-	return db.FlushPendingUsageRequest(ctx, record.RequestID)
+	// 已对本份完整终态严格入账，剩下的动作只是确认匹配的 PG 快照；
+	// 重新读出 pending 再次提交会使每一次磁盘恢复平白增加一笔结算事务。
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return db.acknowledgePendingUsage(ctx, pendingUsage{RequestID: record.RequestID, Payload: string(payload)})
 }
 
 // RecoverExpiredDeliveries 将过期且尚未确认的记录原子转为零费用失败，返回已转移数量和错误。
