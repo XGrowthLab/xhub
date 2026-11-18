@@ -93,7 +93,7 @@ describe("CreateVectorStore", () => {
     expect(providerSelect).toHaveTextContent("Amazon Bedrock");
 
     await user.click(providerSelect);
-    await user.click(await screen.findByText("AWS S3 Vectors"));
+    await user.click(await screen.findByRole("option", { name: /AWS S3 Vectors$/ }));
 
     expect(screen.getByRole("combobox", { name: /Provider/ })).toHaveTextContent("AWS S3 Vectors");
   });
@@ -218,7 +218,7 @@ describe("CreateVectorStore", () => {
   it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
-    const providerSelect = screen.getByRole("combobox");
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
 
     await act(async () => {
       fireEvent.mouseDown(providerSelect);
@@ -230,16 +230,17 @@ describe("CreateVectorStore", () => {
     expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
   });
 
+  /** 打开供应商下拉并选择可交互的 S3 选项，验证专属字段随即出现；仅使用组件夹具，卸载恢复环境。 */
   it("should display S3 Vectors provider-specific fields when selected", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
 
     // Find and click the provider dropdown
-    const providerSelect = screen.getByRole("combobox");
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
 
     await userEvent.click(providerSelect);
 
     // Wait for dropdown options to appear
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await userEvent.click(await screen.findByRole("option", { name: /AWS S3 Vectors$/ }));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
@@ -267,11 +268,11 @@ describe("CreateVectorStore", () => {
     });
 
     // Select S3 Vectors provider
-    const providerSelect = screen.getByRole("combobox");
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
 
     await userEvent.click(providerSelect);
 
-    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
+    await userEvent.click(await screen.findByRole("option", { name: /AWS S3 Vectors$/ }));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
