@@ -10,9 +10,10 @@ import (
 // renameModelGrants 在部署保存事务中衔接组织、团队、项目和 Key 的显式授权。
 // old/new 为公开名，keepOld 表示旧名仍有部署；空授权继承语义不变，不改金额和历史记录。
 // 调用者负责提交和回滚；读取并锁定行，损坏 JSON 或数据库错误使整笔改名回滚。
-func (s *Store) renameModelGrants(tx *xorm.Session, old, name string, keepOld bool) error {
+func renameModelGrants(tx *xorm.Session, old, name string, keepOld bool) error {
 	for _, table := range []string{"organizations", "teams", "projects", "api_keys"} {
-		exists, err := s.Engine.IsTableExist(table)
+		// 表可能随身份模块独立安装；复用事务会话，避免池只有一个连接时等待自身。
+		exists, err := tx.IsTableExist(table)
 		if err != nil {
 			return err
 		}

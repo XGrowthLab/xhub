@@ -275,6 +275,12 @@ type lockedMarketHost struct {
 // LockModels 为管理请求获取模型锁，同时通知测试调用已经开始等待；无额外存储副作用。
 func (h *lockedMarketHost) LockModels() { h.once.Do(func() { close(h.attempted) }); h.mu.Lock() }
 
+// TryLockModels 在调价取得市场事务后通知测试方；实际试取互斥锁，失败立即返回。
+func (h *lockedMarketHost) TryLockModels() bool {
+	h.once.Do(func() { close(h.attempted) })
+	return h.mu.TryLock()
+}
+
 // UnlockModels 释放测试模型锁，由持锁的管理请求调用。
 func (h *lockedMarketHost) UnlockModels() { h.mu.Unlock() }
 
@@ -386,5 +392,96 @@ func TestMarketReadFailureIsServerError(t *testing.T) {
 	New(h, w, req)
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "market catalog unavailable") {
 		t.Fatalf("存储失败应返回 500: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestPriceApplyYieldsOnlyConnectionToEditor 使用唯一 PostgreSQL 连接重现调价与模型编辑的锁竞争。
+// 编辑者持模型锁并写入部署，调价持有过期预览。编辑须能提交，随后调价按版本冲突返回，两个请求均不能占住对方资源。
+// 使用真实配置库存储和管理处理器，取消请求、释放锁并销毁专属 schema。
+func TestPriceApplyYieldsOnlyConnectionToEditor(t *testing.T) {
+	h := &lockedMarketHost{storedModelHost: storedModelHost{st: openPriceStore(t)}, attempted: make(chan struct{})}
+	h.st.DB.SetMaxOpenConns(1)
+	row := map[string]any{}
+	if err := json.Unmarshal([]byte(`{"pricing_rules_v2":[{"details_v2":{"input":{"unit_name":"token","unit_size":1000000,"unit_price_usd":2},"output":{"unit_name":"token","unit_size":1000000,"unit_price_usd":6}}}]}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	doc := catalog.PriceDocument{Models: map[string]map[string]any{"base": row}}
+	if err := h.st.PutConfig(marketSnapshotNS, "catalog", doc); err != nil {
+		t.Fatal(err)
+	}
+	dep := config.ModelEntry{ModelName: "before-edit", LiteLLMParams: map[string]any{"input_cost_per_token": .000001}, ModelInfo: map[string]any{"id": "concurrent", "db_model": true, "base_model": "base", "pricing_source": "manual"}}
+	if err := h.st.UpsertProxyModel(store.ProxyModel{ID: "concurrent", ModelName: dep.ModelName, Params: dep.LiteLLMParams, Info: dep.ModelInfo}); err != nil {
+		t.Fatal(err)
+	}
+	preview := pricePreview(dep, doc)
+	if !preview.Changed || preview.Reason != "" {
+		t.Fatalf("测试必须从一份有效的可调价预览开始: %+v", preview)
+	}
+	h.mu.Lock()
+	req := httptest.NewRequest(http.MethodPost, "/price/deployments/apply", strings.NewReader(fmt.Sprintf(`{"items":[{"id":"concurrent","version":%q}]}`, preview.Version)))
+	resp := httptest.NewRecorder()
+	priceDone := make(chan struct{})
+	go func() {
+		defer close(priceDone)
+		ApplyDeploymentPrices(h, resp, req)
+	}()
+	select {
+	case <-h.attempted:
+	case <-time.After(3 * time.Second):
+		h.mu.Unlock()
+		<-priceDone
+		t.Fatal("调价未进入模型锁竞争")
+	}
+	// 模拟模型编辑路径锁内的真实目录更新，使用有截止时间的 SQL 防止缺陷导致测试永远阻塞。
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	_, err := h.st.DB.ExecContext(ctx, "UPDATE proxy_models SET model_name=$1 WHERE id=$2", "after-edit", "concurrent")
+	cancel()
+	h.mu.Unlock()
+	<-priceDone
+	if err != nil {
+		t.Fatalf("编辑者持模型锁仍无法取得唯一数据库连接: %v", err)
+	}
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("过期调价应返回409，得到 %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestPriceWaitCancellation 验证编辑未结束时取消调价会立即释放市场锁和唯一连接。
+// 使用真实隔离 PostgreSQL，会话取消后仍持模型锁再开启市场事务；测试退出归还互斥锁并清理 schema。
+func TestPriceWaitCancellation(t *testing.T) {
+	h := &lockedMarketHost{storedModelHost: storedModelHost{st: openPriceStore(t)}, attempted: make(chan struct{})}
+	h.st.DB.SetMaxOpenConns(1)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runPriceTransaction(ctx, h, func(*sql.Tx) error {
+			if h.TryLockModels() {
+				h.UnlockModels()
+				return errors.New("调价不应取得编辑者的模型锁")
+			}
+			return errModelEditInProgress
+		})
+	}()
+	select {
+	case <-h.attempted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("调价未进入模型编辑争用")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("取消等待后期望 context.Canceled，得到 %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("调价未响应请求取消")
+	}
+	next, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if err := h.st.MarketTransaction(next, func(*sql.Tx) error { return nil }); err != nil {
+		t.Fatalf("取消后仍占用连接或市场锁: %v", err)
 	}
 }

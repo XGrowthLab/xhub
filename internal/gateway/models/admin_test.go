@@ -27,7 +27,11 @@ func (h *modelTestHost) RequireManage(http.ResponseWriter, *http.Request) *auth.
 func (h *modelTestHost) RecordStore() *store.Store { return nil }
 func (h *modelTestHost) Identity() *iam.DB         { return nil }
 func (h *modelTestHost) LockModels()               {}
-func (h *modelTestHost) UnlockModels()             {}
+
+// TryLockModels 模拟单线程模型宿主的无争用写锁，供测试调价处理器使用，直接返回成功。
+func (h *modelTestHost) TryLockModels() bool { return true }
+
+func (h *modelTestHost) UnlockModels() {}
 func (h *modelTestHost) ModelTable() *[]config.ModelEntry {
 	return &h.models
 }

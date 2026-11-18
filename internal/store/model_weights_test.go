@@ -204,3 +204,35 @@ func TestSaveModelDirectoryLocksLatestTemplateRow(t *testing.T) {
 		t.Fatalf("悬空部署引用未清理: %v", rule)
 	}
 }
+
+// TestModelDirectoryWithOneConnection 验证创建、改名、删除在单连接池中只依赖当前事务。
+// 使用同时含身份表和配置表的隔离 schema；发现嵌套借连接时释放诊断连接、等待事务退出后报错并清理。
+func TestModelDirectoryWithOneConnection(t *testing.T) {
+	st, _ := openModelWeightStores(t)
+	st.DB.SetMaxOpenConns(1)
+	done := make(chan error, 1)
+	go func() {
+		for _, name := range []string{"before", "after"} {
+			row := ProxyModel{ID: "same", ModelName: name, Params: map[string]any{}, Info: map[string]any{}}
+			if err := st.SaveModelDirectory(&row, "", []config.ModelEntry{weightDeployment(name, row.ID)}); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- st.SaveModelDirectory(nil, "same", nil)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("单连接模型目录写入失败: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		stats := st.DB.Stats()
+		st.DB.SetMaxOpenConns(2)
+		if err := st.DB.PingContext(t.Context()); err != nil {
+			t.Fatalf("无法为等待中的测试事务归还诊断连接: %v", err)
+		}
+		<-done
+		t.Fatalf("模型目录事务占用唯一连接时又向池借连接: 使用中=%d 等待次数=%d", stats.InUse, stats.WaitCount)
+	}
+}

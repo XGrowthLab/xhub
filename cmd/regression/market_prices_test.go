@@ -19,6 +19,8 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 	before := catalog.PriceDocument{Version: 1, Models: catalog.CostMap(), Providers: catalog.Providers(), Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt()}
 	t.Cleanup(func() { _, _ = catalog.ApplyDocument(before) })
 	h := newHarness(t)
+	// 配置库只给一个连接，覆盖创建、编辑和批量调价在有限池中使用同一事务的实际路径。
+	h.store.DB.SetMaxOpenConns(1)
 	admin := h.adminSession()
 	v, err := modelcontract.NewValidator(modelcontract.Document)
 	if err != nil {

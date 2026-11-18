@@ -38,6 +38,8 @@ type Host interface {
 	// 测试：无直接单测
 	// 返回：无。模型表已锁上。改表之前调用，必须配 UnlockModels。
 	LockModels()
+	// TryLockModels 尝试获取模型写锁。调价已持数据库连接时调用；失败立即返回，成功后须 UnlockModels。
+	TryLockModels() bool
 	// 放开模型表的写锁。读完或改完部署后必须调用，避免表一直被锁住。
 	// 参数：无。
 	// 返回：无。模型表的写锁已放开。读完或改完部署后必须调用。

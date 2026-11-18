@@ -110,7 +110,7 @@ export function registerSC111() {
     expect((await page.request.delete(GATEWAY + "/schedule/model_cost_map_reload", { headers })).status()).toBe(200);
   });
   /** 真实浏览器确认单个及批量调价，并经网关调用验证费用变化；使用本地上游和独立数据库。
-   * 覆盖英文/中文切换、未确认不写、真实计费及未选部署不变；finally 删除测试部署。 */
+   * 覆盖中英文、取消不写、过期批次整笔回滚和实际计费；finally 删除测试部署。 */
   test("market deployment prices require explicit single or batch confirmation", async ({ page }) => {
     await loginAdmin(page);
     const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
@@ -162,6 +162,12 @@ export function registerSC111() {
         expect(Number.isFinite(amount), "请求必须返回完整、有效的计费金额").toBe(true);
         return amount;
       };
+      // 保存另一名管理员此刻看到的批量预览，用来验证并发提交不会覆盖已确认的价格。
+      const preview = await page.request.get(GATEWAY + "/price/deployments", { headers });
+      expect(preview.status()).toBe(200);
+      const versions = (await preview.json()).deployments as { id: string; version: string }[];
+      const originalItems = versions.filter(({ id }) => ids.includes(id)).map(({ id, version }) => ({ id, version }));
+      expect(originalItems).toHaveLength(2);
       const before = await cost("e2e-price-one", "Before update");
       expect(before).toBeGreaterThan(0);
       await stableGoto(page, "/price-data");
@@ -178,6 +184,11 @@ export function registerSC111() {
       await dialog.getByRole("button", { name: "确认更新价格" }).click();
       await expect(section.getByRole("status")).toHaveText("已更新 1 个部署的价格。");
       expect(await cost("e2e-price-one", "After confirm")).toBeCloseTo(before * 2, 10);
+      const staleBatch = await page.request.post(GATEWAY + "/price/deployments/apply", {
+        headers,
+        data: { items: originalItems },
+      });
+      expect(staleBatch.status(), await staleBatch.text()).toBe(409);
       expect(await cost("e2e-price-two", "Unselected deployment")).toBe(before);
       await page.getByRole("button", { name: "English", exact: true }).click();
       await page.getByRole("tab", { name: "Deployment price updates", exact: true }).click();
