@@ -27,7 +27,7 @@ OverlayDB replaces top-level values, including null/0/false/arrays. MergePatch r
 
 The gateway reads `XHUB_DATABASE_MAX_OPEN_CONNS` at startup. Set a nonnegative integer to limit the number of open connections **per pool**. The IAM and framework storage pools are independent. A value of 25 allows up to 50 pooled connections per gateway process. Additional replicas and other database clients use their own connections. When a pool is full, a query waits until a connection is returned or its context expires. Leaving the variable empty or setting it to 0 preserves the default unlimited pool size. Invalid values stop startup.
 
-`XHUB_DATABASE_MAX_IDLE_CONNS` controls how many previously used, idle connections each pool retains. The default is 16, capped by a finite maximum-open setting. Connections are opened on demand. When the effective idle limit exceeds 2, connections are retired after five minutes of inactivity. Set it to 2 to restore the former two idle connections per pool with no idle timeout, or to 0 to close connections as they are returned.
+`XHUB_DATABASE_MAX_IDLE_CONNS` controls how many previously used, idle connections each pool retains. With no maximum-open limit, the default is 16. With a finite maximum-open limit, the default is the smaller of that limit and 25. Connections are opened on demand. When the effective idle limit exceeds 2, connections are retired after five minutes of inactivity. Set it to 2 to restore the former two idle connections per pool with no idle timeout, or to 0 to close connections as they are returned.
 
 ## Source and verification
 

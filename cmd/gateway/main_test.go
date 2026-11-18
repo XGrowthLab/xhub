@@ -80,11 +80,11 @@ func TestGatewayPoolLimitQueuesAndRecovers(t *testing.T) {
 	}
 	identity.SetMaxOpenConns(3)
 	framework.SetMaxOpenConns(4)
-	limitGatewayPools(0, defaultGatewayIdleConns, identity, framework)
+	limitGatewayPools(0, defaultGatewayIdleConns(0), identity, framework)
 	if identity.Stats().MaxOpenConnections != 3 || framework.Stats().MaxOpenConnections != 4 {
 		t.Fatal("缺省配置意外覆盖池的既有上限")
 	}
-	limitGatewayPools(2, defaultGatewayIdleConns, identity, framework)
+	limitGatewayPools(2, defaultGatewayIdleConns(0), identity, framework)
 	for name, pool := range map[string]*sql.DB{"iam": identity, "framework": framework} {
 		t.Run(name, func(t *testing.T) {
 			if pool.Stats().MaxOpenConnections != 2 {
@@ -234,8 +234,8 @@ func TestGatewayServesWithLimitedPools(t *testing.T) {
 // TestGatewayIdlePolicy 将空闲上限与真实打开连接上限配对，覆盖未限额、显式零、旧默认值及小池。
 // 纯函数返回保留数量和回收时长，无外部资源。环境变量省略时应采用新默认值而非显式零。
 func TestGatewayIdlePolicy(t *testing.T) {
-	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", "", defaultGatewayIdleConns)
-	if err != nil || idle != 16 {
+	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", "", defaultGatewayIdleConns(0))
+	if err != nil || idle != 16 || defaultGatewayIdleConns(1) != 1 || defaultGatewayIdleConns(25) != 25 || defaultGatewayIdleConns(100) != 25 {
 		t.Fatalf("缺省空闲保留数=%d, err=%v", idle, err)
 	}
 	for _, tc := range []struct {

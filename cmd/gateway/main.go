@@ -17,7 +17,14 @@ import (
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
-const defaultGatewayIdleConns = 16
+// defaultGatewayIdleConns 供启动配置处理空闲上限缺省值：未设置连接上限时保留 16 条，
+// 明确限定容量的池按该容量保留、最多 25 条。只配置连接回收，不立即创建连接。
+func defaultGatewayIdleConns(maxOpen int) int {
+	if maxOpen > 0 {
+		return min(25, maxOpen)
+	}
+	return 16
+}
 
 // databasePoolLimit 解析启动时的非负每池上限；空串采用调用方提供的默认值，显式零保留其配置语义。
 // 非整数、负数或溢出只报告参数名，不回显可能被误填的连接串。
@@ -68,7 +75,7 @@ func main() {
 		util.Error("config: %v", err)
 		os.Exit(1)
 	}
-	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", os.Getenv("XHUB_DATABASE_MAX_IDLE_CONNS"), defaultGatewayIdleConns)
+	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", os.Getenv("XHUB_DATABASE_MAX_IDLE_CONNS"), defaultGatewayIdleConns(limit))
 	if err != nil {
 		util.Error("config: %v", err)
 		os.Exit(1)
