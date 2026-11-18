@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 )
 
 // pendingUsage 是数据库待结算快照，供直写路径与后台恢复共享；不包含额外凭据，正文沿用现有脱敏与保存策略。
 type pendingUsage struct {
-	RequestID string `xorm:"request_id"`
-	Payload   string `xorm:"payload"`
+	RequestID  string    `xorm:"request_id"`
+	Payload    string    `xorm:"payload"`
+	observedAt time.Time `xorm:"-"`
 }
 
 // validatePendingUsage 校验可持久化的账单身份与数值；参数为完整快照，返回错误且不写数据库。
@@ -46,6 +48,7 @@ func (db *DB) RecordUsageDurably(ctx context.Context, record UsageRecord) (durab
 	if err != nil {
 		return false, err
 	}
+	saved.observedAt = time.Now()
 	if !found {
 		// 并发恢复者可能已确认；必须精确核对同一快照，不能把别人的同ID记录当作本份持久化。
 		err := db.RecordUsageExact(ctx, []UsageRecord{record})
@@ -71,10 +74,57 @@ func (db *DB) settlePendingUsage(ctx context.Context, saved pendingUsage) error 
 	if err := validatePendingUsage(record); err != nil || record.RequestID != saved.RequestID {
 		return fmt.Errorf("pending usage %s has invalid snapshot", saved.RequestID)
 	}
+	return db.settleObservedPending(ctx, record, saved)
+}
+
+type pendingWrite struct {
+	started  time.Time
+	payload  string
+	done     chan struct{}
+	err      error
+	canceled bool
+}
+
+// settleObservedPending 协调本进程对同一 PG 原始快照的结算、删除与确认，不缓存已结束工作的结果。
+// 只有数据库观察已在领写者开始前结束且原始 JSON 完全相同，才能共用其核对结果；后来者须重新查 PG 证明原快照。
+// 取消只影响自己的等待，领写者取消不会阻止其他请求继续处理。不同快照保持原有独立冲突核对。
+func (db *DB) settleObservedPending(ctx context.Context, record UsageRecord, saved pendingUsage) error {
+	work := &pendingWrite{started: time.Now(), payload: saved.Payload, done: make(chan struct{})}
+	existing, loaded := db.pendingWrites.LoadOrStore(saved.RequestID, work)
+	if !loaded {
+		defer db.pendingWrites.Delete(saved.RequestID)
+		defer close(work.done)
+		work.err = db.settleFrozenPending(ctx, record, saved)
+		work.canceled = ctx.Err() != nil
+		return work.err
+	}
+	prior := existing.(*pendingWrite)
+	if saved.Payload == prior.payload {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-prior.done:
+		}
+		if !saved.observedAt.IsZero() && !saved.observedAt.After(prior.started) && !(prior.canceled && prior.err != nil) {
+			return prior.err
+		}
+		if prior.err == nil {
+			// 后观察的请求不得信任先前成功，即使相同 ID 和正文曾经已付费。
+			verified, err := verifiedPendingReceipts(ctx, db, []pendingUsage{saved})
+			if err == nil && verified[0] {
+				return nil
+			}
+		}
+	}
+	return db.settleFrozenPending(ctx, record, saved)
+}
+
+// settleFrozenPending 严格结算已冻结的完整快照，再按实际保存的 JSON 确认；供定向、扫描与磁盘恢复共用。
+// 账本与删除分开提交，确认失败仍保留已入账事实及原待办，后续恢复无需重算价格。
+func (db *DB) settleFrozenPending(ctx context.Context, record UsageRecord, saved pendingUsage) error {
 	if err := db.RecordUsageExact(ctx, []UsageRecord{record}); err != nil {
 		return err
 	}
-	// 提交后进程退出会留下同一快照；下一实例重放由 RecordUsage 去重后继续确认。
 	return db.acknowledgePendingUsage(ctx, saved)
 }
 
@@ -110,6 +160,7 @@ func (db *DB) FlushPendingUsageRequest(ctx context.Context, requestID string) er
 	if err != nil {
 		return err
 	}
+	saved.observedAt = time.Now()
 	if !found {
 		committed, err := db.Engine.Context(ctx).Table("usage_events").Where("request_id = ?", requestID).Exist()
 		if err != nil {
@@ -134,10 +185,42 @@ func (db *DB) FlushPendingUsage(ctx context.Context, limit int) error {
 	if err := db.Engine.Context(ctx).Table("usage_pending").Asc("created_at", "request_id").Limit(limit).Find(&rows); err != nil {
 		return err
 	}
+	return db.flushObservedPending(ctx, rows, time.Now())
+}
+
+// flushObservedPending 处理一次 SELECT 实际取得的不可变快照；observedAt 为观察结束后的本机时刻。
+// 多调用争用时逐组在 PostgreSQL 证明已结清项，未获证明者保持逐笔重放及独立错误，结束后释放扫描计数。
+func (db *DB) flushObservedPending(ctx context.Context, rows []pendingUsage, observedAt time.Time) error {
+	for i := range rows {
+		rows[i].observedAt = observedAt
+	}
+	const minProbe = 8
+	if len(rows) >= minProbe {
+		db.pendingSweeps.Add(1)
+		defer db.pendingSweeps.Add(-1)
+	}
 	var failures []error
-	for _, row := range rows {
-		if err := db.settlePendingUsage(ctx, row); err != nil {
-			failures = append(failures, fmt.Errorf("pending usage %s: %w", row.RequestID, err))
+	for len(rows) > 0 {
+		// 后续组必须重新取数据库事实：前面一组等待期间，别的恢复者可能已结清其余快照。
+		n := min(len(rows), 32)
+		group := rows[:n]
+		rows = rows[n:]
+		var verified map[int]bool
+		if n >= minProbe && db.pendingSweeps.Load() > 1 {
+			var err error
+			verified, err = verifiedPendingReceipts(ctx, db, group)
+			if err != nil {
+				// 诊断性批查不能让未获证明的记录放行，也不能吞掉原逐笔恢复的错误。
+				verified = nil
+			}
+		}
+		for i, row := range group {
+			if verified[i] {
+				continue
+			}
+			if err := db.settlePendingUsage(ctx, row); err != nil {
+				failures = append(failures, fmt.Errorf("pending usage %s: %w", row.RequestID, err))
+			}
 		}
 	}
 	return errors.Join(failures...)

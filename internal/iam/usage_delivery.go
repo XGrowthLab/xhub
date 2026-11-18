@@ -104,105 +104,139 @@ func UnconfirmedDelivery(record UsageRecord) (UsageRecord, error) {
 
 // stageDelivery 将单条最终快照放入同一事务中的待结算队列；参数是活动事务与已验证账单。
 // 返回持久化或快照冲突错误；相同请求已有不同内容时必须回滚，避免替换原有账单。
-func stageDelivery(s *xorm.Session, record UsageRecord) error {
+func stageDelivery(s *xorm.Session, record UsageRecord) (pendingUsage, error) {
 	payload, err := json.Marshal(record)
 	if err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	if _, err = s.Exec(`INSERT INTO usage_pending(request_id,payload) VALUES (?,?::jsonb) ON CONFLICT(request_id) DO NOTHING`, record.RequestID, string(payload)); err != nil {
-		return err
+		return pendingUsage{}, err
 	}
-	rows, err := s.QueryString(`SELECT payload = CAST(? AS jsonb) AS same FROM usage_pending WHERE request_id = ?`, string(payload), record.RequestID)
+	rows, err := s.QueryString(`SELECT payload = CAST(? AS jsonb) AS same, payload::text AS frozen FROM usage_pending WHERE request_id = ?`, string(payload), record.RequestID)
 	if err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	if len(rows) != 1 || rows[0]["same"] != "true" {
-		return fmt.Errorf("%w: pending delivery snapshot differs", ErrConflict)
+		return pendingUsage{}, fmt.Errorf("%w: pending delivery snapshot differs", ErrConflict)
 	}
-	return nil
+	return pendingUsage{RequestID: record.RequestID, Payload: rows[0]["frozen"]}, nil
+}
+
+// ConfirmedDelivery 是由既有标记事务生成的冻结凭据，只在当前调用内传递，无需再次按 ID 读取公开表。
+// 只允许 ConfirmDeliveryForSettlement 构造；确认失败返回零值，Settle 不接受零凭据。
+type ConfirmedDelivery struct {
+	db    *DB
+	saved pendingUsage
+}
+
+// ConfirmDeliveryForSettlement 原子核对交付标记并保存终态，返回已提交事务实际使用的不可变快照和同一配置库。
+// 同步处理器通过返回值严格结算；失败不产生成功凭据，沿用原有磁盘或 Redis 恢复路径。
+func (db *DB) ConfirmDeliveryForSettlement(ctx context.Context, record UsageRecord) (ConfirmedDelivery, error) {
+	saved, err := db.confirmDelivery(ctx, &record)
+	if err != nil {
+		return ConfirmedDelivery{}, err
+	}
+	return ConfirmedDelivery{db: db, saved: saved}, nil
+}
+
+// Settle 在原配置库严格结算确认事务返回的完整快照；ctx 控制等待，零凭据或快照冲突返回错误。
+// 外部先删除待办仍须按原内容恢复或证明账本一致，不能仅凭 request_id 确认成功。
+func (d ConfirmedDelivery) Settle(ctx context.Context) error {
+	if d.db == nil {
+		return fmt.Errorf("missing confirmed delivery snapshot")
+	}
+	return d.db.settlePendingUsage(ctx, d.saved)
 }
 
 // ConfirmDelivery 将已确认写出或明确写失败的最终账单原子转入待结算队列。
 // 参数 ctx 为数据库上下文，record 为最终快照；返回错误时不删除恢复标记，也不产生部分账单。
 // 记录必须属于原请求的相同密钥和账单归属；结果已被恢复或同 ID 内容冲突时拒绝重复结算。
 func (db *DB) ConfirmDelivery(ctx context.Context, record UsageRecord) error {
-	return db.confirmDelivery(ctx, &record)
+	_, err := db.confirmDelivery(ctx, &record)
+	return err
 }
 
 // confirmDelivery 将最终快照转入待结算队列并回填标记中冻结的时间；参数 record 会被更新。
 // 供确认和恢复路径使用，事务失败保留原标记，不对外泄露请求或响应正文。
-func (db *DB) confirmDelivery(ctx context.Context, record *UsageRecord) error {
+func (db *DB) confirmDelivery(ctx context.Context, record *UsageRecord) (pendingUsage, error) {
 	if err := validatePendingUsage(*record); err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	if record.Cost > 0 && (record.Status != "success" || record.HTTPStatus >= 400) {
-		return fmt.Errorf("invalid delivery charge for failed response")
+		return pendingUsage{}, fmt.Errorf("invalid delivery charge for failed response")
 	}
 	s := db.Engine.NewSession().Context(ctx)
 	defer s.Close()
 	if err := s.Begin(); err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	defer s.Rollback()
 	rows, err := s.QueryString(`SELECT payload::text AS payload FROM usage_delivery_pending WHERE request_id = ? FOR UPDATE`, record.RequestID)
 	if err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	if len(rows) != 1 {
-		return ErrDeliveryMarkerGone
+		return pendingUsage{}, ErrDeliveryMarkerGone
 	}
 	var initial UsageRecord
 	if err := json.Unmarshal([]byte(rows[0]["payload"]), &initial); err != nil {
-		return err
+		return pendingUsage{}, err
 	}
 	if initial.RequestID != record.RequestID || initial.KeyID != record.KeyID || initial.UserID != record.UserID || initial.TeamID != record.TeamID || initial.ProjectID != record.ProjectID || initial.OrganizationID != record.OrganizationID || initial.OwnerType != record.OwnerType || initial.Model != record.Model || (initial.CallType != "" && initial.CallType != record.CallType) || initial.BudgetReservationID != record.BudgetReservationID {
-		return fmt.Errorf("%w: delivery owner differs", ErrConflict)
+		return pendingUsage{}, fmt.Errorf("%w: delivery owner differs", ErrConflict)
 	}
 	// 首次准备时固定发生时间，故障恢复不会把账单移到其他时间范围。
 	record.TS = initial.TS
-	if err := stageDelivery(s, *record); err != nil {
-		return err
+	saved, err := stageDelivery(s, *record)
+	if err != nil {
+		return pendingUsage{}, err
 	}
 	if _, err := s.Exec(`DELETE FROM usage_delivery_pending WHERE request_id = ?`, record.RequestID); err != nil {
-		return err
+		return pendingUsage{}, err
 	}
-	return s.Commit()
+	if err := s.Commit(); err != nil {
+		return pendingUsage{}, err
+	}
+	saved.observedAt = time.Now()
+	return saved, nil
 }
 
 // SettleConfirmedDelivery 恢复已持久化的客户端写出终态；ctx 控制数据库操作，record 为完整冻结快照。
 // 先原子转换待确认标记；仅独立磁盘在断库时保存的快照可在没有标记时创建账单，其他情况必须已存在持久账单。
 // 全量快照由严格指纹核对，冲突保留队列并返回错误，不能伪造确认或重复计费。
 func (db *DB) SettleConfirmedDelivery(ctx context.Context, record UsageRecord) error {
-	if err := db.confirmDelivery(ctx, &record); err != nil {
-		if !errors.Is(err, ErrDeliveryMarkerGone) {
-			return err
-		}
-		pending, err := db.Engine.Context(ctx).Table("usage_pending").Where("request_id = ?", record.RequestID).Exist()
-		if err != nil {
-			return err
-		}
-		committed, err := db.Engine.Context(ctx).Table("usage_events").Where("request_id = ?", record.RequestID).Exist()
-		if err != nil {
-			return err
-		}
-		if !pending && !committed && !record.DeliverySpoolOnly {
-			// 标记和账本均缺失是不可自行恢复的确定性冲突，保留快照并允许队列轮转。
-			return fmt.Errorf("%w: delivery marker and ledger are missing", ErrConflict)
-		}
+	saved, err := db.confirmDelivery(ctx, &record)
+	if err == nil {
+		return db.settleObservedPending(ctx, record, saved)
 	}
-	// 前台可能已消费 PG 标记，磁盘仍保留原时区。结算与确认须使用相同的 UTC 快照，
-	// 否则同一时刻的不同 JSON 表示会被误判成两份账单。
-	record.TS = stamp(record.TS)
-	if err := db.RecordUsageExact(ctx, []UsageRecord{record}); err != nil {
+	if !errors.Is(err, ErrDeliveryMarkerGone) {
 		return err
 	}
-	// 已对本份完整终态严格入账，剩下的动作只是确认匹配的 PG 快照；
-	// 重新读出 pending 再次提交会使每一次磁盘恢复平白增加一笔结算事务。
-	payload, err := json.Marshal(record)
+	// 另一份 PG 或磁盘记录可以持有同一时刻的其他时区表示；精确核对统一使用冻结的 UTC。
+	record.TS = stamp(record.TS)
+	raw, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
-	return db.acknowledgePendingUsage(ctx, pendingUsage{RequestID: record.RequestID, Payload: string(payload)})
+	// 在一次真实查询中核对恢复依据，返回相同待办的 PG 原文，便于和正在工作的前台共享同一观察。
+	// 发现不同待办仍交给原有严格核对，包含人工核销与原预占，不用 ID 替代计费证据。
+	rows, err := db.Engine.Context(ctx).QueryString(`SELECT COALESCE((SELECT payload::text FROM usage_pending WHERE request_id=?), '') AS pending,
+		EXISTS(SELECT 1 FROM usage_events WHERE request_id=?) AS committed,
+		EXISTS(SELECT 1 FROM usage_pending WHERE request_id=? AND payload=?::jsonb) AS same`, record.RequestID, record.RequestID, record.RequestID, string(raw))
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 {
+		return fmt.Errorf("missing delivery settlement state")
+	}
+	if rows[0]["pending"] == "" && rows[0]["committed"] != "true" && !record.DeliverySpoolOnly {
+		return fmt.Errorf("%w: delivery marker and ledger are missing", ErrConflict)
+	}
+	saved = pendingUsage{RequestID: record.RequestID, Payload: string(raw), observedAt: time.Now()}
+	if rows[0]["same"] == "true" {
+		saved.Payload = rows[0]["pending"]
+	}
+	return db.settleObservedPending(ctx, record, saved)
 }
 
 // RecoverExpiredDeliveries 将过期且尚未确认的记录原子转为零费用失败，返回已转移数量和错误。
@@ -279,7 +313,7 @@ func (db *DB) RecoverExpiredDeliveriesGuarded(ctx context.Context, now time.Time
 			}
 			continue
 		}
-		if err := stageDelivery(s, record); err != nil {
+		if _, err := stageDelivery(s, record); err != nil {
 			return 0, err
 		}
 		if _, err := s.Exec(`DELETE FROM usage_delivery_pending WHERE request_id = ?`, record.RequestID); err != nil {

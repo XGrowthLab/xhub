@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -86,6 +87,8 @@ type DB struct {
 	writeGate     chan struct{}
 	exactWrites   singleflight.Group
 	userWrites    userUsageBatches
+	pendingSweeps atomic.Int32
+	pendingWrites sync.Map
 }
 
 // Open connects with the pgx driver and applies the schema. The engine keeps xorm's default time zones — DatabaseTZ and TZLocation both Local — and they must agree with the session zone. xorm formats atime.Time into the database zone on the way in and re-labels the value it reads back into the application zone, while pgx returns the instant in the session zone. Pinning any one of the three to UTC while the others stayed Local made stored timestamps land eight hours off on a UTC+8 machine: created _at and updated_at disagreed with columns PostgreSQL filled in itself, because DEFAULT now() is computed by the server and never passes through this conversion. Setting all three together is what makes the round trip lossless. It matters that the session zone is named explicitly rather than left tothe server, since a server whose zone differs from the machine's would reintroduce the same skew.
