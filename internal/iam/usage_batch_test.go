@@ -208,7 +208,12 @@ func TestUserUsageBatchFaultIsolation(t *testing.T) {
 	if _, err = db.Engine.Exec("ALTER TABLE request_logs DROP CONSTRAINT reject_batch_entry"); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(t.Context(), db.Engine.DataSourceName())
+	dsn := db.Engine.DataSourceName()
+	waitUserBatchIdle(t, db, u.ID)
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +226,7 @@ func TestUserUsageBatchFaultIsolation(t *testing.T) {
 	}
 }
 
-// BenchmarkUserUsageBatch 在独立 PostgreSQL schema 内对比同一用户的逐笔和并发合批；每笔有独立请求 ID。
+// BenchmarkUserUsageBatch 在独立 PostgreSQL schema 内对比同一用户的逐笔和并发合批；每笔更新实际五层消费并使用独立请求 ID。
 // 去掉准备、结算核验及清理耗时；每轮校验写入笔数并报告每事务账单数，数据库和连接由基准夹具回收。
 func BenchmarkUserUsageBatch(b *testing.B) {
 	for _, batch := range []bool{false, true} {
@@ -235,7 +240,23 @@ func BenchmarkUserUsageBatch(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.Cleanup(func() { _ = db.Close() })
-			u, err := db.CreateUser(b.Context(), Actor{}, UserInput{Email: "bench@example.com", Password: "password123"})
+			org, err := db.CreateOrg(b.Context(), Actor{}, "bench-org", nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			team, err := db.CreateTeam(b.Context(), Actor{}, TeamInput{OrganizationID: org.ID, Name: "bench-team"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			project, err := db.CreateProject(b.Context(), Actor{}, ProjectInput{TeamID: team.ID, Name: "bench-project"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			u, err := db.CreateUser(b.Context(), Actor{}, UserInput{Email: "bench@example.com", Password: "password123", TeamID: team.ID})
+			if err != nil {
+				b.Fatal(err)
+			}
+			key, _, err := db.CreateKey(b.Context(), Actor{}, KeyInput{OwnerType: OwnerPersonal, UserID: u.ID, TeamID: team.ID, ProjectID: project.ID})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -244,6 +265,7 @@ func BenchmarkUserUsageBatch(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
 					r := usageRecord(fmt.Sprintf("bench-%d", seq.Add(1)), u.ID, .000062)
+					r.OrganizationID, r.TeamID, r.ProjectID, r.KeyID = org.ID, team.ID, project.ID, key.ID
 					var err error
 					if batch {
 						err = db.recordUserUsage(b.Context(), r)
