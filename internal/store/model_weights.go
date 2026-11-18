@@ -36,7 +36,7 @@ func (s *Store) SaveModelDirectory(entry *ProxyModel, deletedID string, director
 					keepOld = true
 				}
 			}
-			if err := s.renameModelGrants(tx, old.ModelName, entry.ModelName, keepOld); err != nil {
+			if err := renameModelGrants(tx, old.ModelName, entry.ModelName, keepOld); err != nil {
 				return err
 			}
 		}
@@ -101,8 +101,8 @@ func (s *Store) SaveModelDirectory(entry *ProxyModel, deletedID string, director
 			}
 		}
 	}
-	// 框架存储也可独立使用；身份表存在时才同步清理客户模板，仍使用同一数据库事务。
-	hasTemplates, err := s.Engine.IsTableExist(new(iam.RouteTemplate))
+	// 独立存储可能没有身份表；连同存在性检查一起复用当前事务连接，避免池满时等待自身。
+	hasTemplates, err := tx.IsTableExist(new(iam.RouteTemplate))
 	if err != nil {
 		return err
 	}

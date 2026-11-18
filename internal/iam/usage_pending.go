@@ -75,8 +75,28 @@ func (db *DB) settlePendingUsage(ctx context.Context, saved pendingUsage) error 
 		return err
 	}
 	// 提交后进程退出会留下同一快照；下一实例重放由 RecordUsage 去重后继续确认。
-	_, err := db.Engine.Context(ctx).Exec(`DELETE FROM usage_pending WHERE request_id = ? AND payload = ?::jsonb`, saved.RequestID, saved.Payload)
-	return err
+	return db.acknowledgePendingUsage(ctx, saved)
+}
+
+// acknowledgePendingUsage 在严格入账后删除完全相同的待结算快照，供 PG 与磁盘恢复共用。
+// 同步或后台结算可以先一步确认；若同一请求已被不同快照替换，返回冲突并保留新证据。
+func (db *DB) acknowledgePendingUsage(ctx context.Context, saved pendingUsage) error {
+	result, err := db.Engine.Context(ctx).Exec(`DELETE FROM usage_pending WHERE request_id = ? AND payload = ?::jsonb`, saved.RequestID, saved.Payload)
+	if err != nil {
+		return err
+	}
+	removed, err := result.RowsAffected()
+	if err != nil || removed > 0 {
+		return err
+	}
+	conflict, err := db.Engine.Context(ctx).Table("usage_pending").Where("request_id = ? AND payload <> ?::jsonb", saved.RequestID, saved.Payload).Exist()
+	if err != nil {
+		return err
+	}
+	if conflict {
+		return fmt.Errorf("%w: pending usage snapshot changed before acknowledgement", ErrConflict)
+	}
+	return nil
 }
 
 // FlushPendingUsageRequest 仅结算指定请求的持久快照；ctx 控制数据库操作，requestID 为非空调用标识。

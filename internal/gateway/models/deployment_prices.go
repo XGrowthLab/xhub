@@ -152,6 +152,34 @@ func DeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 
 var errPriceConflict = errors.New("price or deployment changed; reload preview")
 var errMarketRead = errors.New("market catalog unavailable")
+var errModelEditInProgress = errors.New("model edit in progress")
+
+// runPriceTransaction 在市场同步锁下执行 apply；若编辑者正持模型锁，让出数据库连接再试。
+// 调价入口传入有截止时间的 ctx 和宿主；只重试尚未写入的争用，保留真实事务错误与取消信号。
+func runPriceTransaction(ctx context.Context, s Host, apply func(*sql.Tx) error) error {
+	err := s.RecordStore().MarketTransaction(ctx, apply)
+	if !errors.Is(err, errModelEditInProgress) {
+		return err
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			// 编辑期间不反复开启数据库事务；两次试锁之间发生的新编辑由事务回调重新核对。
+			if !s.TryLockModels() {
+				continue
+			}
+			s.UnlockModels()
+			err = s.RecordStore().MarketTransaction(ctx, apply)
+			if !errors.Is(err, errModelEditInProgress) {
+				return err
+			}
+		}
+	}
+}
 
 // ApplyDeploymentPrices 在管理员确认后原子应用选定价格；body 仅接受 ID 和预览版本，绝不信任客户端金额。
 // 输入宿主和 HTTP 请求，返回更新数量；任何冲突/不可用条目使整批回滚，权限预算和其他部署字段不变。
@@ -181,7 +209,7 @@ func ApplyDeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 		util.WriteError(w, 503, "unavailable", "model store unavailable")
 		return
 	}
-	// 先等待市场事务锁，再拿模型锁，避免慢来源阻塞推理；保留模型锁直到事务提交和内存更新。
+	// 市场同步可以等待，模型锁只能试取；两把锁都拿到后持续保护数据库提交和内存发布。
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	locked := false
@@ -191,8 +219,11 @@ func ApplyDeploymentPrices(s Host, w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	changed := map[string]config.ModelEntry{}
-	err := s.RecordStore().MarketTransaction(ctx, func(tx *sql.Tx) error {
-		s.LockModels()
+	err := runPriceTransaction(ctx, s, func(tx *sql.Tx) error {
+		// 模型编辑可能持锁等待本事务的连接；先回滚归还连接，重试会重新读取市场与部署版本。
+		if !s.TryLockModels() {
+			return errModelEditInProgress
+		}
 		locked = true
 		doc, err := marketDocument(ctx, tx)
 		if err != nil {

@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/sunqirui1987/xhub/internal/auth"
 	"github.com/sunqirui1987/xhub/internal/config"
+	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
 
@@ -124,6 +126,24 @@ func TestPricingFailureCode(t *testing.T) {
 	} {
 		if got := pricingFailureCode(tc.err); got != tc.want {
 			t.Fatalf("原因码错误 %q want %q", got, tc.want)
+		}
+	}
+}
+
+// TestBillingPendingCause 验证准入诊断可区分超时、冲突及数据库失败，包装错误中的私有内容不能进入分类。
+// 测试只提供合成错误与 SQLSTATE，不连接外部存储，无数据需要清理。
+func TestBillingPendingCause(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{context.DeadlineExceeded, "deadline"}, {context.Canceled, "canceled"},
+		{iam.ErrConflict, "snapshot_conflict"}, {usagespool.ErrConflict, "snapshot_conflict"}, {usagespool.ErrCorrupt, "corrupt_spool"},
+		{usagespool.ErrFull, "full_spool"}, {usagespool.ErrUnavailable, "unavailable_spool"},
+		{&pgconn.PgError{Code: "40001", Message: "private detail"}, "postgres_40001"}, {fmt.Errorf("private detail"), "other"},
+	} {
+		if got := billingPendingCause(fmt.Errorf("private wrapper: %w", tc.err)); got != tc.want {
+			t.Errorf("错误诊断分类不符合预期: got=%s want=%s", got, tc.want)
 		}
 	}
 }

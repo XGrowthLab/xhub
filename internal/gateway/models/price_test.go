@@ -38,6 +38,9 @@ func (h *priceHost) Identity() *iam.DB { return nil }
 
 func (h *priceHost) LockModels() {}
 
+// TryLockModels 供单线程价格测试使用，无参数和副作用，始终成功。
+func (h *priceHost) TryLockModels() bool { return true }
+
 func (h *priceHost) UnlockModels() {}
 
 func (h *priceHost) ModelTable() *[]config.ModelEntry { return &[]config.ModelEntry{} }

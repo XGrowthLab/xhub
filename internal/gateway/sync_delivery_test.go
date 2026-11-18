@@ -310,3 +310,45 @@ func TestUnknownDiskRecoveryRequiresConfirmationSource(t *testing.T) {
 		})
 	}
 }
+
+// TestFinishSyncDeliveryOnlySettlesConfirmedRequest 模拟后台已替前台确认当前请求且磁盘有另一份待处理快照；
+// 前台应精确完成自己的账单，其他请求的快照保留给恢复器；私有 PG 与独占临时目录自动回收。
+func TestFinishSyncDeliveryOnlySettlesConfirmedRequest(t *testing.T) {
+	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
+	db := testIdentityStore(t)
+	s := &Server{IAM: db}
+	s.initializeUsageSpool()
+	t.Cleanup(func() { _ = s.CloseUsageSpool() })
+	rec := iam.UsageRecord{RequestID: "foreground", TS: time.Now().UTC(), Model: "test", Status: "success", HTTPStatus: 200, Cost: 0.25, DeliveryPending: true, DeliverySpoolOnly: true}
+	if err := db.PrepareDelivery(t.Context(), rec, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := iam.UnconfirmedDelivery(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.DeliveryUnconfirmed = true
+	if err := s.usageSpool.BeginDelivery(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ConfirmDelivery(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	later := iam.UsageRecord{RequestID: "unrelated", TS: time.Now().UTC(), Model: "test", Status: "success", HTTPStatus: 200, Cost: 0.5}
+	if err := s.usageSpool.Put(later); err != nil {
+		t.Fatal(err)
+	}
+	s.finishSyncDelivery(t.Context(), rec, nil)
+	event, err := db.GetUsageEvent(t.Context(), iam.UsageQuery{}, rec.RequestID)
+	if err != nil || event.Cost != rec.Cost {
+		t.Fatalf("当前账单未精确入账: %+v %v", event, err)
+	}
+	st, err := s.usageSpool.Status()
+	if err != nil || st.Pending != 1 {
+		t.Fatalf("前台不应遍历并结算其他请求: %+v %v", st, err)
+	}
+	n, err := db.Engine.Table("usage_events").Where("request_id=?", later.RequestID).Count()
+	if err != nil || n != 0 {
+		t.Fatalf("其他请求应仍由其恢复者结算: %d %v", n, err)
+	}
+}

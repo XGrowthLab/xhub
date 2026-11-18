@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sunqirui1987/xhub/internal/iam"
@@ -569,5 +571,574 @@ func TestDeliveryMarkerRejectsInvalidAndCorruptTransitions(t *testing.T) {
 	}
 	if status, err := s.Status(); err != nil || status.Pending != 0 {
 		t.Fatalf("确认后仍有残留: status=%+v err=%v", status, err)
+	}
+}
+
+// replayWaitContext 让测试获知等待者已经进入 Replay 的可取消等待，无需用睡眠推断调度顺序。
+type replayWaitContext struct {
+	context.Context
+	entered chan struct{}
+	steps   chan struct{}
+	once    sync.Once
+}
+
+// Done 返回原上下文的取消通知；首次监听时通知测试线程，渠道仅用于该测试实例。
+func (c *replayWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	if c.steps != nil {
+		c.steps <- struct{}{}
+	}
+	return c.Context.Done()
+}
+
+// TestReplaySharesOnlyCoveredWork 用阻塞提交器模拟前后台同轮恢复，验证每份只提交一次、
+// 新发布的文件能被等待者观察，取消不影响持有者，失败原样返回；独占临时目录自动关闭清理。
+func TestReplaySharesOnlyCoveredWork(t *testing.T) {
+	for _, mode := range []string{"same", "new-record", "bounded-batch", "cancel", "failure", "failure-with-new-record", "panic"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			if err := s.Put(spoolRecord("one")); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "bounded-batch" {
+				if err := s.Put(spoolRecord("two")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			started, resume := make(chan struct{}), make(chan struct{})
+			persistErr := errors.New("fixture could not commit")
+			first := make(chan error, 1)
+			go func() {
+				if mode == "panic" {
+					defer func() {
+						if recover() == persistErr {
+							first <- persistErr
+						}
+					}()
+				}
+				limit := 8
+				if mode == "bounded-batch" {
+					limit = 1
+				}
+				_, err := s.Replay(t.Context(), limit, func(context.Context, iam.UsageRecord) error {
+					close(started)
+					<-resume
+					if mode == "panic" {
+						panic(persistErr)
+					}
+					if mode == "failure" || mode == "failure-with-new-record" {
+						return persistErr
+					}
+					return nil
+				})
+				first <- err
+			}()
+			<-started
+			if mode == "new-record" || mode == "failure-with-new-record" {
+				if err := s.Put(spoolRecord("new")); err != nil {
+					close(resume)
+					t.Fatal(err)
+				}
+			}
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w := &replayWaitContext{Context: base, entered: make(chan struct{})}
+			type result struct {
+				n   int
+				err error
+			}
+			follower := make(chan result, 1)
+			var commits atomic.Int32
+			go func() {
+				n, err := s.Replay(w, 8, func(context.Context, iam.UsageRecord) error { commits.Add(1); return nil })
+				follower <- result{n, err}
+			}()
+			<-w.entered
+			if mode == "cancel" {
+				cancel()
+				if got := <-follower; got.n != 0 || !errors.Is(got.err, context.Canceled) {
+					t.Errorf("取消的等待者未退出: %+v", got)
+				}
+			}
+			close(resume)
+			err := <-first
+			if mode == "panic" {
+				got := <-follower
+				if err != persistErr || !errors.Is(got.err, ErrUnavailable) {
+					t.Fatalf("提交异常未唤醒等待者: %v %+v", err, got)
+				}
+				n, err := s.Replay(t.Context(), 1, func(context.Context, iam.UsageRecord) error { return nil })
+				if err != nil || n != 1 {
+					t.Fatalf("异常后的快照未可重放: %d %v", n, err)
+				}
+				return
+			}
+			if mode == "failure" || mode == "failure-with-new-record" {
+				got := <-follower
+				if !errors.Is(err, persistErr) || !errors.Is(got.err, persistErr) || commits.Load() != 0 {
+					t.Fatalf("等待者未共享失败: %v %+v", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "cancel" {
+				return
+			}
+			want := 0
+			if mode == "new-record" || mode == "bounded-batch" {
+				want = 1
+			}
+			if got := <-follower; got.err != nil || got.n != want || int(commits.Load()) != want {
+				t.Fatalf("等待者重复提交或遗漏新工作: %+v 写入=%d 期望=%d", got, commits.Load(), want)
+			}
+		})
+	}
+}
+
+// TestReplayWaitDoesNotChaseFutureWrites 固定请求到达时的快照水位，控制两个并行批次的完成顺序，
+// 验证后来持续到达的快照不会迫使旧请求等第三个批次或继承其失败；所有文件由临时目录清理。
+func TestReplayWaitDoesNotChaseFutureWrites(t *testing.T) {
+	s := openSpool(t, Config{})
+	if err := s.Put(spoolRecord("admitted")); err != nil {
+		t.Fatal(err)
+	}
+	first := &replayBatch{generation: 0, done: make(chan struct{})}
+	second := &replayBatch{generation: s.generation, done: make(chan struct{})}
+	third := &replayBatch{done: make(chan struct{}), err: errors.New("later batch failed")}
+	s.replaying = first
+	ctx := &replayWaitContext{Context: t.Context(), entered: make(chan struct{}), steps: make(chan struct{}, 3)}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Replay(ctx, 10, func(context.Context, iam.UsageRecord) error {
+			return errors.New("waiter unexpectedly started a new batch")
+		})
+		done <- err
+	}()
+	<-ctx.steps
+	if err := s.Put(spoolRecord("newer")); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	first.exhausted = true
+	s.replaying = second
+	close(first.done)
+	s.mu.Unlock()
+	<-ctx.steps
+	s.mu.Lock()
+	second.exhausted = true
+	s.replaying = third
+	close(third.done)
+	close(second.done)
+	s.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("当前请求误等待后来才发布的账单: %v", err)
+	}
+}
+
+// awaitAdmissionTickets 等待指定数量的准入调用真实地进入临界区之前的取票阶段；
+// 调用方暂持 mu 或阻塞探针。超时报告实际票数，不用固定睡眠猜测调度顺序。
+func awaitAdmissionTickets(t *testing.T, s *Spool, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.admissionTicket.Load() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("等待准入取票超时: 已进入 %d，期望 %d", s.admissionTicket.Load(), want)
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestReserveOnlySharesOverlappingProbes 用真实磁盘探针及已取票的并发请求检查复用次数。
+// 每笔仍独立检查字节、条数、权限、隔离区；失败探针后必须重试。临时目录、权限和预留由夹具回收。
+func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		config                  Config
+		wantProbes, wantAllowed int
+		wantErr                 error
+	}{
+		{"overlap", Config{}, 1, 4, nil},
+		{"probe-failure", Config{}, 2, 3, ErrUnavailable},
+		{"entry-cap", Config{MaxEntries: 2}, 1, 2, ErrFull},
+		{"byte-cap", Config{MaxBytes: 8192, MaxRecordBytes: 4096}, 1, 2, ErrFull},
+		{"directory-permissions", Config{}, 1, 1, ErrUnavailable},
+		{"quarantine", Config{}, 1, 1, ErrCorrupt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openSpool(t, tc.config)
+			defer os.Chmod(s.config.Dir, 0700)
+			probes := 0
+			probe := func() error {
+				probes++ // 探针由同一把目录锁串行执行。
+				if tc.name == "probe-failure" && probes == 1 {
+					return ErrUnavailable
+				}
+				if err := s.probeWritableLocked(); err != nil {
+					return err
+				}
+				if probes == 1 {
+					switch tc.name {
+					case "directory-permissions":
+						return os.Chmod(s.config.Dir, 0500)
+					case "quarantine":
+						return os.WriteFile(filepath.Join(s.config.Dir, "quarantine", "corrupt"), []byte("fixture"), 0600)
+					}
+				}
+				return nil
+			}
+			results := make(chan error, 4)
+			func() {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				for i := range 4 {
+					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), probe) }()
+				}
+				awaitAdmissionTickets(t, s, 4)
+			}()
+			allowed := 0
+			for range 4 {
+				err := <-results
+				if err == nil {
+					allowed++
+					continue
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Errorf("准入拒绝类型错误: got=%v want=%v", err, tc.wantErr)
+				}
+			}
+			if probes != tc.wantProbes || allowed != tc.wantAllowed || len(s.reserved) != allowed {
+				t.Fatalf("探针或预留数量错误: probes=%d allowed=%d reserved=%d", probes, allowed, len(s.reserved))
+			}
+		})
+	}
+}
+
+// TestReserveRequiresProbeStartedAfterArrival 让新请求在前一个探针已经开始、尚未完成时取票，
+// 验证它要获得下一次真实探针；之后单独调用也要实测。独立队列自动关闭并清理。
+func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
+	s := openSpool(t, Config{})
+	started, allow := make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	first := make(chan error, 1)
+	go func() {
+		first <- s.reserve("earlier", func() error {
+			probes.Add(1)
+			close(started)
+			<-allow
+			return s.probeWritableLocked()
+		})
+	}()
+	<-started
+	second := make(chan error, 1)
+	probe := func() error { probes.Add(1); return s.probeWritableLocked() }
+	go func() { second <- s.reserve("during-probe", probe) }()
+	func() {
+		defer close(allow)
+		awaitAdmissionTickets(t, s, 2)
+	}()
+	if a, b := <-first, <-second; a != nil || b != nil || probes.Load() != 2 {
+		t.Fatalf("探针开始后进入的请求复用了旧探针: first=%v second=%v probes=%d", a, b, probes.Load())
+	}
+	if err := s.reserve("later", probe); err != nil || probes.Load() != 3 {
+		t.Fatalf("空闲后单次调用未重新探测: err=%v probes=%d", err, probes.Load())
+	}
+}
+
+// TestSpoolErrorInvalidatesSharedProbe 在成功探针后制造一次真实确认冲突，再正常持久化一份新快照。
+// 验证成功的其他写入无法清除故障后必须重新探针的要求；隔离文件及记录随临时目录回收。
+func TestSpoolErrorInvalidatesSharedProbe(t *testing.T) {
+	s := openSpool(t, Config{})
+	original := spoolRecord("original")
+	if err := s.Put(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reserve("earlier"); err != nil || s.probedThrough == 0 {
+		t.Fatalf("缺少成功的实际探针: %v", err)
+	}
+	different := original
+	different.Cost++
+	if err := s.Acknowledge(different); !errors.Is(err, ErrConflict) {
+		t.Fatalf("错误确认未被拒绝: %v", err)
+	}
+	if err := s.Put(spoolRecord("another")); err != nil {
+		t.Fatal(err)
+	}
+	if s.probedThrough != 0 {
+		t.Fatal("中途确认失败后仍可复用早先探针")
+	}
+	if err := s.Reserve("after-recovery"); err != nil || s.probedThrough == 0 {
+		t.Fatalf("独立探针未能恢复: %v", err)
+	}
+}
+
+// TestReplayFreezesOnlyEligibleSnapshots 在批处理内同时观察一份可重放账单与一份在途同步标记，
+// 验证后来确认的终态只归下轮、损坏的在途文件仍被第一遍检查隔离；独占临时目录自动回收。
+func TestReplayFreezesOnlyEligibleSnapshots(t *testing.T) {
+	for _, mode := range []string{"publish-final", "still-unconfirmed", "corrupt-active"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			ready := spoolRecord("ready")
+			active := spoolRecord("active")
+			active.Status, active.HTTPStatus = "success", 200
+			active.DeliveryPending, active.DeliverySpoolOnly = true, true
+			marker, err := iam.UnconfirmedDelivery(active)
+			if err != nil {
+				t.Fatal(err)
+			}
+			marker.DeliveryUnconfirmed = true
+			if err := s.Put(ready); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.BeginDelivery(marker); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "corrupt-active" {
+				if err := os.WriteFile(filepath.Join(s.config.Dir, basename(active.RequestID)), []byte("invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			n, err := s.Replay(t.Context(), 10, func(_ context.Context, r iam.UsageRecord) error {
+				if r.RequestID != ready.RequestID {
+					return fmt.Errorf("初始批次错误接管 %s", r.RequestID)
+				}
+				s.mu.Lock()
+				registered := s.replaying.pending[basename(active.RequestID)]
+				s.mu.Unlock()
+				if registered {
+					return errors.New("在途请求被错误登记为本批终态")
+				}
+				if mode == "publish-final" {
+					return s.CompleteDelivery(active)
+				}
+				return nil
+			})
+			if err != nil || n != 1 {
+				t.Fatalf("原批次处理数或回放结果错误: %d %v", n, err)
+			}
+			status, err := s.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "publish-final":
+				if status.Replayable != 1 {
+					t.Fatalf("新终态未保留给下轮: %+v", status)
+				}
+				n, err = s.Replay(t.Context(), 10, func(_ context.Context, r iam.UsageRecord) error {
+					if r.RequestID != active.RequestID || r.DeliveryUnconfirmed {
+						return errors.New("未取得已发布的终态")
+					}
+					return nil
+				})
+				if n != 1 || err != nil {
+					t.Fatalf("下一轮未恢复终态: %d %v", n, err)
+				}
+			case "still-unconfirmed":
+				if status.Pending != 1 || status.Replayable != 0 {
+					t.Fatalf("在途快照被提前清理或结算: %+v", status)
+				}
+			case "corrupt-active":
+				if status.Quarantined != 1 || !errors.Is(s.Reserve("next"), ErrCorrupt) {
+					t.Fatalf("损坏在途证据未隔离或准入未阻止: %+v", status)
+				}
+			}
+		})
+	}
+}
+
+// TestReplayDeadlineRequiresDurableAcknowledgement 在第一个回调内过期上下文并改变第二笔的状态，
+// 验证完全确认的批次可结束，有存储失败、未结算、外部丢失或隔离时不能伪造成功。临时证据随测试清理。
+func TestReplayDeadlineRequiresDurableAcknowledgement(t *testing.T) {
+	for _, mode := range []string{"all-acknowledged", "pending", "commit-failure", "externally-removed", "quarantined"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				a, b := spoolRecord("a"), spoolRecord("b")
+				for _, r := range []iam.UsageRecord{a, b} {
+					if err := s.Put(r); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				calls := 0
+				persistErr := errors.New("fixture storage commit failed")
+				n, err := s.Replay(ctx, 10, func(_ context.Context, r iam.UsageRecord) error {
+					calls++
+					other := a
+					if r.RequestID == a.RequestID {
+						other = b
+					}
+					switch mode {
+					case "all-acknowledged", "commit-failure":
+						if err := s.Acknowledge(other); err != nil {
+							return err
+						}
+					case "externally-removed":
+						if err := os.Remove(filepath.Join(s.config.Dir, basename(other.RequestID))); err != nil {
+							return err
+						}
+					case "quarantined":
+						s.mu.Lock()
+						err := s.quarantineLocked(basename(other.RequestID))
+						s.mu.Unlock()
+						if err != nil {
+							return err
+						}
+					}
+					<-ctx.Done()
+					if mode == "commit-failure" {
+						return persistErr
+					}
+					return nil
+				})
+				if calls != 1 {
+					t.Fatalf("过期后仍然进行了额外回放: %d", calls)
+				}
+				switch mode {
+				case "all-acknowledged":
+					if n != 1 || err != nil {
+						t.Fatalf("两笔均确认后错误报告超时: %d %v", n, err)
+					}
+				case "commit-failure":
+					if n != 0 || !errors.Is(err, persistErr) {
+						t.Fatalf("自身入账失败被忽略: %d %v", n, err)
+					}
+				default:
+					if n != 1 || !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatalf("未确认、隔离或丢失的文件被当作已入账: %d %v", n, err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestReplayAdmissionAfterLeaderCancellation 使用虚拟时钟及同步通道固定领先回放的超时点。
+// 只有完全属于该调用的超时可由等待者立即重做；混合持久化冲突须保留证据和退避。临时文件由夹具清理。
+func TestReplayAdmissionAfterLeaderCancellation(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conflict=%v", mixed), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				if err := s.Put(spoolRecord("leader")); err != nil {
+					t.Fatal(err)
+				}
+				started, release := make(chan struct{}), make(chan struct{})
+				ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+				defer cancel()
+				leader := make(chan error, 1)
+				go func() {
+					_, err := s.Replay(ctx, 5, func(context.Context, iam.UsageRecord) error {
+						close(started)
+						<-release
+						cause := fmt.Errorf("fixture: %w", ctx.Err())
+						if mixed {
+							return errors.Join(cause, iam.ErrConflict)
+						}
+						return errors.Join(cause, ctx.Err())
+					})
+					leader <- err
+				}()
+				<-started
+				waiter := &replayWaitContext{Context: t.Context(), entered: make(chan struct{})}
+				follower := make(chan error, 1)
+				var commits atomic.Int32
+				commit := func(context.Context, iam.UsageRecord) error { commits.Add(1); return nil }
+				go func() { _, err := s.ReplayForAdmission(waiter, 5, commit); follower <- err }()
+				<-waiter.entered
+				<-ctx.Done()
+				close(release)
+				if err := <-leader; !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, iam.ErrConflict) != mixed {
+					t.Fatalf("领先回放丢失原故障: %v", err)
+				}
+				err := <-follower
+				if !mixed {
+					if err != nil || commits.Load() != 1 {
+						t.Fatalf("超时污染健康后继: 结算=%d err=%v", commits.Load(), err)
+					}
+					return
+				}
+				if !errors.Is(err, iam.ErrConflict) || commits.Load() != 0 {
+					t.Fatalf("跟随准入越过真实冲突: 结算=%d err=%v", commits.Load(), err)
+				}
+
+				// 后台可以跳过失败项并提交新账单；同时等待它的准入调用不能把后台成功当作全部结清。
+				if err := s.Put(spoolRecord("good")); err != nil {
+					t.Fatal(err)
+				}
+				started, release = make(chan struct{}), make(chan struct{})
+				go func() {
+					_, err := s.Replay(t.Context(), 5, func(_ context.Context, r iam.UsageRecord) error {
+						if r.RequestID != "good" {
+							return errors.New("退避期内重试了失败文件")
+						}
+						close(started)
+						<-release
+						return nil
+					})
+					leader <- err
+				}()
+				<-started
+				waiter = &replayWaitContext{Context: t.Context(), entered: make(chan struct{})}
+				go func() { _, err := s.ReplayForAdmission(waiter, 5, commit); follower <- err }()
+				<-waiter.entered
+				close(release)
+				if err := <-leader; err != nil {
+					t.Fatalf("后台未能恢复其余账单: %v", err)
+				}
+				if err := <-follower; !errors.Is(err, iam.ErrConflict) {
+					t.Fatalf("后台退避导致同时准入放行: %v", err)
+				}
+				if n, err := s.ReplayForAdmission(t.Context(), 5, commit); n != 0 || !errors.Is(err, iam.ErrConflict) || commits.Load() != 0 {
+					t.Fatalf("独立新准入越过退避证据: n=%d 结算=%d err=%v", n, commits.Load(), err)
+				}
+				time.Sleep(31 * time.Second)
+				if n, err := s.ReplayForAdmission(t.Context(), 5, commit); n != 1 || err != nil || commits.Load() != 1 {
+					t.Fatalf("退避结束后未能恢复: n=%d 结算=%d err=%v", n, commits.Load(), err)
+				}
+				if state, err := s.Status(); err != nil || state.Pending != 0 {
+					t.Fatalf("已核销账单未删除: %+v %v", state, err)
+				}
+			})
+		})
+	}
+}
+
+// TestReplayAdmissionMustCoverSnapshot 验证一次限量回放与扫描时才发现损坏的文件都不能导致过早准入。
+// 前置两笔真实临时快照，检查下一轮正常恢复或保留隔离证据；所有磁盘文件均由测试清理。
+func TestReplayAdmissionMustCoverSnapshot(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%v", corrupt), func(t *testing.T) {
+			s := openSpool(t, Config{})
+			for _, id := range []string{"a", "b"} {
+				if err := s.Put(spoolRecord(id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if corrupt {
+				if err := os.WriteFile(filepath.Join(s.config.Dir, basename("b")), []byte("bad envelope"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commit := func(context.Context, iam.UsageRecord) error { return nil }
+			want := ErrPending
+			if corrupt {
+				want = ErrCorrupt
+			}
+			if n, err := s.ReplayForAdmission(t.Context(), 1, commit); n != 1 || !errors.Is(err, want) {
+				t.Fatalf("未结或隔离证据被当作成功: n=%d err=%v", n, err)
+			}
+			n, err := s.ReplayForAdmission(t.Context(), 1, commit)
+			if corrupt {
+				if n != 0 || !errors.Is(err, ErrCorrupt) {
+					t.Fatalf("已知隔离证据未阻止新准入: n=%d err=%v", n, err)
+				}
+			} else if n != 1 || err != nil {
+				t.Fatalf("第二批全部核销后未恢复: n=%d err=%v", n, err)
+			}
+		})
 	}
 }

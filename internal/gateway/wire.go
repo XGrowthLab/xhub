@@ -406,6 +406,9 @@ func (s *Server) ModelPublic(m config.ModelEntry) map[string]any { return models
 // 返回：无。模型表已锁上，更新时的数据库写也盖在这把锁里。必须配 UnlockModels。
 func (s *Server) LockModels() { s.mu.Lock() }
 
+// TryLockModels 供市场调价事务尝试取得模型写锁。无参数，返回成功时须在提交及内存更新后解锁；忙时立即返回。
+func (s *Server) TryLockModels() bool { return s.mu.TryLock() }
+
 // UnlockModels releases the model-table lock.
 // 参数：无。
 // 调用：gateway/models/admin.go、gateway/models/available.go、gateway/models/builtin.go、gateway/models/host.go
