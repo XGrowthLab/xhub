@@ -74,7 +74,8 @@ export function registerUsageUpgradeScenario(locale: "en" | "zh-CN") {
       const activity = await loaded; expect(activity.status()).toBe(200);
       const metadata = (await activity.json()).metadata;
       expect(metadata.total_api_requests).toBeGreaterThanOrEqual(2);
-      for (const [title, field] of [["Total Requests", "total_api_requests"], ["Total Tokens", "total_tokens"]]) {
+      // 按当前语言的卡片标题定位，用升级后真实用量接口的计数核对页面。
+      for (const [title, field] of [["Total Requests", "total_api_requests"], ["usagePolish.totalTokens", "total_tokens"]]) {
         const heading = page.getByRole("heading", { name: tr(title), exact: true }).first();
         await expect(heading.locator("xpath=ancestor::*[p][1]").locator(":scope > p")).toHaveText(metadata[field].toLocaleString());
       }

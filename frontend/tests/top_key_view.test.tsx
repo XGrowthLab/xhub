@@ -267,22 +267,14 @@ describe("TopKeyView", () => {
   });
 
   describe("Table Structure", () => {
-    it("should render table with correct headers when showTags is true", () => {
-      renderWithProviders(<TopKeyView {...mockProps} showTags={true} />);
+    /** 在空的密钥排行上切换标签列，验证历史记录名称与费用等表头的顺序。组件由测试框架自动卸载。 */
+    it.each([true, false])("renders the recorded name in the table headers with showTags=%s", (showTags) => {
+      renderWithProviders(<TopKeyView {...mockProps} showTags={showTags} />);
 
-      expect(screen.getByText("Key ID")).toBeInTheDocument();
-      expect(screen.getByText("Key Alias")).toBeInTheDocument();
-      expect(screen.getByText("Tags")).toBeInTheDocument();
-      expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
-    });
-
-    it("should render table with correct headers when showTags is false", () => {
-      renderWithProviders(<TopKeyView {...mockProps} showTags={false} />);
-
-      expect(screen.getByText("Key ID")).toBeInTheDocument();
-      expect(screen.getByText("Key Alias")).toBeInTheDocument();
-      expect(screen.queryByText("Tags")).not.toBeInTheDocument();
-      expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
+      const expectedHeaders = ["Key ID", "Recorded name", ...(showTags ? ["Tags"] : []), "Spend (USD)"];
+      const headers = screen.getAllByRole("columnheader");
+      expect(headers).toHaveLength(expectedHeaders.length);
+      expectedHeaders.forEach((name, index) => expect(headers[index]).toHaveAccessibleName(name));
     });
   });
 
