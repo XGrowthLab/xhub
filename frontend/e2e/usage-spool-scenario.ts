@@ -6,7 +6,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送普通与流式对话并从监控核对费用与用量。
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量。
  * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
@@ -142,7 +142,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect(beforeBatch.status()).toBe(200);
       const startingSpend = Number((await beforeBatch.json()).user_info.spend);
       const concurrentIDs = await Promise.all(
-        Array.from({ length: 8 }, async (_, index) => {
+        Array.from({ length: 16 }, async (_, index) => {
           const stream = index % 2 === 1;
           const reply = await page.request.post(GATEWAY + "/v1/chat/completions", {
             headers,

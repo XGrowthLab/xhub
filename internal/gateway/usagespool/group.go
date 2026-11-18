@@ -8,12 +8,17 @@ import (
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
 
+// mutationKind 区分磁盘快照的四种操作，用于选择校验、预留和持久化边界。
 type mutationKind uint8
 
 const (
+	// putSnapshot 首次持久化账单并释放本次调用的预留。
 	putSnapshot mutationKind = iota
+	// beginMarker 发布零费在途标记，同时保留本次调用的终态空间。
 	beginMarker
+	// completeMarker 以同一归属的终态原子替换在途标记。
 	completeMarker
+	// acknowledgeSnapshot 核对已成功入账的完整快照后删除。
 	acknowledgeSnapshot
 )
 
@@ -24,6 +29,7 @@ type mutation struct {
 	raw       []byte
 	name      string
 	temporary string
+	noop      bool // 目标已确认相同或已不存在，按原有幂等规则完成。
 	err       error
 	done      chan struct{}
 }
@@ -51,7 +57,7 @@ func (s *Spool) submitMutation(kind mutationKind, record iam.UsageRecord, raw []
 	q.waiting = append(q.waiting, m)
 	if !q.running {
 		q.running = true
-		go s.drainMutations()
+		go s.drainMutations(s.stageFile, s.syncDirectoryLocked)
 	}
 	q.mu.Unlock()
 	<-m.done
@@ -60,7 +66,8 @@ func (s *Spool) submitMutation(kind mutationKind, record iam.UsageRecord, raw []
 
 // drainMutations 仅在有排队写入时运行。取得目录锁后切出队首一组，逐个通知，再将锁还给恢复、关闭及准入。
 // 所有调用都有自己的结果，失败快照留在目录；队列变空时在同一队列锁内退出以避免漏唤醒。
-func (s *Spool) drainMutations() {
+// stage 和 syncDir 分别完成每份新文件的数据同步和该批目录同步，测试可检查真实屏障次数。
+func (s *Spool) drainMutations(stage func([]byte) (string, error), syncDir func(string) error) {
 	q := &s.writes
 	for {
 		s.mu.Lock()
@@ -78,13 +85,7 @@ func (s *Spool) drainMutations() {
 			q.waiting = nil
 		}
 		q.mu.Unlock()
-		if len(batch) > 1 && s.canGroupLocked(batch) {
-			s.applyGroupLocked(batch, s.stageFile, s.syncDirectoryLocked)
-		} else {
-			for _, m := range batch {
-				m.err = s.applyOneLocked(m)
-			}
-		}
+		s.applyBatchLocked(batch, stage, syncDir)
 		for i, m := range batch {
 			if m.err != nil {
 				s.probedThrough = 0
@@ -113,51 +114,92 @@ func (s *Spool) applyOneLocked(m *mutation) error {
 	}
 }
 
-// canGroupLocked 证明整组可以独立执行而不会改变逐笔容量或归属判定；不修改任何文件、预留或状态。
-// 同组不能依赖另一笔释放的容量。采用保守上界，无法证明时回到逐笔校验，包括冲突证据的保留流程。
-func (s *Spool) canGroupLocked(batch []*mutation) bool {
-	if s.closed {
-		return false
+// applyBatchLocked 按队首顺序发布能够独立执行的连续操作。stage 与 syncDir 完成文件及目录同步。
+// 同名依赖、容量临界或冲突只让该条回退；执行可能改变容量的回退后，再扫描并处理余下部分。
+func (s *Spool) applyBatchLocked(batch []*mutation, stage func([]byte) (string, error), syncDir func(string) error) {
+	for len(batch) > 1 && !s.closed {
+		state, err := s.statusLocked()
+		if err != nil || state.Quarantined != 0 {
+			break
+		}
+		space := groupSpace{bytes: s.config.MaxBytes - state.Bytes - state.ReservedBytes, entries: s.config.MaxEntries - state.Pending - state.Reserved}
+		seen := make(map[string]bool, len(batch))
+		n := 0
+		for _, m := range batch {
+			if seen[m.name] || !s.planMutationLocked(m, &space) {
+				break
+			}
+			seen[m.name] = true
+			n++
+		}
+		if n > 0 {
+			s.applyGroupLocked(batch[:n], stage, syncDir)
+			batch = batch[n:]
+		}
+		if len(batch) > 0 {
+			batch[0].err = s.applyOneLocked(batch[0])
+			batch = batch[1:]
+		}
 	}
-	state, err := s.statusLocked()
-	if err != nil || state.Quarantined != 0 {
-		return false
-	}
-	space := s.config.MaxBytes - state.Bytes - state.ReservedBytes
-	entries := s.config.MaxEntries - state.Pending - state.Reserved
-	seen := make(map[string]bool, len(batch))
 	for _, m := range batch {
-		if seen[m.name] {
+		m.err = s.applyOneLocked(m)
+	}
+}
+
+// groupSpace 记录本次扫描后剩余的字节与条数。只计入同批操作可能增加的占用，不预支其他操作释放的空间。
+type groupSpace struct {
+	bytes   int64
+	entries int
+}
+
+// planMutationLocked 在目录锁内核对一笔操作是否能独立执行；成功时从 space 扣除保守上界并标注无需写盘的操作。
+// 无法证明则返回 false，保留逐笔路径对冲突证据、容量和身份的处理；本函数不修改队列和文件系统。
+func (s *Spool) planMutationLocked(m *mutation, space *groupSpace) bool {
+	if m.kind == acknowledgeSnapshot {
+		current, err := s.readLocked(m.name)
+		m.noop = os.IsNotExist(err)
+		return m.noop || err == nil && bytes.Equal(current, m.raw)
+	}
+	size := int64(len(m.raw))
+	if size > s.config.MaxRecordBytes {
+		return false
+	}
+	var allowance int64
+	entries := 1
+	if s.reserved[m.record.RequestID] {
+		allowance = s.config.MaxRecordBytes
+		entries = 0
+	}
+	if m.kind == completeMarker {
+		oldSize, err := s.markerSizeLocked(m.record)
+		if err != nil || size-allowance > space.bytes+oldSize {
 			return false
 		}
-		seen[m.name] = true
-		if m.kind != acknowledgeSnapshot {
-			size := int64(len(m.raw))
-			if size > s.config.MaxRecordBytes || size > space {
-				return false
-			}
-			space -= size
-		}
-		switch m.kind {
-		case putSnapshot, beginMarker:
-			if entries <= 0 || (m.kind == beginMarker && s.activeDelivery[m.name]) {
-				return false
-			}
-			if _, err := s.root.Lstat(m.name); !os.IsNotExist(err) {
-				return false
-			}
-			entries--
-		case completeMarker:
-			if _, err := s.markerSizeLocked(m.record); err != nil {
-				return false
-			}
-		case acknowledgeSnapshot:
-			current, err := s.readLocked(m.name)
-			if err != nil || !bytes.Equal(current, m.raw) {
-				return false
-			}
-		}
+		// 替换失败可能留下旧标记、原预留及完整临时文件。后续项按这个上界校验；成功释放的预留不会借给别人。
+		space.bytes -= size
+		space.entries--
+		return true
 	}
+	if m.kind == beginMarker && s.activeDelivery[m.name] {
+		return false
+	}
+	if _, err := s.root.Lstat(m.name); !os.IsNotExist(err) {
+		if m.kind == putSnapshot && err == nil {
+			current, err := s.readLocked(m.name)
+			m.noop = err == nil && bytes.Equal(current, m.raw)
+			return m.noop
+		}
+		return false
+	}
+	if m.kind == beginMarker {
+		// 新标记成功后仍要持有终态预留，合并时保守计入文件本身和新增目录项。
+		allowance, entries = 0, 1
+	}
+	if entries > space.entries || size-allowance > space.bytes {
+		return false
+	}
+	space.entries -= entries
+	space.bytes -= max(0, size-allowance)
 	return true
 }
 
@@ -166,14 +208,14 @@ func (s *Spool) canGroupLocked(batch []*mutation) bool {
 func (s *Spool) applyGroupLocked(batch []*mutation, stage func([]byte) (string, error), syncDir func(string) error) {
 	var wg sync.WaitGroup
 	for _, m := range batch {
-		if m.kind != acknowledgeSnapshot {
+		if !m.noop && m.kind != acknowledgeSnapshot {
 			wg.Go(func() { m.temporary, m.err = stage(m.raw) })
 		}
 	}
 	wg.Wait()
 	changed := false
 	for _, m := range batch {
-		if m.err != nil {
+		if m.noop || m.err != nil {
 			continue
 		}
 		if m.kind == acknowledgeSnapshot {
@@ -190,8 +232,18 @@ func (s *Spool) applyGroupLocked(batch []*mutation, stage func([]byte) (string, 
 		barrier = syncDir(".")
 	}
 	for _, m := range batch {
+		if m.noop {
+			if m.kind == putSnapshot {
+				delete(s.reserved, m.record.RequestID)
+			}
+			continue
+		}
 		if m.err == nil {
 			m.err = barrier
+		}
+		// 与逐笔 writeLocked 相同，最后一笔实际写文件的结果决定健康状态；确认删除不改变写盘健康度。
+		if m.kind != acknowledgeSnapshot {
+			s.lastErr = m.err
 		}
 		switch m.kind {
 		case putSnapshot:
@@ -214,13 +266,6 @@ func (s *Spool) applyGroupLocked(batch []*mutation, stage func([]byte) (string, 
 			if m.err == nil {
 				s.noteSettledLocked(m.name)
 			}
-		}
-	}
-	s.lastErr = barrier
-	for _, m := range batch {
-		if m.err != nil {
-			s.lastErr = m.err
-			break
 		}
 	}
 }
