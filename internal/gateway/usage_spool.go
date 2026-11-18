@@ -40,6 +40,13 @@ func usageSpoolConfig() (usagespool.Config, bool, error) {
 		}
 		config.MaxEntries = value
 	}
+	if raw := os.Getenv("XHUB_USAGE_SPOOL_GROUP_SIZE"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > usagespool.MaxGroupSize {
+			return config, true, fmt.Errorf("invalid XHUB_USAGE_SPOOL_GROUP_SIZE")
+		}
+		config.GroupSize = value
+	}
 	return config, true, nil
 }
 

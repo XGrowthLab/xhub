@@ -163,6 +163,12 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
           return id;
         }),
       );
+      // 普通与 SSE 完成后，实际扣费和本机快照确认都必须收敛，合并写盘不能遗留待确认或隔离证据。
+      await expect.poll(async () => {
+        const snapshot = await page.request.post(control + "/usage-spool/state", { data: { model } });
+        expect(snapshot.status(), await snapshot.text()).toBe(200);
+        return await snapshot.json();
+      }).toEqual({ pending: 0, quarantined: 0 });
       const expectedCalls = 1 + concurrentIDs.length;
       expect(new Set([callID, ...concurrentIDs]).size).toBe(expectedCalls);
       await expect

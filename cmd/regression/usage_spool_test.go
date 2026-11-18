@@ -21,6 +21,17 @@ import (
 // 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；核对每笔用量、五层费用及重放幂等。
 // t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
 func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
+	for _, size := range []string{"1", "16"} {
+		t.Run("group="+size, func(t *testing.T) {
+			t.Setenv("XHUB_USAGE_SPOOL_GROUP_SIZE", size)
+			verifyConcurrentChatBills(t)
+		})
+	}
+}
+
+// verifyConcurrentChatBills 在调用方指定的磁盘写入模式下发起真实的普通及流式并发请求。
+// 独立上游、PG schema 与 Redis 由测试清理；以计费触发器及五层账本证明没有漏记或重复提交。
+func verifyConcurrentChatBills(t *testing.T) {
 	const model = "spool-concurrent-chat"
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
 	isolatedSpendRedis(t)

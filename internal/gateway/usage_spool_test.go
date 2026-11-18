@@ -12,6 +12,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/iam"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,16 @@ func TestUsageSpoolConfiguration(t *testing.T) {
 			}
 		})
 	}
+	for _, raw := range []string{"-1", "0", "65", "invalid", "1", "16", "64"} {
+		t.Setenv("XHUB_USAGE_SPOOL_GROUP_SIZE", raw)
+		cfg, enabled, err := usageSpoolConfig()
+		want, parseErr := strconv.Atoi(raw)
+		valid := parseErr == nil && want >= 1 && want <= usagespool.MaxGroupSize
+		if !enabled || (err == nil) != valid || valid && cfg.GroupSize != want {
+			t.Fatalf("合并写盘配置解析错误: 输入=%s 结果=%d err=%v", raw, cfg.GroupSize, err)
+		}
+	}
+
 }
 
 // TestUsageSpoolAdmissionFailure 验证初始化失败明确阻止新付费请求，关闭安全幂等；前置临时目录，结束自动删除。

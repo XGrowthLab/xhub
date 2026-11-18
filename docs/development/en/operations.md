@@ -81,6 +81,7 @@ Startup capacity settings accept positive integers:
 | `XHUB_USAGE_SPOOL_MAX_BYTES` | `1073741824` | Pending/quarantine bytes plus inflight reservations |
 | `XHUB_USAGE_SPOOL_RECORD_BYTES` | `16777216` | Complete record limit and conservative inflight reservation |
 | `XHUB_USAGE_SPOOL_MAX_ENTRIES` | `8192` | Pending records plus inflight calls |
+| `XHUB_USAGE_SPOOL_GROUP_SIZE` | `16` | Maximum files per group (1–64). Each file is synced before rename. Overlapping writes can share the directory sync. Choose 1 for individual commits. |
 
 Default byte limits allow at most 64 simultaneous inflight reservations, fewer
 with pending records. Admission tests actual writing and sync before upstream
