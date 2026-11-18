@@ -71,11 +71,13 @@ const uploadFile = async (name = "test.pdf") => {
   await screen.findByText(/Uploaded Documents \(1\)/);
 };
 
+/** 打开供应商列表并按可访问名称选择真实选项；label 为目标名称，供上传与校验用例共用；无服务端写入。 */
 const pickProvider = async (label: string) => {
   const user = userEvent.setup();
-  const trigger = screen.getAllByRole("combobox")[0];
+  const trigger = screen.getByRole("combobox", { name: /Provider/ });
   await user.click(trigger);
-  const option = await screen.findByText(label);
+  // 供应商图标的替代文本也参与可访问名称。选择有选项角色的容器，避开弹层定位时的隐藏文本副本。
+  const option = await screen.findByRole("option", { name: (name) => name.endsWith(label) });
   await user.click(option);
 };
 

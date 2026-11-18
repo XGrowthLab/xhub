@@ -150,8 +150,7 @@ describe("content filter tables", () => {
     );
 
     await user.click(screen.getByRole("combobox"));
-    const maskOptions = await screen.findAllByText("Mask");
-    await user.click(maskOptions[maskOptions.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "Mask", exact: false }));
 
     expect(onActionChange).toHaveBeenCalledWith("pattern-1", "MASK");
   });
@@ -169,12 +168,12 @@ describe("content filter tables", () => {
     );
 
     await user.click(screen.getByRole("combobox"));
-    const maskOptions = await screen.findAllByText("Mask");
-    await user.click(maskOptions[maskOptions.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "Mask", exact: false }));
 
     expect(onActionChange).toHaveBeenCalledWith("keyword-1", "action", "MASK");
   });
 
+  /** 已配置分类有两个独立选择框；通过列表选项修改阈值和动作，验证回调，卸载时回收弹层。 */
   it("should report category severity and action changes", async () => {
     const onSeverityChange = vi.fn();
     const onActionChange = vi.fn();
@@ -198,14 +197,12 @@ describe("content filter tables", () => {
     );
 
     await user.click(screen.getAllByRole("combobox")[0]);
-    const lowOptions = await screen.findAllByText("Low");
-    await user.click(lowOptions[lowOptions.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "Low", exact: false }));
 
     expect(onSeverityChange).toHaveBeenCalledWith("category-1", "low");
 
     await user.click(screen.getAllByRole("combobox")[1]);
-    const maskOptions = await screen.findAllByText("Mask");
-    await user.click(maskOptions[maskOptions.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "Mask", exact: false }));
 
     expect(onActionChange).toHaveBeenCalledWith("category-1", "MASK");
   });
