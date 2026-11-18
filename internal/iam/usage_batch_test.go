@@ -358,7 +358,9 @@ func TestUserUsageBatchCancelDuringTransaction(t *testing.T) {
 	defer cancel()
 	good := userUsageWrite{ctx: t.Context(), record: usageRecord("live-good", "cancel-user", .1), done: make(chan error, 1)}
 	interrupted := userUsageWrite{ctx: ctx, record: usageRecord("live-cancel", "cancel-user", .2), done: make(chan error, 1)}
-	go db.writeUserUsageBatch([]userUsageWrite{good, interrupted})
+	second := userUsageWrite{ctx: t.Context(), record: usageRecord("live-second", "cancel-user", .125), done: make(chan error, 1)}
+	third := userUsageWrite{ctx: t.Context(), record: usageRecord("live-third", "cancel-user", .25), done: make(chan error, 1)}
+	go db.writeUserUsageBatch([]userUsageWrite{good, interrupted, second, third})
 	// 已取得事务 ID 且等候 request_logs 写锁，证明取消发生在真实 INSERT 之后。
 	waiter := func() string {
 		rows, err := db.Engine.QueryString(`SELECT activity.backend_xid::text AS xid FROM pg_locks l
@@ -397,6 +399,15 @@ func TestUserUsageBatchCancelDuringTransaction(t *testing.T) {
 	}
 	if err := <-interrupted.done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("取消的调用收到错误结果: %v", err)
+	}
+	for _, job := range []userUsageWrite{second, third} {
+		if err := <-job.done; err != nil {
+			t.Fatalf("剩余同批记录未能重试: %v", err)
+		}
+	}
+	rows, err := db.Engine.QueryString("SELECT COUNT(*) AS n, COUNT(DISTINCT xmin::text) AS txs FROM usage_events")
+	if err != nil || len(rows) != 1 || rows[0]["n"] != "3" || rows[0]["txs"] != "1" {
+		t.Fatalf("取消后仍存活的三笔未在同一个新事务内提交: %v %v", rows, err)
 	}
 	if countEvents(t, db, good.record.RequestID) != 1 || countEvents(t, db, interrupted.record.RequestID) != 0 {
 		t.Fatal("合批中途取消后有漏单或部分提交")
