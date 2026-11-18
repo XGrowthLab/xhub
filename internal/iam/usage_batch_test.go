@@ -413,3 +413,74 @@ func TestUserUsageBatchCancelDuringTransaction(t *testing.T) {
 		t.Fatal("合批中途取消后有漏单或部分提交")
 	}
 }
+
+// TestBatchSpendPeriodAndRollback 在真实 PostgreSQL 创建五层归属和不同预算周期，验证逐事件筛选与十进制精度。
+// 故意让第五层更新失败后复核所有表均已回滚，再重新结算并重放重复 ID；夹具回收 schema、触发器和连接。
+func TestBatchSpendPeriodAndRollback(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	org, err := db.CreateOrg(ctx, Actor{}, "period-test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := db.CreateTeam(ctx, Actor{}, TeamInput{OrganizationID: org.ID, Name: "period-team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := db.CreateProject(ctx, Actor{}, ProjectInput{TeamID: team.ID, Name: "period-project"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := db.CreateUser(ctx, Actor{}, UserInput{Email: "period@example.com", Password: "password123", TeamID: team.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := db.CreateKey(ctx, Actor{}, KeyInput{OwnerType: OwnerPersonal, UserID: user.ID, TeamID: team.ID, ProjectID: project.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+	if _, err := db.Engine.Exec("UPDATE organizations SET budget_period_start=? WHERE id=?", start, org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Engine.Exec("UPDATE users SET budget_period_start=? WHERE id=?", start.Add(time.Second), user.ID); err != nil {
+		t.Fatal(err)
+	}
+	var records []UsageRecord
+	for i, cost := range []float64{0.1, 0.2, 0.00000000000003, 0} {
+		r := usageRecord(fmt.Sprintf("period-batch-%d", i), user.ID, cost)
+		r.TS = start.Add(time.Duration(i-1) * time.Second)
+		r.OrganizationID, r.TeamID, r.ProjectID, r.KeyID = org.ID, team.ID, project.ID, key.ID
+		records = append(records, r)
+	}
+	if _, err := db.Engine.Exec("ALTER TABLE api_keys ADD CONSTRAINT block_charge CHECK (spend=0)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordUsageExact(ctx, records); err == nil {
+		t.Fatal("密钥层拒绝写入时应回滚整批")
+	}
+	rows, err := db.Engine.QueryString("SELECT (SELECT COUNT(*) FROM usage_events) AS events, (SELECT SUM(spend) FROM teams) AS team")
+	if err != nil || len(rows) != 1 || rows[0]["events"] != "0" || rows[0]["team"] != "0" {
+		t.Fatalf("第五层写入失败后出现已提交的部分消费: %v %v", rows, err)
+	}
+	if _, err := db.Engine.Exec("ALTER TABLE api_keys DROP CONSTRAINT block_charge"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := db.RecordUsageExact(ctx, append(records, records[0])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err = db.Engine.QueryString(`SELECT (SELECT spend=0.20000000000003 FROM organizations WHERE id=?) AS org,
+		(SELECT spend=0.00000000000003 FROM users WHERE id=?) AS usr, (SELECT spend=0.30000000000003 FROM api_keys WHERE id=?) AS key,
+		(SELECT spend=0.30000000000003 FROM teams WHERE id=?) AS team,(SELECT spend=0.30000000000003 FROM projects WHERE id=?) AS project,
+		(SELECT SUM(cost)=0.30000000000003 AND COUNT(*)=4 FROM usage_events) AS ledger`, org.ID, user.ID, key.ID, team.ID, project.ID)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("无法核对五层精确消费: %v %v", rows, err)
+	}
+	for scope, ok := range rows[0] {
+		if ok != "true" && ok != "t" {
+			t.Errorf("%s 的消费或周期不匹配: %v", scope, rows[0])
+		}
+	}
+}

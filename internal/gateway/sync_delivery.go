@@ -54,7 +54,8 @@ func (s *Server) finishSyncDelivery(ctx context.Context, record iam.UsageRecord,
 	}
 	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := s.IAM.ConfirmDelivery(persistCtx, record); err != nil {
+	confirmed, confirmErr := s.IAM.ConfirmDeliveryForSettlement(persistCtx, record)
+	if err := confirmErr; err != nil {
 		if diskSaved && record.DeliverySpoolOnly && errors.Is(err, iam.ErrDeliveryMarkerGone) {
 			// 另一条恢复路径已接管此标记。只严格结算当前已持久化的终态，
 			// 无需阻塞本次响应去遍历其他请求的整个磁盘队列。
@@ -86,7 +87,7 @@ func (s *Server) finishSyncDelivery(ctx context.Context, record iam.UsageRecord,
 			util.Error("delivery spool cleanup failed request=%s: %v", record.RequestID, err)
 		}
 	}
-	if err := s.IAM.FlushPendingUsageRequest(persistCtx, record.RequestID); err != nil {
+	if err := confirmed.Settle(persistCtx); err != nil {
 		util.Error("delivery settlement pending request=%s: %v", record.RequestID, err)
 		return
 	}

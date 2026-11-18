@@ -29,7 +29,7 @@ func TestDatabaseMaxOpenConns(t *testing.T) {
 	}{
 		{"", 0, false}, {"0", 0, false}, {"1", 1, false}, {"25", 25, false}, {"-1", 0, true}, {"2.5", 0, true}, {"bad-private-value", 0, true}, {"99999999999999999999999", 0, true},
 	} {
-		got, err := databaseMaxOpenConns(tc.raw)
+		got, err := databasePoolLimit("XHUB_DATABASE_MAX_OPEN_CONNS", tc.raw, 0)
 		if got != tc.want || (err != nil) != tc.invalid {
 			t.Errorf("上限解析错误: want=%d invalid=%t got=%d err=%v", tc.want, tc.invalid, got, err)
 		}
@@ -47,12 +47,14 @@ func TestGatewayRejectsInvalidLimitBeforeOpeningPools(t *testing.T) {
 		main()
 		return
 	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestGatewayRejectsInvalidLimitBeforeOpeningPools$")
-	cmd.Env = append(os.Environ(), "XHUB_TEST_INVALID_POOL_MAIN=1", "XHUB_DATABASE_MAX_OPEN_CONNS=-1")
-	out, err := cmd.CombinedOutput()
-	var exited *exec.ExitError
-	if !errors.As(err, &exited) || exited.ExitCode() != 1 || !strings.Contains(string(out), "XHUB_DATABASE_MAX_OPEN_CONNS") {
-		t.Fatalf("非法上限未在数据库启动前触发配置错误: exit=%v", err)
+	for _, name := range []string{"XHUB_DATABASE_MAX_OPEN_CONNS", "XHUB_DATABASE_MAX_IDLE_CONNS"} {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestGatewayRejectsInvalidLimitBeforeOpeningPools$")
+		cmd.Env = append(os.Environ(), "XHUB_TEST_INVALID_POOL_MAIN=1", "XHUB_DATABASE_MAX_OPEN_CONNS=", "XHUB_DATABASE_MAX_IDLE_CONNS=", name+"=-7")
+		out, err := cmd.CombinedOutput()
+		var exited *exec.ExitError
+		if !errors.As(err, &exited) || exited.ExitCode() != 1 || !strings.Contains(string(out), name) {
+			t.Fatalf("非法 %s 未在数据库启动前触发配置错误: exit=%v", name, err)
+		}
 	}
 }
 
@@ -78,11 +80,11 @@ func TestGatewayPoolLimitQueuesAndRecovers(t *testing.T) {
 	}
 	identity.SetMaxOpenConns(3)
 	framework.SetMaxOpenConns(4)
-	limitGatewayPools(0, identity, framework)
+	limitGatewayPools(0, defaultGatewayIdleConns(0), identity, framework)
 	if identity.Stats().MaxOpenConnections != 3 || framework.Stats().MaxOpenConnections != 4 {
 		t.Fatal("缺省配置意外覆盖池的既有上限")
 	}
-	limitGatewayPools(2, identity, framework)
+	limitGatewayPools(2, defaultGatewayIdleConns(0), identity, framework)
 	for name, pool := range map[string]*sql.DB{"iam": identity, "framework": framework} {
 		t.Run(name, func(t *testing.T) {
 			if pool.Stats().MaxOpenConnections != 2 {
@@ -166,7 +168,7 @@ func TestGatewayServesWithLimitedPools(t *testing.T) {
 	_ = listener.Close()
 	childCtx, stop := context.WithCancel(t.Context())
 	cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^TestGatewayServesWithLimitedPools$")
-	cmd.Env = append(os.Environ(), "XHUB_TEST_POOL_HTTP_MAIN=1", "XHUB_TEST_POOL_CONFIG="+cfg, "XHUB_TEST_POOL_ADDR="+addr, "XHUB_DATABASE_MAX_OPEN_CONNS=2", "XHUB_USAGE_SPOOL_DIR="+filepath.Join(tmp, "spool"))
+	cmd.Env = append(os.Environ(), "XHUB_TEST_POOL_HTTP_MAIN=1", "XHUB_TEST_POOL_CONFIG="+cfg, "XHUB_TEST_POOL_ADDR="+addr, "XHUB_DATABASE_MAX_OPEN_CONNS=2", "XHUB_DATABASE_MAX_IDLE_CONNS=4", "XHUB_USAGE_SPOOL_DIR="+filepath.Join(tmp, "spool"))
 	if err := cmd.Start(); err != nil {
 		stop()
 		t.Fatal(err)
@@ -226,5 +228,77 @@ func TestGatewayServesWithLimitedPools(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("未授权数据面请求的状态异常: HTTP %d", res.StatusCode)
+	}
+}
+
+// TestGatewayIdlePolicy 将空闲上限与真实打开连接上限配对，覆盖未限额、显式零、旧默认值及小池。
+// 纯函数返回保留数量和回收时长，无外部资源。环境变量省略时应采用新默认值而非显式零。
+func TestGatewayIdlePolicy(t *testing.T) {
+	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", "", defaultGatewayIdleConns(0))
+	if err != nil || idle != 2 || defaultGatewayIdleConns(1) != 1 || defaultGatewayIdleConns(25) != 25 || defaultGatewayIdleConns(100) != 25 {
+		t.Fatalf("缺省空闲保留数=%d, err=%v", idle, err)
+	}
+	for _, tc := range []struct {
+		open, idle, want int
+		ttl              time.Duration
+	}{
+		{0, idle, 2, 0}, {25, 25, 25, 5 * time.Minute}, {3, 16, 3, 5 * time.Minute}, {1, 16, 1, 0}, {25, 2, 2, 0}, {25, 0, 0, 0},
+	} {
+		got, ttl := gatewayIdlePolicy(tc.open, tc.idle)
+		if got != tc.want || ttl != tc.ttl {
+			t.Errorf("open=%d idle=%d 得到 %d/%s，希望 %d/%s", tc.open, tc.idle, got, ttl, tc.want, tc.ttl)
+		}
+	}
+}
+
+// TestGatewayReusesIdleBackends 在私有 PostgreSQL 上测量两波并发占用的真实后端 PID。
+// 相同上限下，两种网关池均复用峰值连接；配置为零后归还数据库。测试关闭专用连接、池和 schema。
+func TestGatewayReusesIdleBackends(t *testing.T) {
+	dsn := testsupport.Postgres(t, "gateway_idle")
+	db, err := iam.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	st, err := store.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Engine.Close() })
+	identity, framework := db.Engine.DB().DB, st.DB
+	limitGatewayPools(4, 16, identity, framework)
+	for _, pool := range []*sql.DB{identity, framework} {
+		seen := map[int]bool{}
+		for wave := 0; wave < 2; wave++ {
+			var conns []*sql.Conn
+			for range 4 {
+				conn, err := pool.Conn(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = conn.Close() })
+				conns = append(conns, conn)
+				var pid int
+				if err := conn.QueryRowContext(t.Context(), "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+					t.Fatal(err)
+				}
+				if wave == 1 && !seen[pid] {
+					t.Fatalf("已空闲的四个后端未复用，新 PID=%d", pid)
+				}
+				seen[pid] = true
+			}
+			for _, conn := range conns {
+				if err := conn.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := pool.Stats().Idle; n != 4 {
+				t.Fatalf("已归还的空闲连接数=%d，期望 4", n)
+			}
+		}
+	}
+	limitGatewayPools(4, 0, identity, framework)
+	if identity.Stats().OpenConnections != 0 || framework.Stats().OpenConnections != 0 {
+		t.Fatal("显式零未归还两池的空闲连接")
 	}
 }

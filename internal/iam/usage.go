@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -325,6 +326,9 @@ func (db *DB) recordUsage(ctx context.Context, records []UsageRecord, exact bool
 	}
 	return db.tx(ctx, func(s *xorm.Session) error {
 		monitor := map[monitorKey]monitorDelta{}
+		// 调度队列的有界批次只汇总本事务新增的有价事件。单笔和显式大批次沿用原路径。
+		groupSpend := exact && len(records) > 1 && len(records) <= maxUserUsageBatch
+		var chargeIDs []string
 		for _, r := range records {
 			resolved, err := reconciledUsageFence(s, r)
 			if err != nil {
@@ -372,9 +376,16 @@ func (db *DB) recordUsage(ctx context.Context, records []UsageRecord, exact bool
 			if err := bumpDaily(s, r); err != nil {
 				return err
 			}
-			if err := addScopeSpend(s, r); err != nil {
+			if groupSpend {
+				if r.Cost > 0 {
+					chargeIDs = append(chargeIDs, r.RequestID)
+				}
+			} else if err := addScopeSpend(s, r); err != nil {
 				return err
 			}
+		}
+		if err := addBatchScopeSpend(s, chargeIDs); err != nil {
+			return err
 		}
 		return flushMonitor(s, monitor)
 	})
@@ -476,6 +487,38 @@ func addScopeSpend(s *xorm.Session, r UsageRecord) error {
 			args = append(args, r.TS)
 		}
 		if _, err := s.Exec(append([]any{query}, args...)...); err != nil {
+			return mapErr(err)
+		}
+	}
+	return nil
+}
+
+// addBatchScopeSpend 将同一入账事务中新插入的有价事件按归属汇总，供 recordUsage 提交前更新五层消费。
+// ids 只含已通过核销、去重和预占检查的请求 ID，空集不访问数据库。按事件落库的 NUMERIC 计算，
+// 组织与用户逐笔按事件时间筛当前周期；同一事务的读者只能看到全部提交或全部回滚。任一 SQL 失败返回调用者回滚。
+func addBatchScopeSpend(s *xorm.Session, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, 1, len(ids)+1)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	bind := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	for _, scope := range []struct{ table, column string }{
+		{"organizations", "organization_id"}, {"teams", "team_id"}, {"projects", "project_id"},
+		{"users", "user_id"}, {"api_keys", "key_id"},
+	} {
+		// 表名与列名只取自此固定清单。周期使用该层自身的起点，迟到的账单仍计入其他归属。
+		period := ""
+		if scope.table == "organizations" || scope.table == "users" {
+			period = " AND (owner.budget_period_start IS NULL OR owner.budget_period_start <= e.ts)"
+		}
+		args[0] = "UPDATE " + scope.table + " AS dest SET spend = dest.spend + totals.cost FROM (" +
+			"SELECT owner.id, SUM(e.cost) AS cost FROM usage_events e JOIN " + scope.table +
+			" AS owner ON owner.id = e." + scope.column + " WHERE e.request_id IN (" + bind +
+			") AND owner.id <> ''" + period + " GROUP BY owner.id) AS totals WHERE dest.id = totals.id"
+		if _, err := s.Exec(args...); err != nil {
 			return mapErr(err)
 		}
 	}
