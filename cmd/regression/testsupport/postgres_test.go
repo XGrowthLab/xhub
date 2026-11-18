@@ -103,7 +103,7 @@ func TestPostgresFailureModes(t *testing.T) {
 
 // postgresFailureChild 为两种执行模式安排真实数据库故障；mode 指定故障，fixture 仅选择报告方式，无返回值。
 // 临时代理和锁连接由测试清理关闭；无法删除的 schema 写入记录文件，由外层测试回收。
-func postgresFailureChild(t *testing.T, mode string, fixture func(*testing.T, string) string) {
+func postgresFailureChild(t *testing.T, mode string, fixture func(testing.TB, string) string) {
 	t.Helper()
 	var blocker *pgx.Conn
 	// 先注册关闭锁连接，使真实夹具的清理先运行并遇到锁超时；外层兜底删 schema 在解锁后执行。
@@ -225,7 +225,7 @@ func capturePostgresFailure(t *testing.T, mode string, reporter *capturedPostgre
 			reporter.cleanups[i]()
 		}
 	}()
-	postgresFailureChild(t, mode, func(_ *testing.T, prefix string) string {
+	postgresFailureChild(t, mode, func(_ testing.TB, prefix string) string {
 		return postgresFixture(reporter, prefix)
 	})
 }

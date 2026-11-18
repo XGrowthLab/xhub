@@ -35,10 +35,10 @@ func DatabaseURL() string {
 	return DefaultDatabaseURL
 }
 
-// Postgres 为 t 创建 prefix 标识的独立 schema，返回带 search_path 的 URL，并注册清理。
+// Postgres 为测试或微基准 t 创建 prefix 标识的独立 schema，返回带 search_path 的 URL，并注册清理。
 // IAM、Store、Gateway 与后台回归使用此夹具；地址、连接、创建及清理失败均使测试失败，禁止静默 skip。
 // 只删除本例 schema；网络操作有超时，错误只报告阶段与类型，避免输出含密码的 DSN。
-func Postgres(t *testing.T, prefix string) string {
+func Postgres(t testing.TB, prefix string) string {
 	t.Helper()
 	return postgresFixture(t, prefix)
 }

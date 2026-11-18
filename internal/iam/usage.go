@@ -278,8 +278,8 @@ func (db *DB) RecordUsage(ctx context.Context, records []UsageRecord) error {
 // RecordUsageExact 原子结算指定完整快照并严格确认重复内容，供独立磁盘恢复/PG待结算使用。
 // 参数是已冻结账单，返回nil只表示同一快照已提交或核销fence已确认；旧无指纹/冲突返回ErrConflict且不释放占用。
 func (db *DB) RecordUsageExact(ctx context.Context, records []UsageRecord) error {
-	// 同一张磁盘和 PG 快照可能分别由准入、前台或恢复提交。只合并完整内容相同的单笔，
-	// 零时间由结算现场冻结，批量提交仍保留原来的事务边界。
+	// 先按完整快照合并同一请求的重放，再调度不同请求的同用户写入；每笔只有真实提交后才确认。
+	// 零时间由结算现场冻结，显式批量调用始终保留调用方原有的整批事务边界。
 	if len(records) != 1 || records[0].TS.IsZero() {
 		return db.recordUsage(ctx, records, true)
 	}
@@ -291,7 +291,7 @@ func (db *DB) RecordUsageExact(ctx context.Context, records []UsageRecord) error
 	}
 	for ctx.Err() == nil {
 		done := db.exactWrites.DoChan(key, func() (any, error) {
-			err := db.recordUsage(ctx, []UsageRecord{record}, true)
+			err := db.recordUserUsage(ctx, record)
 			return ctx.Err() != nil, err
 		})
 		select {
@@ -359,6 +359,13 @@ func (db *DB) recordUsage(ctx context.Context, records []UsageRecord, exact bool
 				continue
 			}
 			accumulateMonitor(monitor, r, 1)
+			if exact && len(records) > 1 {
+				// 合并事务不能先用 float64 相加而改变单笔精度；监控费用也让 PG NUMERIC 按原事件逐笔累加。
+				if err := flushMonitor(s, monitor); err != nil {
+					return err
+				}
+				clear(monitor)
+			}
 			if err := putRequestLog(s, r); err != nil {
 				return err
 			}
