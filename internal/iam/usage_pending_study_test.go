@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/sunqirui1987/xhub/cmd/regression/testsupport"
 )
 
 // TestStalePendingReceiptsGuards 制造同 ID 不同快照、外部删除、原预占、已核销和同内容重新入队。
@@ -55,13 +57,29 @@ func TestStalePendingReceiptsGuards(t *testing.T) {
 	}
 }
 
-// TestStalePendingObservationStudy 复现 64 个调用都已读取相同 32 份快照，随后前台先完成结算的真实 PG 情形。
-// 计时记录当前逐项结算/确认和每调用一次的批量已入账核对；DB 触发器统计所有 DELETE 尝试，不对真实网关吞吐作推断。
-func TestStalePendingObservationStudy(t *testing.T) {
-	const identities, waiters = 32, 64
-	db := testDB(t)
-	for i := 0; i < identities; i++ {
-		r := usageRecord(fmt.Sprintf("stale-%d", i), "study-user", .125)
+// staleObservationFixture 用实际创建的用户和冻结的数据库读结果重放并发观察，费用始终为每笔 0.125 美元。
+type staleObservationFixture struct {
+	db           *DB
+	userID       string
+	observations [][]pendingUsage
+	observedAt   time.Time
+}
+
+// newStaleObservationFixture 在私有 PG 中创建真实用户和多笔持久待办，等每位调用者都读完后才首次结清。
+// identities 是唯一账单数，waiters 是分别读取 PG 的调用者数；账本和连接在测试或基准结束时一并回收。
+func newStaleObservationFixture(t testing.TB, identities, waiters int) staleObservationFixture {
+	t.Helper()
+	db, err := Open(t.Context(), testsupport.Postgres(t, "stale_receipts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	user, err := db.CreateUser(t.Context(), Actor{}, UserInput{Email: "study-user@example.com", Password: "password123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range identities {
+		r := usageRecord(fmt.Sprintf("stale-%d", i), user.ID, .125)
 		raw, err := json.Marshal(r)
 		if err != nil {
 			t.Fatal(err)
@@ -70,60 +88,121 @@ func TestStalePendingObservationStudy(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	observations := make([][]pendingUsage, waiters)
-	for i := range observations {
-		if err := db.Engine.Table("usage_pending").Asc("created_at", "request_id").Limit(100).Find(&observations[i]); err != nil || len(observations[i]) != identities {
-			t.Fatalf("私有测试快照读取失败: %v", err)
+	f := staleObservationFixture{db: db, userID: user.ID, observations: make([][]pendingUsage, waiters)}
+	for i := range f.observations {
+		err := db.Engine.Table("usage_pending").Asc("created_at", "request_id").Limit(100).Find(&f.observations[i])
+		if err != nil || len(f.observations[i]) != identities {
+			t.Fatalf("调用者 %d 实际观察到 %d 条待办，期望 %d: %v", i, len(f.observations[i]), identities, err)
 		}
 	}
+	f.observedAt = time.Now()
 	if err := db.FlushPendingUsage(t.Context(), 100); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Engine.Exec(`CREATE SEQUENCE study_deletes;
-	CREATE FUNCTION count_stale_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('study_deletes'); RETURN NULL; END $$;
-	CREATE TRIGGER count_stale_delete AFTER DELETE ON usage_pending FOR EACH STATEMENT EXECUTE FUNCTION count_stale_delete()`); err != nil {
-		t.Fatal(err)
+	f.assertSettled(t)
+	return f
+}
+
+// assertSettled 对照 PG 精确 NUMERIC 费用、真实用户消费、事件总数和原始待办；在首次结算和重复重放后均验证。
+// 使用同一份期望值可发现重复扣费、漏记、记录落给其他用户或确认后仍留待办。
+func (f staleObservationFixture) assertSettled(t testing.TB) {
+	t.Helper()
+	n := len(f.observations[0])
+	var got struct {
+		Events, Owned, Pending int
+		Exact                  bool
 	}
-	observedAt := time.Now()
-	for _, mode := range []string{"baseline", "receipt", "product"} {
-		before := time.Now()
-		var wg sync.WaitGroup
-		closeStart := make(chan struct{})
-		for _, rows := range observations {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-closeStart
-				if mode == "baseline" {
-					for _, row := range rows {
-						var record UsageRecord
-						if err := json.Unmarshal([]byte(row.Payload), &record); err != nil {
-							t.Error(err)
-							return
-						}
-						if err := db.settleFrozenPending(t.Context(), record, row); err != nil {
-							t.Errorf("原恢复失败: %v", err)
-							return
-						}
-					}
-				} else if mode == "product" {
-					if err := db.flushObservedPending(t.Context(), rows, observedAt); err != nil {
+	found, err := f.db.Engine.SQL(`SELECT COUNT(*) AS events, COUNT(*) FILTER (WHERE user_id=? AND cost=0.125) AS owned,
+		(SELECT COUNT(*) FROM usage_pending) AS pending,
+		SUM(cost) = ?::numeric * 0.125 AND (SELECT spend FROM users WHERE id=?) = ?::numeric * 0.125 AS exact
+		FROM usage_events`, f.userID, n, f.userID, n).Get(&got)
+	if err != nil || !found || got.Events != n || got.Owned != n || got.Pending != 0 || !got.Exact {
+		t.Fatalf("应有 %d 笔每笔 $0.125 的本用户账单、精确总消费 $%g、0 条待办，实际 %+v: %v", n, float64(n)*.125, got, err)
+	}
+}
+
+// replayStaleObservations 同时处理每位调用者原先从 PG 观察到的快照；返回后所有调用都已执行完成。
+// mode 指定原逐笔结算、只读凭据核验或当前产品路径，任何单笔错误均写入相应测试或基准。
+func (f staleObservationFixture) replayStaleObservations(t testing.TB, mode string) {
+	t.Helper()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for _, rows := range f.observations {
+		wg.Go(func() {
+			<-start
+			switch mode {
+			case "baseline":
+				for _, row := range rows {
+					var record UsageRecord
+					if err := json.Unmarshal([]byte(row.Payload), &record); err != nil {
 						t.Error(err)
+						return
 					}
-				} else {
-					got, err := verifiedPendingReceipts(t.Context(), db, rows)
-					if err != nil || len(got) != identities {
-						t.Errorf("批量认证失败 %d: %v", len(got), err)
+					if err := f.db.settleFrozenPending(t.Context(), record, row); err != nil {
+						t.Errorf("原恢复失败: %v", err)
+						return
 					}
 				}
-			}()
-		}
-		close(closeStart)
-		wg.Wait()
-		n, err := db.Engine.QueryString(`SELECT last_value FROM study_deletes`)
-		if err != nil || len(n) != 1 || (mode != "product" && n[0]["last_value"] != "2048") {
-			t.Fatalf("陈旧快照的删除尝试与预期不符: %v %v", n, err)
-		}
-		t.Logf("mode=%s callers=%d observed_per_caller=%d elapsed_ms=%d cumulative_delete_attempts=%s", mode, waiters, identities, time.Since(before).Milliseconds(), n[0]["last_value"])
+			case "receipt":
+				got, err := verifiedPendingReceipts(t.Context(), f.db, rows)
+				if err != nil || len(got) != len(rows) {
+					t.Errorf("批量认证 %d/%d: %v", len(got), len(rows), err)
+				}
+			case "product":
+				if err := f.db.flushObservedPending(t.Context(), rows, f.observedAt); err != nil {
+					t.Error(err)
+				}
+			default:
+				t.Errorf("未知研究模式 %q", mode)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+}
+
+// TestStalePendingObserversPreserveLedger 用两位调用者各自取得的八笔快照覆盖产品的并发重放；初次结清后每笔只应扣一次。
+// 暂停真实 PG 写入直到两份扫描重叠，随后核对用户实际消费、准确账单数和空待办，结束时删除私有 schema。
+func TestStalePendingObserversPreserveLedger(t *testing.T) {
+	const waiters = 2
+	f := newStaleObservationFixture(t, 8, waiters)
+	release := holdUsageWriter(t, f.db)
+	done := make(chan struct{})
+	go func() { defer close(done); f.replayStaleObservations(t, "product") }()
+	end := time.Now().Add(5 * time.Second)
+	for f.db.pendingSweeps.Load() != waiters && time.Now().Before(end) {
+		time.Sleep(time.Millisecond)
+	}
+	overlap := f.db.pendingSweeps.Load()
+	release()
+	<-done
+	if overlap != waiters {
+		t.Fatalf("未观察到预期的 %d 个并发恢复调用，实际 %d", waiters, overlap)
+	}
+	f.assertSettled(t)
+}
+
+// BenchmarkStalePendingObservations 显式比较 64 个调用各自重放相同 32 笔已结清快照的原路径、批查及产品路径。
+// 每模式单独创建真实用户与 PG schema，计时仅包括并发重放，另用语句触发器报告每轮 DELETE 尝试数。
+// 基准完成后核对恰好 32 个事件、用户消费 4 美元、待办清空；独立调用本基准时才会运行大规模研究。
+func BenchmarkStalePendingObservations(b *testing.B) {
+	for _, mode := range []string{"baseline", "receipt", "product"} {
+		b.Run(mode, func(b *testing.B) {
+			f := newStaleObservationFixture(b, 32, 64)
+			if _, err := f.db.Engine.Exec(`CREATE SEQUENCE study_deletes;
+				CREATE FUNCTION count_stale_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('study_deletes');RETURN NULL;END $$;
+				CREATE TRIGGER count_stale_delete AFTER DELETE ON usage_pending FOR EACH STATEMENT EXECUTE FUNCTION count_stale_delete()`); err != nil {
+				b.Fatal(err)
+			}
+			for b.Loop() {
+				f.replayStaleObservations(b, mode)
+			}
+			f.assertSettled(b)
+			var count int64
+			if _, err := f.db.Engine.SQL("SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM study_deletes").Get(&count); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportMetric(float64(count)/float64(b.N), "deletes/op")
+		})
 	}
 }
