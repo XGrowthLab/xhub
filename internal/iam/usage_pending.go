@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 )
 
@@ -86,43 +87,75 @@ type pendingWrite struct {
 	done     chan struct{}
 	err      error
 	canceled bool
+	retry    atomic.Pointer[pendingWrite] // 同一批等待者只选一人重试存储错误。
 }
 
 // settleObservedPending 协调本进程对同一 PG 原始快照的结算、删除与确认，不缓存已结束工作的结果。
 // 只有数据库观察已在领写者开始前结束且原始 JSON 完全相同，才能共用其核对结果；后来者须重新查 PG 证明原快照。
-// 取消只影响自己的等待，领写者取消不会阻止其他请求继续处理。不同快照保持原有独立冲突核对。
+// 取消只影响自己的等待，确定性冲突可共享，普通存储错误由同批等待者共享一次重试。不同快照仍独立核对。
 func (db *DB) settleObservedPending(ctx context.Context, record UsageRecord, saved pendingUsage) error {
 	work := &pendingWrite{started: time.Now(), payload: saved.Payload, done: make(chan struct{})}
 	existing, loaded := db.pendingWrites.LoadOrStore(saved.RequestID, work)
 	if !loaded {
-		defer db.pendingWrites.Delete(saved.RequestID)
-		defer close(work.done)
-		// 若领写者在数据库或其驱动内异常退出，defer 仍会唤醒等待者，但绝不能发布零值成功。
-		work.err = errPendingSettlementInterrupted
-		err := db.settleFrozenPending(ctx, record, saved)
-		work.canceled = ctx.Err() != nil
-		work.err = err
-		return err
+		defer db.pendingWrites.CompareAndDelete(saved.RequestID, work)
+		return db.runPendingWrite(ctx, record, saved, work)
 	}
 	prior := existing.(*pendingWrite)
-	if saved.Payload == prior.payload {
+	if saved.Payload != prior.payload {
+		return db.settleFrozenPending(ctx, record, saved)
+	}
+	for retried := false; ; retried = true {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-prior.done:
 		}
-		if !saved.observedAt.IsZero() && !saved.observedAt.After(prior.started) && !(prior.canceled && prior.err != nil) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if prior.err == errPendingSettlementInterrupted {
 			return prior.err
 		}
+		early := !saved.observedAt.IsZero() && !saved.observedAt.After(prior.started)
 		if prior.err == nil {
+			if early {
+				return nil
+			}
 			// 后观察的请求不得信任先前成功，即使相同 ID 和正文曾经已付费。
 			verified, err := verifiedPendingReceipts(ctx, db, []pendingUsage{saved})
 			if err == nil && verified[0] {
 				return nil
 			}
+			return db.settleFrozenPending(ctx, record, saved)
 		}
+		if !prior.canceled && errors.Is(prior.err, ErrConflict) {
+			if early {
+				return prior.err
+			}
+			return db.settleFrozenPending(ctx, record, saved)
+		}
+		if retried && !prior.canceled {
+			// 同一批已经用过一次独立重试。持续的库故障不能让所有等待者再同时访问数据库。
+			return prior.err
+		}
+		// 上一个调用者自己的取消不消耗健康等待者的机会。新领写者沿用自己的上下文；其他人仍可单独取消。
+		work.started = time.Now()
+		if prior.retry.CompareAndSwap(nil, work) {
+			return db.runPendingWrite(ctx, record, saved, work)
+		}
+		prior = prior.retry.Load()
 	}
-	return db.settleFrozenPending(ctx, record, saved)
+}
+
+// runPendingWrite 独占 work 发布该次严格结算的真实结果，由首笔调用或一组活跃等待者选出的重试者执行。
+// ctx 只属于该领写者；异常退出同样唤醒等待者，但只会发布中断错误，未确认的待办可由后续调用恢复。
+func (db *DB) runPendingWrite(ctx context.Context, record UsageRecord, saved pendingUsage, work *pendingWrite) error {
+	work.err = errPendingSettlementInterrupted
+	defer close(work.done)
+	err := db.settleFrozenPending(ctx, record, saved)
+	work.canceled = ctx.Err() != nil
+	work.err = err
+	return err
 }
 
 // settleFrozenPending 严格结算已冻结的完整快照，再按实际保存的 JSON 确认；供定向、扫描与磁盘恢复共用。
@@ -195,7 +228,8 @@ func (db *DB) FlushPendingUsage(ctx context.Context, limit int) error {
 }
 
 // flushObservedPending 处理一次 SELECT 实际取得的不可变快照；observedAt 为观察结束后的本机时刻。
-// 多调用争用时逐组在 PostgreSQL 证明已结清项，未获证明者保持逐笔重放及独立错误，结束后释放扫描计数。
+// pendingSweeps 仅统计当前 DB 实例的大扫描重叠；不推测其他副本的工作量。跨副本仍由 PostgreSQL 的指纹与事务去重。
+// 在本地重叠时逐组证明已结清项，未获证明者保持逐笔重放及独立错误，结束后释放扫描计数。
 func (db *DB) flushObservedPending(ctx context.Context, rows []pendingUsage, observedAt time.Time) error {
 	for i := range rows {
 		rows[i].observedAt = observedAt

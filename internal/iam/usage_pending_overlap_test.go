@@ -313,3 +313,91 @@ func TestPendingLeaderPanicCannotAcknowledge(t *testing.T) {
 		t.Fatalf("恢复后金额事实重复或待办未清: %v/%v", rows, err)
 	}
 }
+
+// TestPendingRetryIsShared 在第一笔账本已提交、删除待办前让十二个独立观察者排队。
+// 用真实 PostgreSQL 触发器制造一次或持续故障，核对整群至多两次尝试、单独取消和最终唯一账本；夹具清理 schema。
+func TestPendingRetryIsShared(t *testing.T) {
+	for _, mode := range []string{"transient", "persistent", "leader-canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			db := testDB(t)
+			r := usageRecord("shared-store-retry", "retry-owner", .125)
+			if err := db.PrepareDelivery(t.Context(), r, time.Now().Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := db.ConfirmDeliveryForSettlement(t.Context(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			maxFailures := map[string]int{"transient": 1, "persistent": 100, "leader-canceled": 0}[mode]
+			if _, err := db.Engine.Exec(fmt.Sprintf(`CREATE SEQUENCE ack_attempt;
+				CREATE FUNCTION fail_ack() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+				IF nextval('ack_attempt') <= %d THEN RAISE EXCEPTION 'fixture retryable storage failure'; END IF;
+				RETURN OLD; END $$;
+				CREATE TRIGGER fail_ack BEFORE DELETE ON usage_pending FOR EACH ROW EXECUTE FUNCTION fail_ack()`, maxFailures)); err != nil {
+				t.Fatal(err)
+			}
+			h := &pendingSQLHook{entered: make(chan struct{}), release: make(chan struct{})}
+			h.hold.Store(true)
+			db.Engine.AddHook(h)
+			release := sync.OnceFunc(func() { close(h.release) })
+			defer release()
+			leadCtx, cancelLead := context.WithCancel(t.Context())
+			defer cancelLead()
+			leader := make(chan error, 1)
+			go func() { leader <- receipt.Settle(leadCtx) }()
+			select {
+			case <-h.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("领写未到达实际确认阶段")
+			}
+			const observers = 12
+			results := make([]chan error, observers)
+			var cancelFirst context.CancelFunc
+			for i := range results {
+				ctx := t.Context()
+				if i == 0 {
+					ctx, cancelFirst = context.WithCancel(ctx)
+					defer cancelFirst()
+				}
+				wait := &observedPendingWait{Context: ctx, entered: make(chan struct{})}
+				results[i] = make(chan error, 1)
+				go func() { results[i] <- db.settlePendingUsage(wait, receipt.saved) }()
+				select {
+				case <-wait.entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("等待者未加入当前写入")
+				}
+			}
+			cancelFirst()
+			if err := <-results[0]; !errors.Is(err, context.Canceled) {
+				t.Fatalf("单一等待者取消收到 %v", err)
+			}
+			if mode == "leader-canceled" {
+				cancelLead()
+			}
+			release()
+			if err := <-leader; err == nil || mode == "leader-canceled" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("首笔未报告注入故障：%v", err)
+			}
+			for _, result := range results[1:] {
+				err := <-result
+				if (err != nil) != (mode == "persistent") {
+					t.Fatalf("活跃等待者收到错误结果：%v", err)
+				}
+			}
+			wantAttempts := 2
+			if mode == "leader-canceled" {
+				wantAttempts = 1
+			}
+			rows, err := db.Engine.QueryString(`SELECT (SELECT last_value FROM ack_attempt) AS attempts,
+				(SELECT count(*) FROM usage_events WHERE request_id=?) AS billed,(SELECT count(*) FROM usage_pending WHERE request_id=?) AS pending`, r.RequestID, r.RequestID)
+			wantPending := "0"
+			if mode == "persistent" {
+				wantPending = "1"
+			}
+			if err != nil || len(rows) != 1 || rows[0]["attempts"] != fmt.Sprint(wantAttempts) || rows[0]["pending"] != wantPending || rows[0]["billed"] != "1" {
+				t.Fatalf("重试风暴、错误确认或账单不唯一：%v/%v", rows, err)
+			}
+		})
+	}
+}

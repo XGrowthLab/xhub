@@ -1,13 +1,16 @@
 package iam
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sunqirui1987/xhub/cmd/regression/testsupport"
+	"xorm.io/xorm"
 )
 
 // TestStalePendingReceiptsGuards 制造同 ID 不同快照、外部删除、原预占、已核销和同内容重新入队。
@@ -204,5 +207,102 @@ func BenchmarkStalePendingObservations(b *testing.B) {
 			}
 			b.ReportMetric(float64(count)/float64(b.N), "deletes/op")
 		})
+	}
+}
+
+// TestPendingReceiptWaitsForConcurrentBudgetFences 用同一私有 schema 的两个 IAM 实例，重现未提交的预占和人工核销。
+// 普通 SELECT 可读到陈旧的无围栏状态，正式收据必须等写锁并在提交后拒绝这两笔；另核对到期双层预算重置且旧账不重扣。清理连接和 schema。
+func TestPendingReceiptWaitsForConcurrentBudgetFences(t *testing.T) {
+	dsn := testsupport.Postgres(t, "receipt_fence")
+	db, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal("打开写入实例失败")
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	reader, err := Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatal("打开验证实例失败")
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	org, err := db.CreateOrgWithConfig(t.Context(), Actor{}, "receipt-period", nil, OrgConfig{BudgetDuration: "24h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := db.CreateUser(t.Context(), Actor{}, UserInput{Email: "receipt-period@example.com", Password: "receipt-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed []pendingUsage
+	for _, id := range []string{"open-hold", "manual-resolution", "settled-earlier"} {
+		r := usageRecord(id, user.ID, .25)
+		r.OrganizationID = org.ID
+		r.TS = time.Now().UTC().Add(-48 * time.Hour)
+		if err := db.RecordUsageExact(t.Context(), []UsageRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observed = append(observed, pendingUsage{RequestID: id, Payload: string(raw)})
+	}
+	ready, release := make(chan struct{}), make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	defer finish()
+	writer := make(chan error, 1)
+	go func() {
+		writer <- db.tx(t.Context(), func(s *xorm.Session) error {
+			if _, err := s.Exec(`INSERT INTO budget_reservations(request_id,kind,node_id,user_id,amount) VALUES('open-hold','user',?,?,1)`, user.ID, user.ID); err != nil {
+				return err
+			}
+			if _, err := s.Exec(`INSERT INTO budget_reconciliations(reservation_id,call_id,payload) VALUES('manual-attempt','manual-resolution','{}')`); err != nil {
+				return err
+			}
+			if _, err := s.Exec(`UPDATE users SET spend=5, budget_reset_day=1,budget_reset_at=now()-interval '1 hour' WHERE id=?`, user.ID); err != nil {
+				return err
+			}
+			if _, err := s.Exec(`UPDATE organizations SET spend=5,budget_reset_at=now()-interval '1 hour' WHERE id=?`, org.ID); err != nil {
+				return err
+			}
+			close(ready)
+			select {
+			case <-release:
+				return nil
+			case <-t.Context().Done():
+				return t.Context().Err()
+			}
+		})
+	}()
+	select {
+	case <-ready:
+	case err := <-writer:
+		t.Fatalf("未建立在途预算围栏: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("未观察到未提交围栏")
+	}
+	rows, err := reader.Engine.QueryString(`SELECT count(*) AS stale FROM usage_events e
+		WHERE NOT EXISTS (SELECT 1 FROM budget_reservations h WHERE h.request_id=e.request_id)
+		AND NOT EXISTS (SELECT 1 FROM budget_reconciliations f WHERE f.call_id=e.request_id)`)
+	if err != nil || len(rows) != 1 || rows[0]["stale"] != "3" {
+		t.Fatalf("普通查询未读到预期旧版本：%v/%v", rows, err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	verified, verifyErr := verifiedPendingReceipts(ctx, reader, observed)
+	deadlineErr := ctx.Err()
+	cancel()
+	if verifyErr == nil || len(verified) != 0 || !errors.Is(deadlineErr, context.DeadlineExceeded) {
+		t.Fatalf("跨实例确认在事务提交前越过围栏：%v/%v/%v", verified, verifyErr, deadlineErr)
+	}
+	finish()
+	if err := <-writer; err != nil {
+		t.Fatal(err)
+	}
+	verified, err = verifiedPendingReceipts(t.Context(), reader, observed)
+	if err != nil || len(verified) != 1 || !verified[2] {
+		t.Fatalf("预占或人工核销错误通过，或旧账本被重扣：%v/%v", verified, err)
+	}
+	rows, err = reader.Engine.QueryString(`SELECT u.spend+o.spend AS spend,(u.budget_reset_at>now() AND o.budget_reset_at>now()) AS advanced FROM users u,organizations o WHERE u.id=? AND o.id=?`, user.ID, org.ID)
+	if err != nil || len(rows) != 1 || rows[0]["spend"] != "0" || rows[0]["advanced"] != "true" {
+		t.Fatalf("确认已入账快照前未刷新到期预算：%v/%v", rows, err)
 	}
 }
