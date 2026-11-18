@@ -17,13 +17,13 @@ import (
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
-// defaultGatewayIdleConns 供启动配置处理空闲上限缺省值：未设置连接上限时保留 16 条，
+// defaultGatewayIdleConns 供启动配置处理空闲上限缺省值：未设置连接上限时保持 Go 原有的 2 条，
 // 明确限定容量的池按该容量保留、最多 25 条。只配置连接回收，不立即创建连接。
 func defaultGatewayIdleConns(maxOpen int) int {
 	if maxOpen > 0 {
 		return min(25, maxOpen)
 	}
-	return 16
+	return 2
 }
 
 // databasePoolLimit 解析启动时的非负每池上限；空串采用调用方提供的默认值，显式零保留其配置语义。

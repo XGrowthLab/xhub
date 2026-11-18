@@ -235,14 +235,14 @@ func TestGatewayServesWithLimitedPools(t *testing.T) {
 // 纯函数返回保留数量和回收时长，无外部资源。环境变量省略时应采用新默认值而非显式零。
 func TestGatewayIdlePolicy(t *testing.T) {
 	idle, err := databasePoolLimit("XHUB_DATABASE_MAX_IDLE_CONNS", "", defaultGatewayIdleConns(0))
-	if err != nil || idle != 16 || defaultGatewayIdleConns(1) != 1 || defaultGatewayIdleConns(25) != 25 || defaultGatewayIdleConns(100) != 25 {
+	if err != nil || idle != 2 || defaultGatewayIdleConns(1) != 1 || defaultGatewayIdleConns(25) != 25 || defaultGatewayIdleConns(100) != 25 {
 		t.Fatalf("缺省空闲保留数=%d, err=%v", idle, err)
 	}
 	for _, tc := range []struct {
 		open, idle, want int
 		ttl              time.Duration
 	}{
-		{0, idle, 16, 5 * time.Minute}, {25, 25, 25, 5 * time.Minute}, {3, 16, 3, 5 * time.Minute}, {1, 16, 1, 0}, {25, 2, 2, 0}, {25, 0, 0, 0},
+		{0, idle, 2, 0}, {25, 25, 25, 5 * time.Minute}, {3, 16, 3, 5 * time.Minute}, {1, 16, 1, 0}, {25, 2, 2, 0}, {25, 0, 0, 0},
 	} {
 		got, ttl := gatewayIdlePolicy(tc.open, tc.idle)
 		if got != tc.want || ttl != tc.ttl {
