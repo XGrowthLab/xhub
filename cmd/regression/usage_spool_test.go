@@ -101,6 +101,12 @@ func verifyConcurrentChatBills(t *testing.T) {
 			streamBills++
 		}
 	}
+	// 同用户的独立调用可能共用结算事务。监控金额须逐笔保持与真实 NUMERIC 账本完全相等。
+	var monitorMatches bool
+	if _, err := h.db.Engine.SQL(`SELECT (SELECT sum(cost) FROM model_monitor_buckets WHERE key_id=?) =
+		(SELECT sum(cost) FROM usage_events WHERE key_id=?)`, scope.keyID, scope.keyID).Get(&monitorMatches); err != nil || !monitorMatches {
+		t.Fatalf("并发后监控金额与原始账本的精确金额不一致: %v", err)
+	}
 	var inserts int
 	if _, err := h.db.Engine.SQL("SELECT last_value FROM billed_attempts").Get(&inserts); err != nil || inserts != succeeded {
 		t.Errorf("结算发生冗余写入：成功=%d 实际INSERT尝试=%d err=%v", succeeded, inserts, err)
