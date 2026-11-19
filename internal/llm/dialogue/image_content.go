@@ -2,10 +2,14 @@ package dialogue
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 )
+
+// ErrMessagesImageDetailUnsupported 表示 Messages 无法表达指定的图片精度；编码器返回给候选筛选和公开错误映射使用。
+var ErrMessagesImageDetailUnsupported = errors.New("image detail cannot be expressed by Messages; omit detail, use detail=auto, or choose a deployment that preserves the requested detail")
 
 // ContentPart 保存跨协议消息中有序的文本、图片或内联 PDF；URL 为远程地址或原始 data URL，FileID 仅能由 Responses 原生通道解释。
 // 解析器生成、编码器读取；不下载图片，不保存文件，也不把图片字节伪装成文本或推断模型视觉能力。
@@ -250,7 +254,7 @@ func encodeImageContent(content []ContentPart, protocol string) ([]any, error) {
 			out = append(out, image)
 		case "anthropic-messages":
 			if part.Detail != "" && part.Detail != "auto" {
-				return nil, fmt.Errorf("image detail cannot be expressed by Messages")
+				return nil, ErrMessagesImageDetailUnsupported
 			}
 			source := map[string]any{"type": "url", "url": part.URL}
 			if strings.HasPrefix(part.URL, "data:") {

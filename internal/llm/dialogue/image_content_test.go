@@ -2,6 +2,7 @@ package dialogue
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -97,8 +98,9 @@ func TestVisionBoundaries(t *testing.T) {
 		if err != nil || again.Turns[0].Content[1].Detail != detail {
 			t.Fatal("图片精度丢失")
 		}
-		if _, err = EncodeDialogue(d, "anthropic-messages", "upstream"); (err == nil) != (detail == "auto") {
-			t.Fatal("Messages 静默丢失了显式图片精度")
+		_, err = EncodeDialogue(d, "anthropic-messages", "upstream")
+		if detail == "auto" && err != nil || detail != "auto" && !errors.Is(err, ErrMessagesImageDetailUnsupported) {
+			t.Fatalf("Messages 图片精度 %s 的兼容结果不正确: %v", detail, err)
 		}
 		if _, err = EncodeDialogue(d, "gemini", "upstream"); err == nil {
 			t.Fatal("未实现的 Google 图片桥接被静默丢弃")

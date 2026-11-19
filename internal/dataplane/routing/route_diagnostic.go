@@ -44,6 +44,7 @@ func DiagnoseRoute(directory, eligible []config.ModelEntry, alias, endpoint stri
 	if !adapted {
 		dialogue = nil
 	}
+	// 决定按启用候选在前、停用候选在后存放；响应映射只依据启用候选。
 	_, d.decisions = providerdeployment.Candidates(matched, endpoint, dialogue, nativeBody...)
 	// 单独匹配暂停目录，避免全局暂停计数把其他公开模型误判为已禁用；复制元数据不修改共享配置。
 	var paused []config.ModelEntry
@@ -134,12 +135,17 @@ func (d routeDiagnosis) Failure(alias string) (int, string, string) {
 		return 400, "invalid_request", "model not found: " + alias
 	}
 	if d.compatible == 0 {
-		searchOnly := len(d.decisions) > 0
-		for _, decision := range d.decisions {
-			searchOnly = searchOnly && decision.SearchUnsupported
+		// 只有所有启用候选的公开能力错误一致时，才提示调用方调整相应参数。
+		// 其他排除原因可能来自部署配置，仍通过既有路由错误与关联诊断报告。
+		capabilityErr := d.decisions[0].CapabilityError
+		for _, decision := range d.decisions[1:d.matched] {
+			if decision.CapabilityError != capabilityErr {
+				capabilityErr = nil
+				break
+			}
 		}
-		if searchOnly {
-			return 400, "unsupported_capability", llmdialogue.ErrWebSearchUnsupported.Error()
+		if capabilityErr != nil {
+			return 400, "unsupported_capability", capabilityErr.Error()
 		}
 		return 400, "model_unavailable", fmt.Sprintf("model %s exists but has no deployment compatible with endpoint %s and this request; check model transport, endpoint configuration and request capabilities", alias, d.endpoint)
 	}

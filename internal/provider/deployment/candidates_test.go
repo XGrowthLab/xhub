@@ -79,7 +79,7 @@ func TestNativeCandidatesHonorSearchPolicy(t *testing.T) {
 			enabled := config.CloneModels([]config.ModelEntry{disabled})[0]
 			enabled.ModelInfo["web_search_support"] = "inherit"
 			pool, decisions := providerdeployment.Candidates([]config.ModelEntry{disabled}, tc.endpoint, nil, tc.search)
-			if len(pool) != 0 || len(decisions) != 1 || !decisions[0].SearchUnsupported {
+			if len(pool) != 0 || len(decisions) != 1 || decisions[0].CapabilityError != llmdialogue.ErrWebSearchUnsupported {
 				t.Fatalf("禁用搜索未拒绝原生搜索: %+v", decisions)
 			}
 			pool, _ = providerdeployment.Candidates([]config.ModelEntry{disabled}, tc.endpoint, nil, tc.ordinary)
