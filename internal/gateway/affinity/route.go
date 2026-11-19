@@ -59,6 +59,9 @@ func (s *State) PlanRoute(r *http.Request, alias string, body map[string]any, p 
 		}
 	}
 	plan := dpcontract.RoutePlan{Alias: alias, Caller: callerScope(p), Endpoint: endpoint}
+	if endpoint == "responses" {
+		plan.CompactHistory = compactHistoryAllowed(p)
+	}
 	// 2. 优先校验明确的会话信号：标准头的多个值与正文 session_id 必须一致。
 	// 字段存在但为空、类型错误、超长或包含非法字符都属于错误，不能悄悄回退
 	// 为推断会话；先校验也保证后续继承父响应时不会忽略客户端的身份冲突。
@@ -338,7 +341,7 @@ func (s *State) commitRoute(plan dpcontract.RoutePlan, deploymentID, responseID 
 			if err != nil {
 				return fmt.Errorf("response history could not be encoded")
 			}
-			if err := s.cacheWriteHistory(responseContextKey(plan.Alias, plan.Caller, responseID, plan.Endpoint), historyScopeKey(plan.Alias, plan.Caller, plan.Endpoint), string(raw)); err != nil {
+			if err := s.cacheWriteHistory(responseContextKey(plan.Alias, plan.Caller, responseID, plan.Endpoint), historyScopeKey(plan.Alias, plan.Caller, plan.Endpoint), string(raw), plan.CompactHistory); err != nil {
 				return fmt.Errorf("response history could not be saved")
 			}
 		}

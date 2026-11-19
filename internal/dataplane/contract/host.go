@@ -232,6 +232,8 @@ type Bypass interface {
 // 普通会话偏好执行前重新验证；Required 父响应归属只能回原目标，失效必须拒绝。
 // Claim/Save 协调缓存版本而非锁住上游请求；History 只能来自已授权的临时续接上下文，不授予额外权限。
 type RoutePlan struct {
+	// CompactHistory 由 affinity 根据可信身份选择统一 Responses 的写入格式，不参与恢复或归属。
+	CompactHistory bool
 	// MessagesHistory 只保存 affinity 在当前身份、别名、会话与连接范围验证过的原生助手历史。
 	// Responses 客户端引用仅是查询标识，不是授权；执行器解析完整历史时使用，不能由请求正文直接填充。
 	MessagesHistory map[string]llmdialogue.MessagesReplay

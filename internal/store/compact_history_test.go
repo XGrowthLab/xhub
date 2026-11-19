@@ -14,16 +14,15 @@ import (
 
 // TestCompactHistoryPersistence 验证真实 PostgreSQL 中历史去重、顺序和调用方隔离；使用独立 schema 并自动清理。
 func TestCompactHistoryPersistence(t *testing.T) {
-	t.Setenv("XHUB_COMPACT_HISTORY", "1")
 	s, _ := openModelWeightStores(t)
 	ctx := t.Context()
 	a := `{"Role":"user","Text":"` + strings.Repeat("same long content ", 200) + `"}`
 	b := `{"Role":"assistant","Native":{"encrypted_content":"signed-opaque","call_id":"tool-1"}}`
 	first, second := "["+a+","+b+"]", "["+a+","+b+","+a+"]"
-	if err := s.WriteHistory(ctx, "h1", "scope-a", first); err != nil {
+	if err := s.WriteHistory(ctx, "h1", "scope-a", first, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WriteHistory(ctx, "h2", "scope-a", second); err != nil {
+	if err := s.WriteHistory(ctx, "h2", "scope-a", second, true); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.ReadHistory(ctx, "h2", "scope-a"); err != nil || got != second {
@@ -36,7 +35,7 @@ func TestCompactHistoryPersistence(t *testing.T) {
 	if _, err := s.ReadHistory(ctx, "h2", "scope-b"); err == nil {
 		t.Fatal("跨作用域读取成功")
 	}
-	if err := s.WriteHistory(ctx, "h3", "scope-b", first); err != nil {
+	if err := s.WriteHistory(ctx, "h3", "scope-b", first, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM conversation_history_blocks`).Scan(&blocks); err != nil || blocks != 4 {
@@ -48,7 +47,7 @@ func TestCompactHistoryPersistence(t *testing.T) {
 	if _, err := s.ReadHistory(ctx, "h2", "scope-a"); err == nil {
 		t.Fatal("缺失内容块被当成完整历史")
 	}
-	if err := s.WriteHistory(ctx, "bad", "scope-a", "broken-json"); err == nil {
+	if err := s.WriteHistory(ctx, "bad", "scope-a", "broken-json", true); err == nil {
 		t.Fatal("损坏历史被接受")
 	}
 	c, cancel := context.WithCancel(ctx)
@@ -86,9 +85,8 @@ func TestCompactHistoryLegacyMigration(t *testing.T) {
 	if err != nil || n != 0 {
 		t.Fatalf("重跑重复迁移: %d %v", n, err)
 	}
-	t.Setenv("XHUB_COMPACT_HISTORY", "0")
 	value := `[{"turn":"updated"}]`
-	if err := s.WriteHistory(ctx, keys[0], "current-scope", value); err != nil {
+	if err := s.WriteHistory(ctx, keys[0], "current-scope", value, false); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.ReadHistory(ctx, keys[0], "current-scope")
@@ -103,7 +101,6 @@ func TestCompactHistoryLegacyMigration(t *testing.T) {
 
 // TestCompactHistoryStorageGrowth 测量多轮长会话的真实数据库占用；数据为随机合成文本，私有 schema 自动清理。
 func TestCompactHistoryStorageGrowth(t *testing.T) {
-	t.Setenv("XHUB_COMPACT_HISTORY", "1")
 	s, _ := openModelWeightStores(t)
 	ctx := t.Context()
 	if _, err := s.DB.ExecContext(ctx, `CREATE TABLE synthetic_legacy_history (body TEXT NOT NULL)`); err != nil {
@@ -131,7 +128,7 @@ func TestCompactHistoryStorageGrowth(t *testing.T) {
 		if _, err = s.DB.ExecContext(ctx, `INSERT INTO synthetic_legacy_history(body) VALUES($1)`, string(history)); err != nil {
 			t.Fatal(err)
 		}
-		if err = s.WriteHistory(ctx, fmt.Sprintf("test-%d", i), "isolated-scope", string(history)); err != nil {
+		if err = s.WriteHistory(ctx, fmt.Sprintf("test-%d", i), "isolated-scope", string(history), true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,7 +183,6 @@ func TestCompactHistoryEncodingBoundaries(t *testing.T) {
 
 // TestCompactMigrationConcurrentWrite 验证迁移与同一响应的实时新写入并发时不能覆盖新值；隔离 schema 自动清理。
 func TestCompactMigrationConcurrentWrite(t *testing.T) {
-	t.Setenv("XHUB_COMPACT_HISTORY", "1")
 	s, _ := openModelWeightStores(t)
 	ctx := t.Context()
 	for i := 0; i < 12; i++ {
@@ -196,7 +192,7 @@ func TestCompactMigrationConcurrentWrite(t *testing.T) {
 		}
 		errs := make(chan error, 2)
 		go func() { _, _, err := s.MigrateLegacyHistories(ctx, "", 1000); errs <- err }()
-		go func() { errs <- s.WriteHistory(ctx, key, "current-scope", `[{"value":"new"}]`) }()
+		go func() { errs <- s.WriteHistory(ctx, key, "current-scope", `[{"value":"new"}]`, true) }()
 		for j := 0; j < 2; j++ {
 			if err := <-errs; err != nil {
 				t.Fatal(err)
@@ -233,7 +229,6 @@ func TestCompactMigrationRejectsInvalidLegacy(t *testing.T) {
 
 // TestCompactConcurrentSharedBlocks 验证不同响应并发写入相同消息块时保持顺序并避免相反加锁顺序；私有 schema 自动清理。
 func TestCompactConcurrentSharedBlocks(t *testing.T) {
-	t.Setenv("XHUB_COMPACT_HISTORY", "1")
 	s, _ := openModelWeightStores(t)
 	ctx := t.Context()
 	var wg sync.WaitGroup
@@ -246,7 +241,7 @@ func TestCompactConcurrentSharedBlocks(t *testing.T) {
 				value = `[{"v":"b"},{"v":"a"}]`
 			}
 			key := fmt.Sprintf("parallel-%d", i)
-			if err := s.WriteHistory(ctx, key, "same-scope", value); err != nil {
+			if err := s.WriteHistory(ctx, key, "same-scope", value, true); err != nil {
 				t.Errorf("并发写入失败: %v", err)
 				return
 			}
@@ -265,7 +260,6 @@ func TestCompactConcurrentSharedBlocks(t *testing.T) {
 
 // TestCompactHistoryLargeItem 验证大消息的无损压缩及真实 PostgreSQL 往返；合成随机输入和私有 schema 自动清理。
 func TestCompactHistoryLargeItem(t *testing.T) {
-	t.Setenv("XHUB_COMPACT_HISTORY", "1")
 	s, _ := openModelWeightStores(t)
 	rnd := rand.New(rand.NewSource(89))
 	raw := make([]byte, 8<<20)
@@ -277,7 +271,7 @@ func TestCompactHistoryLargeItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	if err = s.WriteHistory(t.Context(), "large", "scope", string(history)); err != nil {
+	if err = s.WriteHistory(t.Context(), "large", "scope", string(history), true); err != nil {
 		t.Fatal(err)
 	}
 	writeTime := time.Since(start)

@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"time"
 )
@@ -176,8 +175,8 @@ func lockHistoryKey(ctx context.Context, tx *sql.Tx, key string) error {
 }
 
 // WriteHistory 保存一份完整续聊历史；key 是身份隔离后的响应键，scope 是可信隔离范围。
-// 环境变量 XHUB_COMPACT_HISTORY=1 启用新写入，默认旧格式；切回旧写入时事务删除旧的新格式索引，避免读到过期内容。
-func (s *Store) WriteHistory(ctx context.Context, key, scope, value string) error {
+// compact 由可信路由计划选择；切回旧写入时事务删除同键的新格式索引，避免重读过期副本。
+func (s *Store) WriteHistory(ctx context.Context, key, scope, value string, compact bool) error {
 	if s == nil || s.DB == nil {
 		return errors.New("conversation storage unavailable")
 	}
@@ -192,7 +191,7 @@ func (s *Store) WriteHistory(ctx context.Context, key, scope, value string) erro
 	if err = lockHistoryKey(ctx, tx, key); err != nil {
 		return err
 	}
-	if os.Getenv("XHUB_COMPACT_HISTORY") == "1" {
+	if compact {
 		if _, err = putHistoryTx(ctx, tx, key, scope, value, false); err != nil {
 			return err
 		}

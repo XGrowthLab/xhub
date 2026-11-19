@@ -105,12 +105,15 @@ jobs:
           E2E_FULL_COVERAGE: '0'
       # 独立无 Redis 链验证 PostgreSQL 待结算恢复，并覆盖 Agent 历史、流终态、取消、文档和 Key 生命周期。
       - name: API client reliability browser regression
-        run: bash scripts/e2e.sh scenarios/legacy/error-logs/sc-020.test.ts scenarios/regression/personal-log-capture- proxy-body-limit.test.ts client-docs-url- client-cancellation- stream-terminal-sc- upstream-stream-errors- billing-pending-recovery usage-spool- key-lifecycle- agent-history- model-view- hard-budget- budget-reconciliation- messages-signed-history- claude-client-compat- user-bulk-budget- scenarios/enterprise/saml- scenarios/enterprise/sso-valid.test.ts scenarios/directory/sso-config.test.ts
+        run: bash scripts/e2e.sh scenarios/legacy/error-logs/sc-020.test.ts scenarios/regression/personal-log-capture- proxy-body-limit.test.ts client-docs-url- client-cancellation- stream-terminal-sc- upstream-stream-errors- billing-pending-recovery usage-spool- key-lifecycle- agent-history- model-view- hard-budget- budget-reconciliation- messages-signed-history- claude-client-compat- user-bulk-budget- scenarios/enterprise/saml- scenarios/enterprise/sso-valid.test.ts scenarios/directory/sso-config.test.ts compact-history-account-canary.test.ts
         env:
           E2E_RUN_DIR: ${{ github.workspace }}/.e2e/release-agent-reliability
           E2E_BUILD_DIR: .next-agent-reliability
           E2E_PORTABLE_CONSOLE: '1'
           E2E_REDIS: '0'
+          # 第一组仍验证全量压缩。此组验证名单内外账号采用不同的历史写入格式。
+          XHUB_COMPACT_HISTORY: canary
+          XHUB_COMPACT_HISTORY_USER_IDS: history-canary-en,history-canary-zh-cn
           # 该步骤同样只运行可靠性子集，不能要求覆盖全部业务清单。
           E2E_FULL_COVERAGE: '0'
       - uses: actions/upload-artifact@v4

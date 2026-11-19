@@ -165,12 +165,12 @@ func (s *State) cacheReadHistory(key, scope string) (string, error) {
 }
 
 // cacheWriteHistory 通过支持新格式的存储写入历史，旧实现保留原始行为。
-// key、scope 和 value 分别为响应键、隔离范围和完整历史；错误不得被转换为成功。
-func (s *State) cacheWriteHistory(key, scope, value string) error {
+// key、scope 和 value 分别为响应键、隔离范围和完整历史，compact 选择写入格式；错误不得被转换为成功。
+func (s *State) cacheWriteHistory(key, scope, value string, compact bool) error {
 	if store, ok := s.durable.(HistoryStore); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return store.WriteHistory(ctx, key, scope, value)
+		return store.WriteHistory(ctx, key, scope, value, compact)
 	}
 	return s.cacheWrite(key, value)
 }
