@@ -178,6 +178,8 @@ print(response.choices[0].message.content)
 
 新正文与账单、错误摘要及续聊历史分开存储，到期后定期分批清理；备份中的副本会随备份轮换淘汰。PostgreSQL 会按其 TOAST 策略对较大的可压缩正文进行无损压缩，效果取决于内容；数据库实际占用和备份大小还受存储与备份方式影响。正文存储异常时，本次正文不会通过账单队列补录，日志会说明未保存；账单仍按原机制恢复。默认单条正文上限为 4 MiB、单用户 512 MiB、全局 20 GiB，按未压缩字节计量；超限不会中断对话，日志会说明未保存。运维可分别通过环境变量 `XHUB_LOG_BODY_REQUEST_BYTES`、`XHUB_LOG_BODY_USER_BYTES`、`XHUB_LOG_BODY_GLOBAL_BYTES` 设置正整数上限，通过 `XHUB_LOG_BODY_GLOBAL_RETENTION_DAYS` 设置新全局记录的保留天数（默认 30 天，范围 1–3650）。个人记录固定 30 天；已存记录不追溯改期。无效配置会停止新增正文并显示失败，不影响推理或账单。正文可能包含用户敏感信息，此设置不提供自动加密。异步任务的后续轮询不替换初始正文；非 UTF-8 二进制正文暂不记录；部分流式内容达到既有 2 MiB 捕获边界时会标记不完整。
 
+运维人员可以先检查历史正文占用，再分批处理 30 天前的旧版请求与响应正文。[旧版正文清理手册](development/zh-CN/legacy-log-retention.md)
+
 [计价参考](development/zh-CN/pricing.md)解释单价单位、价格快照和结算；[运行行为参考](development/zh-CN/runtime.md)解释缓存、幂等、流式和任务边界。
 
 ## 9. 成员离职与访问回收

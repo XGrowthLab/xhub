@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 import { waitForLog } from "./product-fixes-scenario";
@@ -41,10 +44,56 @@ export function registerPersonalLogCapture(locale: "zh-CN" | "en") {
       await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).filter({ visible: true }).fill(offCall.headers()["x-litellm-call-id"]);
       await page.getByRole("row").filter({ hasText: offCall.headers()["x-litellm-call-id"] }).click();
       await expect(page.getByRole("note").filter({ hasText: translate(locale, "logsUX.captureDisabled") })).toBeVisible();
+      await verifyLegacyRetention(page, headers, locale, { legacyID: offCall.headers()["x-litellm-call-id"], currentID: id });
     } finally {
       await page.request.put(`${GATEWAY}/account/log-capture`, { headers, data: { enabled: false } });
     }
   });
+}
+
+/** 验证运维命令在真实日志页上的效果。参数为登录页面、鉴权头、语言及旧/新日志标识，返回异步验证结果。
+ * 用当前 E2E 专属数据库模拟已过期的历史正文，运行器会清理库内夹具及进程。
+ */
+async function verifyLegacyRetention(page: Page, headers: Record<string, string>, locale: "zh-CN" | "en", ids: { legacyID: string; currentID: string }) {
+  const schema = readFileSync(path.join(process.env.E2E_RUN_DIR!, "schema.txt"), "utf8").trim();
+  expect(schema).toMatch(/^e2e_\d+_\d+$/);
+  const database = process.env.E2E_DATABASE || "xhub";
+  expect(database).toMatch(/^[a-z][a-z0-9_]*$/);
+  const seed = execFileSync("docker", ["exec", "-i", "xhub-postgres", "psql", "-X", "-U", "xhub", "-d", database, "-qAt",
+    "-v", "ON_ERROR_STOP=1", "-v", "requestid=" + ids.legacyID], {
+    encoding: "utf8",
+    input: `SET search_path TO ${schema};
+UPDATE usage_events SET ts = now() - interval '31 days' WHERE request_id = :'requestid' RETURNING id;
+UPDATE request_logs SET body_capture_status = '', request_body =
+  '[{"role":"user","content":"Synthetic expired request body."}]',
+  response_body = '{"content":"Synthetic expired response."}',
+  proxy_request = '{"messages":[{"content":"Synthetic duplicate request."}]}'
+WHERE request_id = :'requestid';`,
+  }).trim();
+  const sequence = BigInt(seed);
+  expect(sequence > BigInt(0)).toBe(true);
+  const original = await waitForLog(page.request, headers, ids.legacyID);
+  expect(JSON.stringify(original.messages)).toContain("Synthetic expired request body.");
+  const pg = new URL("postgres://xhub:xhub_dev_password@127.0.0.1:5433/" + database);
+  pg.searchParams.set("sslmode", "disable");
+  pg.searchParams.set("search_path", schema);
+  const cutoff = new Date(Date.now() - (30 * 24 * 3600 + 60) * 1000).toISOString();
+  const result = execFileSync("go", ["run", "./cmd/log-body-retention", "--before=" + cutoff,
+    "--after=" + (sequence - BigInt(1)).toString(), "--limit=1", "--execute"], {
+    cwd: path.resolve(process.cwd(), ".."),
+    encoding: "utf8",
+    env: { ...process.env, XHUB_DATABASE_URL: pg.href },
+  });
+  expect(JSON.parse(result)).toMatchObject({ eligible: 1, cleared: 1 });
+  await stableGoto(page, "/logs/?log_id=" + ids.legacyID);
+  await expect(page.getByRole("note").filter({ hasText: translate(locale, "logsUX.captureExpired") })).toBeVisible();
+  const cleaned = await waitForLog(page.request, headers, ids.legacyID);
+  expect(cleaned.body_capture_status).toBe("expired");
+  expect(cleaned.spend).toBe(original.spend);
+  expect(JSON.stringify(cleaned)).not.toContain("Synthetic expired");
+  const recent = await waitForLog(page.request, headers, ids.currentID);
+  expect(recent.body_capture_status).toBe("saved");
+  expect(JSON.stringify(recent.messages)).toContain("Synthetic capture browser request.");
 }
 
 /** 验证已开启记录后的参数拒绝和异步失败；参数是已登录页面、会话头及语言，返回流程完成的 Promise。
