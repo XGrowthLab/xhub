@@ -70,42 +70,71 @@ func TestCompactHistoryAccountCanary(t *testing.T) {
 		t.Fatal("灰度用户未得到响应 ID")
 	}
 	counts(1, 0)
+	// 读取完整事件流，只接受成功终态中的可续接响应 ID。
+	followSSE := func(input, previous string) string {
+		t.Helper()
+		body := mkBody(input, true)
+		body["previous_response_id"] = previous
+		got := h.ok(http.MethodPost, path, listed.key, body)
+		for _, line := range strings.Split(got.text(), "\n") {
+			if data, ok := strings.CutPrefix(line, "data: "); ok {
+				var event struct {
+					Type     string `json:"type"`
+					Response struct {
+						ID string `json:"id"`
+					} `json:"response"`
+				}
+				if json.Unmarshal([]byte(data), &event) == nil && event.Type == "response.completed" && event.Response.ID != "" {
+					return event.Response.ID
+				}
+			}
+		}
+		t.Fatalf("SSE 未返回可续接的成功终态: %s", got.describe())
+		return ""
+	}
+	second := followSSE("Continue during the canary.", parent)
+	counts(2, 0)
+
 	session := h.ok(http.MethodPost, path, listed.session, mkBody("Start a session fixture.", false))
 	if stringField(session.json(), "id") == "" {
 		t.Fatal("灰度用户会话未得到响应 ID")
 	}
-	counts(2, 0)
+	counts(3, 0)
 	spoofed := mkBody("Use the unlisted fixture.", false)
 	spoofed["user"] = listed.userID
 	h.ok(http.MethodPost, path, unlisted.key, spoofed)
-	counts(2, 1)
+	counts(3, 1)
 	cross := mkBody("Try a foreign response.", false)
 	cross["previous_response_id"] = parent
 	if got := h.do(http.MethodPost, path, unlisted.key, cross); got.status != http.StatusBadRequest {
 		t.Fatalf("跨调用方续接未在出站前拒绝: %s", got.describe())
 	}
+	mu.Lock()
+	beforeRollback := len(requests)
+	mu.Unlock()
+	if beforeRollback != 4 {
+		t.Fatalf("跨调用方续接不得外发，实际收到 %d 次，预期 4 次", beforeRollback)
+	}
 
 	t.Setenv("XHUB_COMPACT_HISTORY", "0")
-	resume := mkBody("Continue after disabling.", true)
-	resume["previous_response_id"] = parent
-	got := h.ok(http.MethodPost, path, listed.key, resume)
-	success := false
-	for _, line := range strings.Split(got.text(), "\n") {
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			var event map[string]any
-			if json.Unmarshal([]byte(data), &event) == nil && event["type"] == "response.completed" {
-				success = true
-			}
+	followSSE("Continue after disabling.", second)
+	mu.Lock()
+	seen := append([]map[string]any(nil), requests...)
+	mu.Unlock()
+	if len(seen) != 5 {
+		t.Fatalf("回退后 SSE 续接应恰好新增一次上游请求，实际收到 %d 次", len(seen)-beforeRollback)
+	}
+	for _, check := range []struct {
+		turn   int
+		wanted string
+	}{
+		{1, "Remember the canary fixture."},
+		{4, "Continue during the canary."},
+	} {
+		payload, err := json.Marshal(seen[check.turn]["messages"])
+		if err != nil || !strings.Contains(string(payload), check.wanted) {
+			t.Fatalf("第 %d 次上游请求未收到压缩父历史: %v", check.turn+1, err)
 		}
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if !success || len(requests) != 4 {
-		t.Fatalf("回退后未用 SSE 成功续接: %s", got.describe())
-	}
-	msg := requests[3]["messages"]
-	if payload, err := json.Marshal(msg); err != nil || !strings.Contains(string(payload), "Remember the canary fixture.") {
-		t.Fatal("回退后上游未收到旧的压缩父历史")
-	}
-	counts(2, 2)
+	counts(3, 2)
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/sunqirui1987/xhub/internal/auth"
+	"github.com/sunqirui1987/xhub/internal/util"
 )
 
 // ConversationStore 保存不可随缓存过期的会话归属与响应历史；由PostgreSQL实现并按调用方隔离键。
@@ -23,16 +25,25 @@ type HistoryStore interface {
 	WriteHistory(context.Context, string, string, string, bool) error
 }
 
+// warnUnknownHistoryMode 避免错误配置在每次 Responses 调用时重复写日志。
+var warnUnknownHistoryMode sync.Once
+
 // compactHistoryAllowed 为统一 Responses 的路由计划选择新写入格式，参数 p 来自网关鉴权。
 // 值 1 保留原有全量模式；canary 只接受明确列出的身份，名单缺失或为空时写旧格式。
 // 只按可信用户 ID 比较，个人 Key 与会话均可命中，匿名、主密钥和缺少用户归属的密钥不能命中名单。
+// 配置值忽略两端空白并区分大小写，未知值安全回退且每进程仅记录一次诊断。
 func compactHistoryAllowed(p *auth.Principal) bool {
-	switch os.Getenv("XHUB_COMPACT_HISTORY") {
+	switch strings.TrimSpace(os.Getenv("XHUB_COMPACT_HISTORY")) {
 	case "1":
 		return true
 	case "canary":
 		// 灰度模式必须匹配显式名单，缺少配置不会扩大范围。
+	case "", "0":
+		return false
 	default:
+		warnUnknownHistoryMode.Do(func() {
+			util.Error("invalid XHUB_COMPACT_HISTORY setting; using legacy history writes")
+		})
 		return false
 	}
 	if p == nil || p.UserID == "" {
