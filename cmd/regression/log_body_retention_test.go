@@ -12,7 +12,7 @@ import (
 )
 
 // TestUserContractLegacyLogBodyRetention 在独立数据库中模拟旧版请求日志，
-// 验证只读试算、锁等待回滚、并发清理、保留账单和诊断，以及真实详情接口的权限。夹具自动回收 schema。
+// 验证只读试算、锁等待回滚、并发清理、保留账单、诊断和两种续聊格式，以及日志详情权限。夹具自动回收 schema。
 func TestUserContractLegacyLogBodyRetention(t *testing.T) {
 	h := openHarness(t, false)
 	admin := h.adminSession()
@@ -50,8 +50,18 @@ upstream_response = '{"status_code":200,"error":{"error":{"code":"embedded_error
 WHERE request_id = $1`, ids[4]); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.WriteHistory(ctx, "legacy-retention-history", "test-scope", `[{"role":"user","content":"history-marker"}]`); err != nil {
-		t.Fatal(err)
+	// 日志清理与续聊持久化无关，分别保留现存旧记录和试点压缩记录作为对照。
+	histories := []struct {
+		id      string
+		compact bool
+	}{
+		{id: "legacy-retention-history"},
+		{id: "compact-retention-history", compact: true},
+	}
+	for _, history := range histories {
+		if err := h.store.WriteHistory(ctx, history.id, "test-scope", `[{"role":"user","content":"history-marker"}]`, history.compact); err != nil {
+			t.Fatalf("无法保存续聊对照 %s: %v", history.id, err)
+		}
 	}
 	before := logDetail(t, h, member.session, ids[0])
 	if !strings.Contains(string(mustJSON(before["messages"])), "private-input") {
@@ -122,7 +132,9 @@ WHERE request_id = $1`, ids[4]); err != nil {
 	if got := h.do(http.MethodGet, "/spend/logs/ui/"+ids[0], other.session, nil); got.status != 404 && got.status != 403 {
 		t.Fatalf("清理后其他用户可以读取日志: %s", got.describe())
 	}
-	if history, err := h.store.ReadHistory(ctx, "legacy-retention-history", "test-scope"); err != nil || !strings.Contains(history, "history-marker") {
-		t.Fatalf("清理影响保存的续聊历史: %v", err)
+	for _, fixture := range histories {
+		if history, err := h.store.ReadHistory(ctx, fixture.id, "test-scope"); err != nil || !strings.Contains(history, "history-marker") {
+			t.Fatalf("日志清理影响续聊对照 %s: %v", fixture.id, err)
+		}
 	}
 }
