@@ -34,6 +34,8 @@ test('API client reliability gate runs all flows independently and preserves fai
   assert.equal(browser.env.E2E_PORTABLE_CONSOLE, '1', '必须经过真实控制台 HTTP 代理');
   assert.equal(browser.env.E2E_FULL_COVERAGE, '0', '可靠性子集不能误触发完整业务清单门禁');
   assert.equal(browser.env.E2E_BUILD_DIR, '.next-agent-reliability');
+  assert.equal(browser.env.XHUB_COMPACT_HISTORY, 'canary', '名单测试必须运行灰度模式');
+  assert.equal(browser.env.XHUB_COMPACT_HISTORY_USER_IDS, 'history-canary-en,history-canary-zh-cn', '中英文普通用户都须列入名单');
   assert.ok(browser.env.E2E_RUN_DIR.endsWith('/.e2e/release-agent-reliability'));
   const directory = mkdtempSync(join(tmpdir(), 'xhub-client-gate-'));
   try {
@@ -51,6 +53,7 @@ test('API client reliability gate runs all flows independently and preserves fai
         'proxy-body-limit.test.ts', 'client-docs-url-', 'client-cancellation-', 'stream-terminal-sc-', 'upstream-stream-errors-',
         'billing-pending-recovery', 'usage-spool-', 'key-lifecycle-', 'agent-history-', 'model-view-', 'hard-budget-', 'budget-reconciliation-', 'messages-signed-history-', 'claude-client-compat-', 'user-bulk-budget-',
         'scenarios/enterprise/saml-', 'scenarios/enterprise/sso-valid.test.ts', 'scenarios/directory/sso-config.test.ts',
+        'compact-history-account-canary.test.ts',
       ]);
       assert.equal(readFileSync(join(directory, 'environment'), 'utf8'), '0\n1\n0\n');
     }

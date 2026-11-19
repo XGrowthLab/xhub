@@ -22,8 +22,11 @@ function historyCounts(): number[] {
     .split("|").map(Number);
 }
 
-// 前置独立 PostgreSQL、本地模型和真实浏览器。验证普通账号从控制台入口发起及续接 JSON/SSE，核对历史格式。
-// 用固定测试 ID 让进程启动时可配置灰度名单。运行结束移除临时用户，隔离 schema 由运行器清理。
+// 此场景使用专门的灰度套件。常规全量压缩和旧格式的套件保留各自的测试。
+test.skip(process.env.XHUB_COMPACT_HISTORY !== "canary", "Requires account-scoped history storage");
+
+// 前置独立 PostgreSQL、本地模型和真实浏览器。验证名单内外的 JSON/SSE 和历史格式。
+// 固定 ID 用于启动时的名单。运行结束移除临时用户，独立 schema 由运行器清理。
 for (const locale of ["en", "zh-CN"] as const) test("Compact history account canary " + locale, async ({ page }) => {
   await loginAdmin(page);
   const admin = await sessionBearer(page);
@@ -32,26 +35,17 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
   const email = `history-canary-${shortLocale}@example.test`;
   const password = "Canary-fixture-pass-42";
   const fixed = `history-canary-${shortLocale}`;
-  const created = await page.request.post(GATEWAY + "/user/new", {
-    headers: adminHeaders, data: { user_email: email, user_alias: fixed, password, user_role: "internal_user" },
-  });
-  expect(created.ok(), await created.text()).toBeTruthy();
-  let userID = (await created.json()).user_id;
-  expect(userID).toMatch(/^[0-9a-f-]+$/);
+  // 只向测试 schema 插入普通用户夹具。密码摘要对应上面的公开测试密码。
+  expect(runCanarySQL(`INSERT INTO users (id, email, name, password_hash)
+    VALUES ('${fixed}', '${email}', '${fixed}', '$2y$10$enDIbnHBwB/IvCwgR9M9POTdk6uLsvKKgl7nf93ZgqSnir8aAwOJS')
+    RETURNING id;`)).toBe(fixed);
   try {
-    expect(runCanarySQL(`UPDATE users SET id='${fixed}' WHERE id='${userID}' AND lower(email)='${email}' RETURNING id;`)).toBe(fixed);
-    userID = fixed;
-
     const [compact, legacy] = historyCounts();
-    const mode = process.env.XHUB_COMPACT_HISTORY;
-    const allowlist = (process.env.XHUB_COMPACT_HISTORY_USER_IDS ?? "").split(",").map(id => id.trim());
-    const expectedCompact = mode === "1" || (mode === "canary" && allowlist.includes(fixed));
-    const outsiderCompact = mode === "1";
     const outsider = await page.request.post(GATEWAY + "/v1/responses", {
       headers: adminHeaders, data: { model: "e2e-responses-history", input: "continuation-1", user: fixed, store: false },
     });
     expect(outsider.ok(), await outsider.text()).toBeTruthy();
-    expect(historyCounts()).toEqual([compact + Number(outsiderCompact), legacy + Number(!outsiderCompact)]);
+    expect(historyCounts()).toEqual([compact, legacy + 1]);
 
     if (locale === "en") await page.getByRole("button", { name: translate("zh-CN", "language.en"), exact: true }).click();
     await login(page, email, password, locale);
@@ -74,12 +68,9 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
     expect(result.followup).toBe(200);
     expect(result.sse).toContain("response.completed");
     expect(result.sse).toContain("history-ok-2");
-    expect(historyCounts()).toEqual([
-      compact + Number(outsiderCompact) + (expectedCompact ? 2 : 0),
-      legacy + Number(!outsiderCompact) + (expectedCompact ? 0 : 2),
-    ]);
+    expect(historyCounts()).toEqual([compact + 2, legacy + 1]);
   } finally {
-    const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: userID } });
+    const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: fixed } });
     expect(removed.ok(), await removed.text()).toBeTruthy();
   }
 });
