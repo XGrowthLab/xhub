@@ -12,6 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
+import { DateCell } from "@/components/shared/table_cells";
+import { projectBudgetLimit } from "./projectBudget";
 import { ProjectKeysSection } from "./ProjectKeysSection";
 import { useT } from "@/i18n";
 
@@ -22,6 +24,7 @@ interface ProjectDetailProps {
 
 const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >= 70 ? "warning" : "default");
 
+/** 按项目 ID 显示模型、用量与账户预算；onBack 返回列表，编辑动作仍通过现有项目接口验证。 */
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const t = useT();
   const { data: project, isLoading } = useProjectDetails(projectId);
@@ -29,7 +32,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
   const spend = project?.spend ?? 0;
-  const maxBudget = project?.litellm_budget_table?.max_budget ?? null;
+  const maxBudget = projectBudgetLimit(project);
   const hasLimit = maxBudget != null && maxBudget > 0;
   const spendPercent = hasLimit ? Math.min((spend / maxBudget) * 100, 100) : 0;
 
@@ -68,8 +71,8 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
 
   return (
     <div className="w-full">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <Button variant="ghost" size="icon" aria-label={t("Back")} onClick={onBack}>
             <ArrowLeftIcon className="size-4" />
           </Button>
@@ -84,7 +87,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               />
             </div>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <span>ID: {project.project_id}</span>
+              <span className="break-all font-mono text-xs">{project.project_id}</span>
               <CopyButton value={project.project_id} label={t("Copy project ID")} />
             </div>
           </div>
@@ -105,7 +108,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             <dd className="text-foreground">{project.description || "—"}</dd>
             <dt className="text-muted-foreground">{t("Created")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.created_at).toLocaleString()}
+              <DateCell value={project.created_at} />
               {project.created_by && (
                 <>
                   <span>{t("by")}</span>
@@ -115,7 +118,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             </dd>
             <dt className="text-muted-foreground">{t("Last Updated")}</dt>
             <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.updated_at).toLocaleString()}
+              <DateCell value={project.updated_at} />
               {project.updated_by && (
                 <>
                   <span>{t("by")}</span>
@@ -139,7 +142,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             <div>
               <p className="text-[28px] leading-none font-medium text-foreground">${spend.toFixed(2)}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {hasLimit ? t("of ${value0} budget", { value0: (maxBudget.toFixed(2)) }) : t("No budget limit")}
+                {maxBudget !== null ? t("pages.projects.budgetLimit", { amount: maxBudget.toFixed(2) }) : t("No budget limit")}
               </p>
             </div>
             {hasLimit && (

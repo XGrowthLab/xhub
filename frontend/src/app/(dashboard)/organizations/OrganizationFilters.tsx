@@ -1,7 +1,7 @@
 import { FilterInput } from "@/components/common_components/Filters/FilterInput";
 import { FiltersButton } from "@/components/common_components/Filters/FiltersButton";
 import { ResetFiltersButton } from "@/components/common_components/Filters/ResetFiltersButton";
-import { Search, User } from "lucide-react";
+import { Hash, Search } from "lucide-react";
 import { useT } from "@/i18n";
 
 interface OrganizationFiltersProps {
@@ -17,6 +17,7 @@ type FilterState = {
   org_alias: string;
 };
 
+/** 展示组织名称搜索与可选 ID 过滤；接收受控条件与回调，重置只清理本页的查询条件。 */
 const OrganizationFilters = ({
   filters,
   showFilters,
@@ -28,7 +29,7 @@ const OrganizationFilters = ({
   const hasActiveFilters = !!(filters.org_id || filters.org_alias);
 
   return (
-    <div className="flex flex-col space-y-4">
+    <div className="flex flex-col gap-3 rounded-xl border bg-card p-3">
       {/* Search and Filter Controls */}
       <div className="flex flex-wrap items-center gap-3">
         <FilterInput
@@ -36,7 +37,7 @@ const OrganizationFilters = ({
           value={filters.org_alias}
           onChange={(value) => onChange("org_alias", value)}
           icon={Search}
-          className="w-64"
+          className="w-full sm:max-w-xs"
         />
 
         <FiltersButton
@@ -50,13 +51,13 @@ const OrganizationFilters = ({
 
       {/* Additional Filters */}
       {showFilters && (
-        <div className="flex flex-wrap items-center gap-3 mt-3">
+        <div className="flex flex-wrap items-center gap-3 border-t pt-3">
           <FilterInput
             placeholder={t("Search by Organization ID")}
             value={filters.org_id}
             onChange={(value) => onChange("org_id", value)}
-            icon={User}
-            className="w-64"
+            icon={Hash}
+            className="w-full sm:max-w-xs"
           />
         </div>
       )}

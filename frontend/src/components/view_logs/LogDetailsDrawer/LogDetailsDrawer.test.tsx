@@ -304,6 +304,13 @@ it("resizes the details panel with the keyboard and preserves its preference", a
     fireEvent.keyDown(handle, {key:"ArrowLeft"});
     expect(handle).toHaveAttribute("aria-valuenow", "75");
     expect(window.localStorage.getItem(key)).toBe("75");
+    // 拖到最大后必须能收回，以及再次真正展开；验证实际对话框宽度而非仅检查图标。
+    for (let i=0; i<5; i++) fireEvent.keyDown(handle, {key:"ArrowLeft"});
+    expect(screen.getByRole("dialog")).toHaveStyle({width:"100%"});
+    act(() => detailCapture.header.mock.lastCall?.[0].onToggleExpanded());
+    expect(screen.getByRole("dialog")).toHaveStyle({width:"60%"});
+    act(() => detailCapture.header.mock.lastCall?.[0].onToggleExpanded());
+    expect(screen.getByRole("dialog")).toHaveStyle({width:"100%"});
     for (let i=0; i<20; i++) fireEvent.keyDown(handle, {key:"ArrowRight"});
     expect(handle).toHaveAttribute("aria-valuenow", "50");
     expect(window.localStorage.getItem(key)).toBe("50");
@@ -364,6 +371,7 @@ it("uses full width and collapses the sidebar on narrow screens", async () => {
   try {
     render(<QueryClientProvider client={client}><LogDetailsDrawer open onClose={()=>{}} logEntry={makeLog({})} accessToken="token" /></QueryClientProvider>);
     await waitFor(() => expect(detailCapture.header).toHaveBeenLastCalledWith(expect.objectContaining({isSidebarCollapsed:true})));
+    expect(detailCapture.header.mock.lastCall?.[0].onToggleExpanded).toBeUndefined();
     expect(screen.queryByRole("separator", {name:t("logsUX.resizeDrawer")})).not.toBeInTheDocument();
     expect(screen.getByRole("dialog")).toHaveStyle({width:"100%"});
     // 窄屏展开时侧栏及其折叠按钮必须高于详情头部，避免按钮被遮挡。

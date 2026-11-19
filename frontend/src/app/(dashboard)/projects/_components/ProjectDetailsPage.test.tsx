@@ -142,6 +142,15 @@ describe("ProjectDetail", () => {
       expect(screen.getByText("No budget limit")).toBeInTheDocument();
     });
 
+    /** 真实网关格式下零预算应显示硬上限，不绘制无分母的百分比；使用测试响应并自动卸载。 */
+    it("shows a zero project limit without a utilization percentage", () => {
+      mockUseProjectDetails.mockReturnValue({ data: { ...mockProject, max_budget: 0 }, isLoading: false });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByText("Budget limit: $0.00")).toBeVisible();
+      expect(screen.queryByText("No budget limit")).toBeNull();
+      expect(screen.queryByRole("meter")).toBeNull();
+    });
+
     it("should show the budget limit when one is set", () => {
       mockUseProjectDetails.mockReturnValue({
         data: {
@@ -151,7 +160,7 @@ describe("ProjectDetail", () => {
         isLoading: false,
       });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      expect(screen.getByText("of $100.00 budget")).toBeInTheDocument();
+      expect(screen.getByText("Budget limit: $100.00")).toBeInTheDocument();
     });
 
     it("should show the project description", () => {

@@ -13,6 +13,9 @@ import { Button } from "@/components/ui/button";
 import { QuotaGuide } from "@/components/shared/QuotaGuide";
 import { useT } from "@/i18n";
 
+import { Building2, Plus } from "lucide-react";
+import { PageHeader } from "@/components/shared/PageHeader";
+
 import OrganizationsTable from "./OrganizationsTable";
 
 interface OrganizationsPanelProps {
@@ -21,6 +24,7 @@ interface OrganizationsPanelProps {
   premiumUser: boolean;
 }
 
+/** 按现有角色展示组织列表或查询参数指定的详情；操作沿用后台接口，切换详情保留筛选条件。 */
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
   const t = useT();
   const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
@@ -101,13 +105,6 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
 
   return (
     <div className="flex flex-col gap-4">
-      <QuotaGuide scope="organization" />
-      {(userRole === "Admin" || userRole === "Org Admin") && (
-        <Button className="w-fit" onClick={() => setIsOrgModalVisible(true)}>
-          + {t("pages.organizations.create")}
-        </Button>
-      )}
-
       {selectedOrgId ? (
         <OrganizationInfoView
           organizationId={selectedOrgId}
@@ -123,7 +120,15 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         />
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">{t("pages.organizations.clickId")}</p>
+          <PageHeader
+            title={t("nav.organizations")}
+            subtitle={t("pages.organizations.subtitle")}
+            icon={<Building2 />}
+            primaryAction={(userRole === "Admin" || userRole === "Org Admin") ? (
+              <Button onClick={() => setIsOrgModalVisible(true)}><Plus />{t("pages.organizations.create")}</Button>
+            ) : undefined}
+          />
+          <QuotaGuide scope="organization" />
           <OrganizationFilters
             filters={filters}
             showFilters={showFilters}

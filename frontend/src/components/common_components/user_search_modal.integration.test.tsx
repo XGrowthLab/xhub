@@ -186,6 +186,7 @@ describe("UserSearchModal submit payload", () => {
     });
   });
 
+  /** 选中已有用户后，在邮箱、ID 和角色中按回车均不提交；收起角色菜单后按钮仅提交一次。测试结束自动卸载弹窗。 */
   it("does not submit on Enter in any field, while the button still does", async () => {
     const { user, onSubmit } = setup();
 
@@ -194,11 +195,20 @@ describe("UserSearchModal submit payload", () => {
     await user.keyboard("{Enter}");
     await user.click(screen.getByLabelText("User ID"));
     await user.keyboard("{Enter}");
-    await user.click(screen.getByLabelText("Member Role"));
+    const role = screen.getByRole("combobox", { name: "Member Role" });
+    await user.click(role);
+    await screen.findByRole("option", { name: /Team admin/ });
     await user.keyboard("{Escape}");
+    await waitFor(() => expect(role).toHaveFocus());
     await user.keyboard("{Enter}");
+    await screen.findByRole("option", { name: /Team admin/ });
     expect(onSubmit).not.toHaveBeenCalled();
 
+    // 回车会重新展开角色列表，先关闭并等待焦点归还，否则点击保存可能只会关闭浮层。
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(role).toHaveFocus());
+    expect(role).toHaveAttribute("aria-expanded", "false");
+    expect(save()).toBeEnabled();
     await user.click(save());
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

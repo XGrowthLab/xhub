@@ -3,6 +3,12 @@ import type { StatusTone } from "@/components/shared/table_cells";
 import type { AuditLogEntry } from "./AuditLogsTableColumns";
 
 export const AUDIT_RESOURCE_TYPES: Record<string, string> = {
+  directory_connection: "directory_connection",
+  directory_group: "directory_group",
+  directory_mapping: "directory_mapping",
+  enterprise_oidc: "enterprise_oidc",
+  budget_reservation: "budget_reservation",
+  archive: "archive",
   key: "key",
   api_keys: "key",
   LiteLLM_VerificationToken: "key",
@@ -23,6 +29,23 @@ export const AUDIT_RESOURCE_TYPES: Record<string, string> = {
   log: "request_log",
 };
 const SPECIAL_ACTIONS: Record<string, string> = {
+  "directory.user.sync": "syncUser",
+  "directory.group.sync": "syncGroup",
+  "directory.configure": "configureDirectory",
+  "directory.mapping.set": "mapTeam",
+  "directory.team.assign": "assignTeam",
+  "directory.assignment.override": "overrideTeam",
+  "enterprise.oidc.login": "ssoLogin",
+  "enterprise.oidc.configure": "configureSSO",
+  "enterprise.saml.refresh.success": "samlRefreshed",
+  "enterprise.saml.refresh.failed": "samlRefreshFailed",
+  "enterprise.saml.refresh.configure": "samlRefresh",
+  "archive.configure": "configureArchive",
+  "archive.retry": "retryArchive",
+  "org.budget_reset": "resetBudget",
+  "user.budget_reset": "resetUserBudget",
+  "user.bulk_budget": "bulkBudget",
+  "budget.reconcile": "reconcile",
   "log.read": "readLog",
   "log.read_content": "readLogContent",
   "route_template.bind": "bindTemplate",
@@ -40,9 +63,11 @@ const SPECIAL_ACTIONS: Record<string, string> = {
   bootstrap: "bootstrap",
   "admin.seed": "seedAdmin",
 };
+/** 根据事件的对象类型查找中英文标签；未知类型沿用通用对象标签，技术详情保留原值。 */
 export function auditResourceType(log: Pick<AuditLogEntry, "table_name">): string {
   return t("audit.resources." + (AUDIT_RESOURCE_TYPES[log.table_name] ?? "unknown"));
 }
+/** 审计列表与详情用同一动作标签：优先具体动作，再按 CRUD 后缀和对象类型生成本地化说明。 */
 export function auditAction(log: AuditLogEntry): string {
   const special = SPECIAL_ACTIONS[log.action];
   if (special) return t("audit.actions." + special);
@@ -63,22 +88,22 @@ export function auditAction(log: AuditLogEntry): string {
   )[suffix];
   return verb ? t("audit.actions." + verb, { resource: auditResourceType(log) }) : t("audit.actions.unknown");
 }
+/** 根据审计动作返回统一状态色；失败和删除用危险色，创建用成功色，未知事件保留信息色。 */
 export function auditTone(log: AuditLogEntry): StatusTone {
   const suffix = log.action.split(".").at(-1) ?? "";
   if (["create", "created", "add", "admin_add"].includes(suffix)) return "success";
-  if (["delete", "deleted", "remove", "admin_remove", "revoke_team"].includes(suffix)) return "error";
+  if (["delete", "deleted", "failed", "remove", "admin_remove", "revoke_team"].includes(suffix)) return "error";
   if (["rotate", "rotated", "password", "status"].includes(suffix)) return "warning";
   return "info";
 }
 export function shortAuditID(value: string): string {
   return value.length > 12 ? value.slice(0, 8) + "…" + value.slice(-4) : value;
 }
+/** 从接口或事件快照读取对象名称；未留名的历史记录展示对象类型，完整标识仍可在详情查看。 */
 export function auditResourceName(log: AuditLogEntry): string {
   if (log.object_name) return log.object_name;
   if (typeof log.detail?.object_name === "string" && log.detail.object_name) return log.detail.object_name;
-  const type = auditResourceType(log);
-  if (["request_log", "log"].includes(log.table_name)) return type;
-  return t("audit.unnamed", { resource: type });
+  return auditResourceType(log);
 }
 export function auditOperator(log: AuditLogEntry): string {
   if (log.actor_kind === "master") return t("audit.master");

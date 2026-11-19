@@ -9,7 +9,7 @@ test("层级限流 " + scenario, async ({ page }) => {
   await loginAdmin(page);
   const headers = { Authorization: "Bearer " + await sessionBearer(page) };
   await stableGoto(page, "/organizations");
-  await page.getByRole("button", { name: "+ " + t("pages.organizations.create"), exact: true }).click();
+  await page.getByRole("button", { name: t("pages.organizations.create"), exact: true }).click();
   const organizationDialog = page.getByRole("dialog");
   await organizationDialog.getByLabel(t("Organization Name"), { exact: true }).fill("rates-e2e");
   await organizationDialog.getByLabel(t("Max Budget (USD)"), { exact: true }).fill("1000");
@@ -75,6 +75,8 @@ test("层级限流 " + scenario, async ({ page }) => {
     await stableGoto(page, "/teams?team=" + teamID);
     await page.getByRole("tab", { name: t("Settings"), exact: true }).click();
     await page.getByRole("button", { name: t("Edit Settings"), exact: true }).click();
+    await expect(page.getByRole("group", { name: t("directoryForm.limits"), exact:true }).getByLabel(t("Max Budget (USD)"))).toBeVisible();
+    if (process.env.E2E_SHOTS) await page.screenshot({ path: process.env.E2E_SHOTS + "/ui-team-edit.png", animations: "disabled" });
     await page.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true }).fill("8");
     await page.getByLabel(t("Tokens per minute Limit (TPM)"), { exact: true }).fill("512");
     saved = page.waitForResponse(r => r.url().endsWith("/team/update") && r.request().method() === "POST");

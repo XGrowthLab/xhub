@@ -12,6 +12,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
+import { DateCell } from "@/components/shared/table_cells";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
@@ -134,13 +135,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       sortValue: (record: Member) => orgMemberFor(record)?.created_at ?? null,
       render: (record: Member) => {
         const createdAt = orgMemberFor(record)?.created_at;
-        return <span>{createdAt ? new Date(createdAt).toLocaleString() : "-"}</span>;
+        return <DateCell value={createdAt} />;
       },
     },
   ];
 
   return (
-    <div className="h-screen w-full bg-background p-4">
+    <div className="w-full min-w-0">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -149,14 +150,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </Button>
           <h1 className="text-xl font-semibold tracking-tight text-foreground">{orgData.organization_alias}</h1>
           <div className="flex items-center gap-1">
-            <span className="font-mono text-sm text-muted-foreground">{orgData.organization_id}</span>
+            <span className="break-all font-mono text-xs text-muted-foreground">{orgData.organization_id}</span>
             <CopyButton value={orgData.organization_id} label={t("Copy organization ID")} iconClassName="size-3" />
           </div>
         </div>
       </div>
 
       <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
-        <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList variant="line" className="h-auto w-full flex-wrap justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("Overview")}
           </TabsTrigger>
@@ -168,17 +169,17 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent keepMounted={hasVisited(t("overview"))} value="overview" className="pt-4">
+        <TabsContent keepMounted={hasVisited("overview")} value="overview" className="pt-4">
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <Card>
               <CardContent>
                 <p className="text-sm text-muted-foreground">{t("Organization Details")}</p>
                 <div className="mt-2 text-sm text-foreground">
                   <p>
-                    {t("common.created")}: {orgData.created_at ? new Date(orgData.created_at).toLocaleDateString() : t("common.unknown")}
+                    {t("common.created")}: <DateCell value={orgData.created_at} precision="date" fallback="common.unknown" />
                   </p>
                   <p>
-                    {t("common.updated")}: {orgData.updated_at ? new Date(orgData.updated_at).toLocaleDateString() : t("common.unknown")}
+                    {t("common.updated")}: <DateCell value={orgData.updated_at} precision="date" fallback="common.unknown" />
                   </p>
                   {orgData.created_by ? <p>{t("Created By: {value0}", { value0: orgData.created_by })}</p> : null}
                 </div>
@@ -192,7 +193,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   <p className="text-xl font-semibold">${formatNumberWithCommas(orgData.spend || 0, 4)}</p>
                   <p>{t("Budget cap: {value0}", { value0: budgetLabel })}</p>
                   {budgetTable.budget_duration ? (
-                    <p className="text-muted-foreground">{t("Reset: {value0}", { value0: budgetTable.budget_duration })}</p>
+                    <p className="text-muted-foreground">{t("Reset: {value0}", { value0: organizationBudgetLabel(budgetTable.budget_duration) })}</p>
                   ) : null}
                 </div>
               </CardContent>
@@ -264,7 +265,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </TabsContent>
 
         <TabsContent keepMounted={hasVisited("settings")} value="settings" className="pt-4">
-          <Card className="max-h-[65vh] overflow-y-auto">
+          <Card className="min-w-0">
             <CardContent>
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-foreground">{t("Organization Settings")}</h2>
@@ -281,18 +282,18 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   onSaved={() => setIsEditing(false)}
                 />
               ) : (
-                <div className="space-y-4 text-sm">
+                <div className="grid gap-5 border-t pt-5 text-sm sm:grid-cols-2 [&>div>p]:mb-1 [&>div>p]:text-xs [&>div>p]:text-muted-foreground">
                   <div>
                     <p className="font-medium text-foreground">{t("Organization Name")}</p>
                     <div>{orgData.organization_alias}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">{t("Organization ID")}</p>
-                    <div className="font-mono">{orgData.organization_id}</div>
+                    <div className="break-all font-mono text-xs">{orgData.organization_id}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">{t("Created At")}</p>
-                    <div>{new Date(orgData.created_at).toLocaleString()}</div>
+                    <div><DateCell value={orgData.created_at} /></div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">{t("Models")}</p>

@@ -1,5 +1,6 @@
 /** 控制台调用示例和列表筛选文案；两种语言共用语义键，模型名、协议路径及用户输入不翻译。 */
 export const consoleDetailsEn = {
+  proxyDestination: "Requests will be sent to {url}",
   viewCode: "View request code",
   codeTitle: "Request example",
   codeDescription: "Uses the selected model, endpoint and current parameters. Set your own API key in the first step.",
@@ -10,6 +11,7 @@ export const consoleDetailsEn = {
 };
 
 export const consoleDetailsZhCN: typeof consoleDetailsEn = {
+  proxyDestination: "请求将发送到 {url}",
   viewCode: "查看调用代码",
   codeTitle: "调用示例",
   codeDescription: "根据当前模型、接口和参数生成。请在第一步设置你自己的 API Key。",

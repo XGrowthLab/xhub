@@ -15,9 +15,17 @@ export function registerSC054() {
 
 
 test("empty password shows validation", async ({ page }) => {
-    await gotoLogin(page);
     const dir = process.env.E2E_SHOTS;
-    if (dir) await page.screenshot({ path: `${dir}/ui-login.png` });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoLogin(page);
+    await expect(page.getByRole("textbox", { name: t("login.username") })).toHaveValue("");
+    await expect(page.getByLabel(t("login.password"), { exact: true })).toHaveValue("");
+    if (dir) await page.screenshot({ path: `${dir}/ui-login-desktop.png`, animations: "disabled" });
+    await page.setViewportSize({ width: 390, height: 740 });
+    await expect(page.getByRole("heading", { name: t("login.brandTitle") })).toBeInViewport();
+    await expect(page.getByRole("button", { name: t("login.submit"), exact: true })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    if (dir) await page.screenshot({ path: `${dir}/ui-login.png`, animations: "disabled" });
     await page.getByPlaceholder(t("login.usernamePlaceholder")).fill("admin");
     await page.getByRole("button", { name: t("login.submit"), exact: true }).click();
     await expect(page.getByText(t("login.passwordRequired"))).toBeVisible();
@@ -50,6 +58,24 @@ test("admin + master key lands on Virtual Keys", async ({ page }) => {
     if (dir) await page.screenshot({ path: `${dir}/ui-keys.png` });
     await expect(page.getByText(t("nav.groups.mine"), { exact: true }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: t("pages.apiKeys.create") })).toBeVisible();
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    // 在点击前监听真实浏览器动画，等待新页面就绪期间仍可观测已结束的过渡。
+    const transition = page.evaluate(() => new Promise<boolean>((resolve) => {
+      const deadline = performance.now() + 10_000;
+      const frame = () => {
+        if (location.pathname.includes("mine-models") && document.getAnimations().some(a => a.id === "xhub-page-enter")) resolve(true);
+        else if (performance.now() >= deadline) resolve(false);
+        else requestAnimationFrame(frame);
+      };
+      frame();
+    }));
+    await page.getByRole("link", { name: t("nav.myModels"), exact: true }).click();
+    await expect(page).toHaveURL(/mine-models/);
+    expect(await transition).toBe(true);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.getByRole("link", { name: t("nav.apiKeys"), exact: true }).click();
+    await expect(page.getByRole("button", { name: t("pages.apiKeys.create") })).toBeVisible();
+    expect(await page.evaluate(() => document.getAnimations().some(a => a.id === "xhub-page-enter"))).toBe(false);
   });
 }
 /** 用途：注册独立场景「unauthenticated dashboard redirects to login」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
@@ -114,12 +140,15 @@ test("配置的 SSO 在登录页按启用状态展示并支持语言切换", asy
     const link = visitor.getByRole("link", { name: chineseName, exact: true });
     const url = `/gw/auth/enterprise/${connectionID}/start`;
     await expect(link).toBeVisible();
+    await link.focus();
+    await expect(link).toBeFocused();
     await expect(link).toHaveAttribute("href", url);
     const options = await visitor.request.get(GATEWAY + "/auth/enterprise/options");
     expect(options.status()).toBe(200);
     expect(await options.json()).toContainEqual({ id: connectionID, name, url });
     expect(await options.text()).not.toContain("login-fixture-secret");
     await visitor.getByRole("button", { name: "English", exact: true }).click();
+    await expect(visitor.getByRole("heading", { name: translate("en", "login.brandTitle") })).toBeVisible();
     const englishName = translate("en", "enterprise.login", { name });
     await expect(visitor.getByRole("link", { name: englishName, exact: true })).toHaveAttribute("href", url);
     await expect(visitor.getByRole("button", { name: translate("en", "login.submit"), exact: true })).toBeVisible();

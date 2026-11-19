@@ -267,3 +267,31 @@ func TestModelRestrictionAndBudgetAreIndependent(t *testing.T) {
 		t.Fatalf("the refusal did not name the budget: %q", message)
 	}
 }
+
+// TestDeletedKeyAuditAPI 经真实管理路由创建并删除命名密钥，以管理员搜索快照；
+// 普通用户不能读取审计，响应与事件数由断言校验，夹具回收隔离用户和数据库。
+func TestDeletedKeyAuditAPI(t *testing.T) {
+	h := newHarness(t, chatDeployment("audit-key-model"))
+	admin := h.adminSession()
+	tenant := h.newTenant(t, admin, "audit-object")
+	alias := "Audit-key-alias"
+	key := h.ok(http.MethodPost, "/key/generate", admin, map[string]any{"owner_type": "personal", "user_id": tenant.userID, "key_alias": alias}).json()
+	id := firstString(key, "token_id")
+	if id == "" {
+		t.Fatal("创建密钥未返回 ID")
+	}
+	h.ok(http.MethodPost, "/key/delete", admin, map[string]any{"keys": []string{id}})
+	path := "/audit/logs?object_id=" + id + "&search=" + alias
+	rows := rowsOfFrom(h.ok(http.MethodGet, path, admin, nil).json(), "audit_logs")
+	if len(rows) != 2 {
+		t.Fatalf("删除后应仍能按别名查询创建和删除事件，得到 %d 条", len(rows))
+	}
+	for _, row := range rows {
+		if stringField(row, "object_name") != alias {
+			t.Fatalf("审计名称不符: %v", row["object_name"])
+		}
+	}
+	if res := h.do(http.MethodGet, path, h.signIn(t, tenant), nil); res.status != http.StatusForbidden {
+		t.Fatalf("普通用户访问审计应为 403，得到 %d", res.status)
+	}
+}

@@ -59,37 +59,28 @@ interface ProjectsTableColumnsDeps {
   isTeamsLoading: boolean;
 }
 
+/** 为项目列表生成列，用项目名称和可选 ID 打开详情；只有点击名称时才执行调用方传入的导航回调。 */
 export const getProjectsTableColumns = ({
   onProjectClick,
   teamAliasMap,
   isTeamsLoading,
 }: ProjectsTableColumnsDeps): ColumnDef<ProjectResponse>[] => [
   {
-    id: "project_id",
-    accessorKey: "project_id",
-    meta: { title: "ID" },
-    header: "ID",
-    size: 190,
-    enableSorting: false,
-    cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.project_id}
-        titleClassName="font-mono text-xs font-normal"
-        onClick={() => onProjectClick(row.original.project_id)}
-      />
-    ),
-  },
-  {
     id: "project_alias",
-    accessorFn: (row) => row.project_alias ?? "",
+    accessorFn: (row) => row.project_alias || row.project_id,
     meta: { title: t("Name") },
     header: ({ column }) => <DataTableSortHeader column={column} title={t("Name")} />,
-    size: 200,
-    enableSorting: true,
+    size: 216,
     cell: ({ row }) => (
-      <span className="block max-w-60 truncate text-sm font-medium" title={row.original.project_alias ?? undefined}>
-        {row.original.project_alias ?? "—"}
-      </span>
+      <IdentityCell
+        title={row.original.project_alias || row.original.project_id}
+        ariaLabel={row.original.project_alias || row.original.project_id}
+        subtitle={row.original.project_alias && row.original.project_alias !== row.original.project_id ? (
+          <span className="block max-w-[16ch] truncate" title={row.original.project_id}>{row.original.project_id}</span>
+        ) : undefined}
+        className="max-w-56"
+        onClick={() => onProjectClick(row.original.project_id)}
+      />
     ),
   },
   {

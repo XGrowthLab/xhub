@@ -7,6 +7,8 @@ import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import { toast } from "@/lib/toast";
 import type { Organization } from "@/components/networking";
+import { QuotaGuide } from "@/components/shared/QuotaGuide";
+import { DirectoryFormSection } from "@/components/shared/DirectoryFormSection";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -25,15 +27,38 @@ import RouteTemplateSelect from "@/components/route_templates/RouteTemplateSelec
 export const NO_RESET = "never";
 
 export const BUDGET_DURATION_OPTIONS = [
-  { value: NO_RESET, /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("No reset"); } },
-  { value: "24h", /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("organizationBudget.every24h"); } },
-  { value: "7d", /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("organizationBudget.every7d"); } },
-  { value: "30d", /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() { return t("organizationBudget.every30d"); } },
+  {
+    value: NO_RESET,
+    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() {
+      return t("No reset");
+    },
+  },
+  {
+    value: "24h",
+    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() {
+      return t("organizationBudget.every24h");
+    },
+  },
+  {
+    value: "7d",
+    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() {
+      return t("organizationBudget.every7d");
+    },
+  },
+  {
+    value: "30d",
+    /** 渲染时读取当前语言，避免初始化冻结文案；无写入副作用。 */ get label() {
+      return t("organizationBudget.every30d");
+    },
+  },
 ] as const;
 
 /** 格式化组织预算周期；value 为服务端周期，返回当前语言文案，详情与选择项共用；未知值不冒充有效周期，无写入副作用。 */
 export function organizationBudgetLabel(value: string | null | undefined): string {
-  return BUDGET_DURATION_OPTIONS.find(option => option.value === (value || NO_RESET))?.label ?? t("organizationBudget.unknown");
+  return (
+    BUDGET_DURATION_OPTIONS.find((option) => option.value === (value || NO_RESET))?.label ??
+    t("organizationBudget.unknown")
+  );
 }
 
 /** What the legacy update route actually accepts: the schema's fields plus the id. */
@@ -105,77 +130,112 @@ export const OrgSettingsForm = ({
 
   return (
     <form onSubmit={onSubmit} noValidate>
-      <FieldGroup>
-        <FormField control={form.control} name="organization_alias" label={t("Organization Name")}>
-          {({ ref, ...field }) => <Input {...field} ref={ref} />}
-        </FormField>
+      <FieldGroup className="gap-5">
+        <DirectoryFormSection section="identity">
+          <FormField control={form.control} name="organization_alias" label={t("Organization Name")}>
+            {({ ref, ...field }) => <Input {...field} ref={ref} />}
+          </FormField>
+        </DirectoryFormSection>
+        <DirectoryFormSection section="access">
+          <FormField control={form.control} name="models" label={t("Models")}>
+            {(field) => (
+              <ModelSelect
+                id={field.id}
+                disabled={!canEditModels}
+                value={field.value}
+                onChange={field.onChange}
+                context="organization"
+                options={{ includeSpecialOptions: true, showAllProxyModelsOverride: true }}
+              />
+            )}
+          </FormField>
 
-        <FormField control={form.control} name="models" label={t("Models")}>
-          {(field) => (
-            <ModelSelect
-              id={field.id}
-              disabled={!canEditModels}
-              value={field.value}
-              onChange={field.onChange}
-              context="organization"
-              options={{ includeSpecialOptions: true, showAllProxyModelsOverride: true }}
-            />
-          )}
-        </FormField>
+          <p className="text-sm text-muted-foreground">
+            {t(canEditModels ? "organizationConfig.modelScopeHint" : "organizationConfig.modelScopeReadOnly")}
+          </p>
 
-        <p className="text-sm text-muted-foreground">{t(canEditModels ? "organizationConfig.modelScopeHint" : "organizationConfig.modelScopeReadOnly")}</p>
+          <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
+            {({ value, onChange }) => (
+              <RouteTemplateSelect
+                accessToken={accessToken}
+                value={value}
+                onChange={onChange}
+                scope="organization"
+                scopeId={organizationId}
+              />
+            )}
+          </FormField>
+        </DirectoryFormSection>
+        <DirectoryFormSection section="limits">
+          <p className="text-sm text-muted-foreground">
+            {t(canEditLimits ? "organizationBudget.periodHint" : "organizationBudget.readOnly")}
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
+              {({ ref, ...field }) => (
+                <Input {...field} ref={ref} disabled={!canEditLimits} type="number" step="any" min={0} />
+              )}
+            </FormField>
 
-        <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
-          {({ value, onChange }) => (
-            <RouteTemplateSelect
-              accessToken={accessToken}
-              value={value}
-              onChange={onChange}
-              scope="organization"
-              scopeId={organizationId}
-            />
-          )}
-        </FormField>
+            <FormField control={form.control} name="budget_duration" label={t("Reset Budget")}>
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Select
+                  items={BUDGET_DURATION_OPTIONS}
+                  disabled={!canEditLimits}
+                  value={value === "" ? NO_RESET : value}
+                  onValueChange={(selected) => onChange(selected === NO_RESET ? "" : selected)}
+                >
+                  <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BUDGET_DURATION_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField control={form.control} name="tpm_limit" label={t("Tokens per minute Limit (TPM)")}>
+              {({ ref, ...field }) => (
+                <Input
+                  {...field}
+                  ref={ref}
+                  disabled={!canEditLimits}
+                  type="number"
+                  step={1}
+                  min={0}
+                  max={2147483647}
+                  placeholder={t("quotaGuide.rateBlank")}
+                />
+              )}
+            </FormField>
 
-        <p className="text-sm text-muted-foreground">{t(canEditLimits ? "organizationBudget.periodHint" : "organizationBudget.readOnly")}</p>
-        <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
-          {({ ref, ...field }) => <Input {...field} ref={ref} disabled={!canEditLimits} type="number" step="any" min={0} />}
-        </FormField>
+            <FormField control={form.control} name="rpm_limit" label={t("Requests per minute Limit (RPM)")}>
+              {({ ref, ...field }) => (
+                <Input
+                  {...field}
+                  ref={ref}
+                  disabled={!canEditLimits}
+                  type="number"
+                  step={1}
+                  min={0}
+                  max={2147483647}
+                  placeholder={t("quotaGuide.rateBlank")}
+                />
+              )}
+            </FormField>
 
-        <FormField control={form.control} name="budget_duration" label={t("Reset Budget")}>
-          {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-            <Select
-              items={BUDGET_DURATION_OPTIONS}
-              disabled={!canEditLimits}
-              value={value === "" ? NO_RESET : value}
-              onValueChange={(selected) => onChange(selected === NO_RESET ? "" : selected)}
-            >
-              <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {BUDGET_DURATION_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </FormField>
-
-        <p className="text-sm text-muted-foreground">{t("quotaGuide.rates")}</p>
-        <FormField control={form.control} name="tpm_limit" label={t("Tokens per minute Limit (TPM)")}>
-          {({ ref, ...field }) => <Input {...field} ref={ref} disabled={!canEditLimits} type="number" step={1} min={0} max={2147483647} placeholder={t("quotaGuide.rateBlank")} />}
-        </FormField>
-
-        <FormField control={form.control} name="rpm_limit" label={t("Requests per minute Limit (RPM)")}>
-          {({ ref, ...field }) => <Input {...field} ref={ref} disabled={!canEditLimits} type="number" step={1} min={0} max={2147483647} placeholder={t("quotaGuide.rateBlank")} />}
-        </FormField>
-
-        <FormField control={form.control} name="metadata" label={t("Metadata")}>
-          {({ ref, ...field }) => <Textarea {...field} ref={ref} rows={4} />}
-        </FormField>
+            <FormField control={form.control} name="metadata" label={t("Metadata")}>
+              {({ ref, ...field }) => <Textarea {...field} ref={ref} rows={4} />}
+            </FormField>
+          </div>
+          <QuotaGuide scope="organization" />
+        </DirectoryFormSection>
       </FieldGroup>
 
       <div className="sticky z-chrome bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">

@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { setActiveLocale, translate } from "@/i18n";
+import { formatCellDate } from "@/components/shared/table_cells/date_cell";
+import { I18nProvider, setActiveLocale, translate } from "@/i18n";
 import UserInfoView from "./user_info_view";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
@@ -120,9 +121,12 @@ describe("UserInfoView", () => {
   it.each([["en", null], ["zh-CN", null], ["en", undefined], ["zh-CN", undefined]] as const)("shows a teamless %s budget of %s as unlimited", async (locale, max_budget) => {
     setActiveLocale(locale);
     mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA_NO_TEAMS, max_budget });
-    render(<UserInfoView {...defaultProps} />);
+    render(<I18nProvider initialLocale={locale}><UserInfoView {...defaultProps} /></I18nProvider>);
     expect(await screen.findAllByText(translate(locale, "pages.users.unlimited"))).toHaveLength(2);
     await userEvent.setup().click(screen.getByRole("tab", { name: translate(locale, "common.details"), exact: true }));
+    for (const date of [MOCK_USER_DATA.created_at, MOCK_USER_DATA.updated_at]) {
+      expect(screen.getByText(formatCellDate(new Date(date), "datetime", locale))).toHaveAttribute("datetime", date);
+    }
     expect(within(screen.getByRole("tabpanel", { name: translate(locale, "common.details") })).getByText(translate(locale, "pages.users.unlimited"))).toBeInTheDocument();
   });
 

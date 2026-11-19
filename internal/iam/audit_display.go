@@ -19,6 +19,8 @@ var auditNameSources = []struct {
 	{"projects", []string{"project"}},
 	{"api_keys", []string{"key", "api_keys"}},
 	{"route_templates", []string{"route_template"}},
+	{"directory_connections", []string{"directory_connection"}},
+	{"directory_groups", []string{"directory_group"}},
 }
 
 // auditText reads an optional immutable display snapshot from audit detail.
@@ -86,7 +88,7 @@ func (db *DB) enrichAudit(ctx context.Context, rows []AuditEntry) error {
 			return false
 		}
 		for _, row := range rows {
-			if matches(row.ObjectType) && row.ObjectName == "" && row.ObjectID != "" {
+			if _, saved := row.Detail["object_name"]; !saved && matches(row.ObjectType) && row.ObjectName == "" && row.ObjectID != "" {
 				ids = append(ids, row.ObjectID)
 			}
 			if source.table == "api_keys" && row.ActorKind == "key" && row.ActorName == "" && row.ActorID != "" {
@@ -113,7 +115,7 @@ func (db *DB) enrichAudit(ctx context.Context, rows []AuditEntry) error {
 		}
 		for i := range rows {
 			row := &rows[i]
-			if matches(row.ObjectType) && row.ObjectName == "" {
+			if _, saved := row.Detail["object_name"]; !saved && matches(row.ObjectType) && row.ObjectName == "" {
 				row.ObjectName = byID[row.ObjectID]
 			}
 			if source.table == "api_keys" && row.ActorKind == "key" && row.ActorName == "" {
@@ -147,7 +149,8 @@ func applyAuditSearch(query *xorm.Session, search string) {
 		for i, kind := range source.types {
 			kinds[i] = "'" + kind + "'"
 		}
-		parts = append(parts, "EXISTS (SELECT 1 FROM "+source.table+" n WHERE audit_logs.object_type IN ("+strings.Join(kinds, ",")+") AND n.id = audit_logs.object_id AND strpos(lower(n.name), lower(?)) > 0)")
+		// 只有历史记录缺少名称快照时才搜索对象现名，防止改名以前的操作误命中新名。
+		parts = append(parts, "EXISTS (SELECT 1 FROM "+source.table+" n WHERE audit_logs.detail->>'object_name' IS NULL AND audit_logs.object_type IN ("+strings.Join(kinds, ",")+") AND n.id = audit_logs.object_id AND strpos(lower(n.name), lower(?)) > 0)")
 		args = append(args, search)
 	}
 	parts = append(parts, "EXISTS (SELECT 1 FROM api_keys k WHERE audit_logs.actor_kind = 'key' AND k.id = audit_logs.actor_id AND strpos(lower(k.name), lower(?)) > 0)")

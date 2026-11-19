@@ -193,7 +193,7 @@ function DataTableHeadCell<TData>({ header, size, stickyHeader, enableColumnResi
     <TableHead
       data-header-id={header.id}
       className={cn(
-        "relative text-muted-foreground",
+        "relative text-muted-foreground first:ps-4 last:pe-4",
         size === "compact" ? "h-8 px-2 py-1 text-xs" : "",
         meta?.numeric ? "text-right" : "",
         meta?.className,
@@ -239,7 +239,7 @@ function DataTableBodyCell<TData>({ cell, size, stickyHeader, enableColumnResizi
   return (
     <TableCell
       className={cn(
-        "overflow-hidden text-ellipsis",
+        "overflow-hidden text-ellipsis first:ps-4 last:pe-4",
         size === "compact" ? "px-2 py-1 text-xs" : "",
         meta?.numeric ? "text-right tabular-nums" : "",
         meta?.className,
@@ -633,7 +633,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
 
   return (
     <div data-testid="data-table-root" className={cn("w-full", fill.outer)}>
-      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-xl border border-border bg-card", fill.frame)}>
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
           data-testid="data-table-scroller"

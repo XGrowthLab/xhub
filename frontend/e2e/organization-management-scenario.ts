@@ -13,6 +13,8 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
   await loginAdmin(page);
   await page.getByRole("button",{name:locale==="en"?"English":translate("en","language.zhCN"),exact:true}).click();
   const tr=(key:string)=>translate(locale,key);
+  // 概览与设置都显示预算周期，切换后概览保留挂载；只断言用户当前打开的设置面板。
+  const settings = page.getByRole("tabpanel", {name: tr("Settings"), exact:true});
   const headers={Authorization:"Bearer "+await sessionBearer(page)};
   const name="budget-"+locale+"-"+Date.now(),email=name+"@example.test";
   let orgID="",teamID="",userID="",keyID="",modelID="";
@@ -20,8 +22,17 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
   const create=async(path:string,body:unknown)=>{const r=await page.request.post(GATEWAY+path,{headers,data:body});expect(r.status(),path+": "+await r.text()).toBe(200);return r.json()};
   try {
    modelID=(await create("/model/new",{model_name:name,litellm_params:{model:name,custom_llm_provider:"openai",api_base:UPSTREAM,api_key:"sk-fake",input_cost_per_token:0.01,output_cost_per_token:0.01},model_info:{transport:"bypass_openai_chat",pricing_source:"manual",max_input_tokens:64,max_output_tokens:8,supported_parameters:["max_completion_tokens"]}})).model_info.id;
+   // 中英文真实浏览器先验证项目说明可按需展开，随后走组织创建、详情、真实用量结算及清理流程。
+   await stableGoto(page,"/projects");
+   const projectGuide = page.getByText(tr("pages.projects.guideTitle"), {exact:true});
+   const budgetRule = page.getByText(tr("pages.projects.guideBudget"), {exact:true});
+   await expect(budgetRule).toBeHidden();
+   await projectGuide.click();
+   await expect(budgetRule).toBeVisible();
+   await projectGuide.click();
+   await expect(budgetRule).toBeHidden();
    await stableGoto(page,"/organizations");
-   await page.getByRole("button",{name:"+ "+tr("pages.organizations.create"),exact:true}).click();
+   await page.getByRole("button",{name:tr("pages.organizations.create"),exact:true}).click();
    const dialog=page.getByRole("dialog");
    await dialog.getByLabel(tr("Organization Name"),{exact:true}).fill(name);
    await dialog.getByLabel(tr("Max Budget (USD)"),{exact:true}).fill("10");
@@ -39,16 +50,17 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    await idSearch.fill("foreign");await expect(page.getByText(orgID,{exact:true})).toHaveCount(0);
    await idSearch.fill(orgID);await expect(page.getByText(orgID,{exact:true})).toBeVisible();
    await page.getByRole("button",{name:tr("Reset Filters"),exact:true}).click();
-   await stableGoto(page,"/organizations?org="+orgID);
+   await page.getByRole("button",{name:name,exact:true}).click();
+   await expect(page).toHaveURL(new RegExp("org="+orgID));
    await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(page.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every30d")),{exact:true})).toBeVisible();
+   await expect(settings.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every30d")),{exact:true})).toBeVisible();
    await page.getByRole("button",{name:tr("Edit Settings"),exact:true}).click();
    await page.getByRole("combobox",{name:tr("Reset Budget"),exact:true}).click();
    await page.getByRole("option",{name:tr("organizationBudget.every7d"),exact:true}).click();
    const saved=page.waitForResponse(r=>r.url().endsWith("/organization/update")&&r.request().method()==="PATCH");
    await page.getByRole("button",{name:tr("Save Changes"),exact:true}).click();expect((await saved).status()).toBe(200);
    await page.reload();await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(page.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every7d")),{exact:true})).toBeVisible();
+   await expect(settings.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every7d")),{exact:true})).toBeVisible();
    teamID=(await create("/team/new",{organization_id:orgID,team_alias:name})).team_id;
    userID=(await create("/user/new",{user_email:email,password:"organization-test-password",team_id:teamID})).user_id;
    await create("/organization/member_add",{organization_id:orgID,member:{user_email:email,role:"org_admin"}});
@@ -89,7 +101,7 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    await page.getByRole("button",{name:tr("Save Changes"),exact:true}).click();
    const cancelled=await cancellation;expect(cancelled.status()).toBe(200);expect((await cancelled.json()).budget_reset_at).toBeNull();
    await page.reload();await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(page.getByText(translate(locale,"Reset: {value0}",{value0:tr("No reset")}),{exact:true})).toBeVisible();
+   await expect(settings.getByText(translate(locale,"Reset: {value0}",{value0:tr("No reset")}),{exact:true})).toBeVisible();
    await page.getByRole("tab",{name:tr("Organization administrators"),exact:true}).click();
    const removed=page.waitForResponse(r=>r.url().endsWith("/organization/member_delete"));
    await page.getByTestId("delete-member").click();expect((await removed).status()).toBe(200);

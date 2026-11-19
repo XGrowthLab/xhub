@@ -28,6 +28,7 @@ export type AuditLogEntry = {
   updated_values: Record<string, unknown>;
   detail?: Record<string, unknown>;
 };
+/** 构建当前语言的审计列表列；onViewLog 打开原始记录，行优先展示名称，缺失时提供短 ID 供区分。 */
 export const getAuditLogsTableColumns = ({
   onViewLog,
 }: {
@@ -62,7 +63,7 @@ export const getAuditLogsTableColumns = ({
     cell: ({ row }) => (
       <IdentityCell
         title={auditResourceName(row.original)}
-        subtitle={auditResourceType(row.original) + " · " + shortAuditID(row.original.object_id)}
+        subtitle={row.original.object_name ? auditResourceType(row.original) : shortAuditID(row.original.object_id)}
         className="max-w-80"
         onClick={() => onViewLog(row.original)}
       />
@@ -80,7 +81,7 @@ export const getAuditLogsTableColumns = ({
         subtitle={
           row.original.actor_email && row.original.actor_name
             ? row.original.actor_email
-            : shortAuditID(row.original.changed_by)
+            : undefined
         }
         className="max-w-64"
       />

@@ -172,6 +172,7 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   );
 }
 
+/** 从用户选中的审计行展示身份、事件与技术详情；名称缺失时只显示一次对象类型。关闭时调用 onClose，不修改记录。 */
 export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
   const t = useT();
   useI18n();
@@ -181,6 +182,8 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
     typeof detail.previous_name === "string" &&
     typeof detail.object_name === "string" &&
     detail.previous_name !== detail.object_name;
+  const resourceName = auditResourceName(log);
+  const resourceType = auditResourceType(log);
   const source = ["session", "master", "system", "key"].includes(log.actor_kind ?? "") ? log.actor_kind : "unknown";
   return (
     <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
@@ -198,8 +201,8 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
             <MetadataRow label={t("audit.operator")} value={auditOperator(log)} />
             {log.actor_email && log.actor_name && <MetadataRow label={t("Email")} value={log.actor_email} />}
             <MetadataRow label={t("audit.action")} value={auditAction(log)} />
-            <MetadataRow label={t("audit.resource")} value={auditResourceName(log)} />
-            <MetadataRow label={t("audit.resourceType")} value={auditResourceType(log)} />
+            {resourceName !== resourceType && <MetadataRow label={t("audit.resource")} value={resourceName} />}
+            <MetadataRow label={t("audit.resourceType")} value={resourceType} />
             <MetadataRow label={t("audit.source")} value={t("audit.sources." + source)} />
           </div>
           {renamed && (

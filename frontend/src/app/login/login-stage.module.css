@@ -1,0 +1,89 @@
+/* 封面与表单各自控制排版，语言切换不占用表单行。 */
+.layout {
+  display: grid;
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1.08fr) minmax(23rem, .92fr);
+  padding: clamp(.65rem, 1.5vw, 1.5rem);
+  gap: clamp(1rem, 4vw, 5rem);
+}
+
+.cover {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16rem;
+  padding: clamp(1.75rem, 4vw, 5rem);
+  color: #f3f9fe;
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(ellipse at 90% 20%, #144a65 0%, transparent 55%),
+    radial-gradient(ellipse at 35% 55%, #142e48 0%, transparent 60%),
+    #090f21;
+}
+.art {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ribbon {
+  position: absolute;
+  inset: 0;
+  mask-image: linear-gradient(165deg, transparent, black 21%, black 67%, transparent 90%);
+}
+.ribbon i {
+  position: absolute;
+  width: 97%;
+  height: 27%;
+  left: calc(-11% + var(--ring) * 1.25%);
+  top: calc(33% - var(--ring) * .30%);
+  border-radius: 50%;
+  border: 1.35px solid hsl(calc(166 + var(--ring) * 2.6) 85% 75% / .73);
+  transform: rotate(calc(-41deg + var(--ring) * 3.15deg));
+}
+.caption { z-index: 1; max-width: 34rem; }
+.caption h2 {
+  margin: 0;
+  font-size: clamp(2.4rem, 4.2vw, 5.2rem);
+  font-weight: 600;
+  letter-spacing: -.055em;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+.caption p {
+  margin-top: 1rem;
+  max-width: 30ch;
+  font-size: clamp(.95rem, 1.2vw, 1.125rem);
+  color: #bdcede;
+  line-height: 1.6;
+}
+.formPane {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 4.5rem clamp(1.2rem, 4vw, 5rem);
+}
+.language { position: absolute; top: .6rem; right: .6rem; }
+
+/* 封面线条仅在初次出现时舒展一次，减少动态效果时保留最终构图。 */
+@media (prefers-reduced-motion: no-preference) {
+  .ribbon { animation: unfold 1100ms cubic-bezier(.16, 1, .3, 1) both; }
+}
+@keyframes unfold {
+  from { opacity: .18; transform: scale(.94) rotate(-6deg); }
+  to { opacity: 1; transform: none; }
+}
+@media (max-width: 47.99rem) {
+  .layout { display: flex; flex-direction: column; justify-content: flex-start; gap: 0; padding: .65rem; }
+  .cover { min-height: 10rem; gap: 1.5rem; padding: 1.25rem 1.4rem; border-radius: 1rem; }
+  .caption { max-width: 76%; }
+  .caption h2 { font-size: clamp(1.45rem, 5.4vw, 2.35rem); letter-spacing: -.035em; }
+  .caption p { display: none; }
+  .art { inset: -26% -12% -52% 40%; opacity: .8; }
+  .formPane { flex: 1; align-content: start; padding: 3.5rem 1rem 2rem; }
+  .language { top: .65rem; right: .65rem; }
+}

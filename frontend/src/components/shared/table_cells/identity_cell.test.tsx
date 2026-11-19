@@ -8,6 +8,13 @@ const routerPush = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }));
 
 describe("IdentityCell", () => {
+  /** 同一资源有名称和辅助标识时，验证可访问按钮名称仅采用指定名称；自动清理渲染节点。 */
+  it("uses a separate action name when a row includes an identifier", () => {
+    render(<IdentityCell title="Alpha" ariaLabel="Alpha" subtitle="org-1" onClick={() => {}} />);
+    expect(screen.getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(screen.getByText("org-1")).toBeInTheDocument();
+  });
+
   it("renders the title", () => {
     render(<IdentityCell title="prod-gateway" />);
     expect(screen.getByText("prod-gateway")).toBeInTheDocument();

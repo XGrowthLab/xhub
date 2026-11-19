@@ -97,6 +97,7 @@ describe("LoginPage", () => {
     expect(screen.getByRole("heading", { name: translate("zh-CN", "login.title") })).toBeInTheDocument();
   });
 
+  /** 在正常英文配置下确认品牌、封面标题和本地凭据表单可访问，测试结束由框架回收 DOM。 */
   it("should render", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
@@ -126,6 +127,7 @@ describe("LoginPage", () => {
     expect(stage.className).toMatch(/h-dvh/);
     expect(stage.className).toMatch(/overflow-y-auto/);
     expect(stage).toContainElement(card);
+    expect(screen.getByRole("region", { name: translate("en", "login.brandTitle") })).toContainElement(logo);
     expect(logo.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("img", { name: "XHub" })).toBeInTheDocument();
     expect(screen.getByText("Sign in to start your session")).toBeInTheDocument();
@@ -164,6 +166,7 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: translate("zh-CN", "login.title") })).toBeInTheDocument();
     });
+    expect(screen.getByRole("region", { name: translate("zh-CN", "login.brandTitle") })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Login" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: translate("zh-CN", "login.submit"), exact: true })).toBeInTheDocument();
   });

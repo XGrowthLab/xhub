@@ -17,8 +17,12 @@ const row = (action: string, table_name: string): AuditLogEntry => ({
 afterEach(() => setActiveLocale("en"));
 
 describe("Readable Chinese audit events", () => {
+  /** 验证真实网关事件的中文动作与对象类型，使用内存夹具，结束后还原语言。 */
   it.each([
     ["route_template.create", "route_template", "创建路由模板"],
+    ["enterprise.oidc.login", "user", "企业账号登录"],
+    ["directory.group.sync", "directory_group", "同步目录用户组"],
+    ["archive.configure", "archive", "配置日志归档"],
     ["log.read", "request_log", "查看请求日志"],
     ["route_template.delete", "route_template", "删除路由模板"],
   ])("translates %s", (action, type, expected) => {
@@ -29,7 +33,7 @@ describe("Readable Chinese audit events", () => {
   it("labels missing historical names explicitly and uses available names", () => {
     setActiveLocale("zh-CN");
     const entry = row("route_template.delete", "route_template");
-    expect(auditResourceName(entry)).toBe("路由模板（名称未记录）");
+    expect(auditResourceName(entry)).toBe("路由模板");
     expect(auditOperator(entry)).toBe("用户（名称未记录）");
     expect(auditResourceName({ ...entry, detail: { object_name: "生产路由" } })).toBe("生产路由");
     expect(auditOperator({ ...entry, actor_name: "管理员" })).toBe("管理员");

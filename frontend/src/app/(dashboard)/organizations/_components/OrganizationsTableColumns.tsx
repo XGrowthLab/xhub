@@ -90,36 +90,22 @@ export const getOrganizationsTableColumns = ({
   onDeleteClick,
 }: OrganizationsTableColumnsDeps): ColumnDef<Organization>[] => [
   {
-    id: "organization_id",
-    accessorKey: "organization_id",
-    meta: { title: t("Organization ID") },
-    header: ({ column }) => <DataTableSortHeader column={column} title={t("Organization ID")} />,
-    size: 220,
-    enableSorting: true,
+    id: "organization_alias",
+    accessorFn: (row) => row.organization_alias || row.organization_id,
+    meta: { title: t("Organization Name") },
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("Organization Name")} />,
+    size: 216,
     cell: ({ row }) => (
       <IdentityCell
-        title={row.original.organization_id}
-        titleClassName="font-mono text-xs font-normal"
+        title={row.original.organization_alias || row.original.organization_id}
+        ariaLabel={row.original.organization_alias || row.original.organization_id}
+        subtitle={row.original.organization_alias && row.original.organization_alias !== row.original.organization_id ? (
+          <span className="block max-w-[16ch] truncate" title={row.original.organization_id}>{row.original.organization_id}</span>
+        ) : undefined}
         className="max-w-56"
         onClick={() => onOrganizationClick(row.original.organization_id)}
       />
     ),
-  },
-  {
-    id: "organization_alias",
-    accessorKey: "organization_alias",
-    meta: { title: t("Organization Name") },
-    header: ({ column }) => <DataTableSortHeader column={column} title={t("Organization Name")} />,
-    size: 200,
-    enableSorting: true,
-    cell: ({ row }) => {
-      const alias = row.original.organization_alias;
-      return (
-        <span className="block max-w-56 truncate text-sm font-medium" title={alias ?? undefined}>
-          {alias || "-"}
-        </span>
-      );
-    },
   },
   {
     id: "created_at",

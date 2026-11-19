@@ -195,7 +195,7 @@ func (db *DB) EnterpriseLoginUser(ctx context.Context, id, issuer, subject, exte
 				return err
 			}
 		}
-		return writeAudit(s, Actor{Kind: "system", ID: u.ID}, Audit{Action: "enterprise.oidc.login", ObjectType: "user", ObjectID: u.ID})
+		return writeAudit(s, Actor{Kind: "system", ID: u.ID}, Audit{Action: "enterprise.oidc.login", ObjectType: "user", ObjectID: u.ID, Detail: map[string]any{"object_name": u.Name}})
 	})
 	return &u, err
 }

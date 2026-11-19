@@ -14,7 +14,7 @@ import { getGuardrailsList } from "@/components/networking";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/ui/field";
+import { DirectoryFormSection } from "@/components/shared/DirectoryFormSection";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -40,6 +40,8 @@ interface ProjectBaseFormProps {
 
 export type { ProjectFormValues } from "./projectFormSchema";
 
+/** 为新建与编辑项目提供共用字段。form 持有提交值与错误，advancedOpen 和回调控制高级设置；
+ * 仅在已选择团队时允许选模型。分组保留字段注册和现有权限、预算提交契约。 */
 export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: ProjectBaseFormProps) {
   const t = useT();
   const { accessToken, userId, userRole } = useAuthorized();
@@ -112,14 +114,11 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
     { value: ALL_TEAM_MODELS, label: t("All Team Models") },
     ...modelsToPick.map((model) => ({ value: model, label: getModelDisplayName(model) })),
   ];
-  const modelsPlaceholder = selectedTeam ? "Select models" : "Select a team first";
+  const modelsPlaceholder = selectedTeam ? t("Select models") : t("pages.projects.teamFirst");
 
   return (
-    <div className="mt-6">
-      <p className="text-xs font-semibold tracking-[0.05em] text-foreground uppercase">{t("Basic Information")}</p>
-      <Separator className="mt-2 mb-4" />
-
-      <FieldGroup>
+    <div className="mt-4 space-y-4">
+      <DirectoryFormSection section="identity">
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
           <FormField control={form.control} name="project_alias" label={t("Project Name")}>
             {({ ref, ...field }) => (
@@ -157,11 +156,12 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
           )}
         </FormField>
 
+      </DirectoryFormSection>
+      <DirectoryFormSection section="access">
         <FormField
           control={form.control}
           name="models"
           label={t("Allowed Models (scoped to selected team's models)")}
-          description={!selectedTeam ? t("Select a team first to see available models") : undefined}
         >
           {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
@@ -194,43 +194,43 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
           )}
         </FormField>
 
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-          <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
-            {({ ref, value, onChange, ...field }) => (
-              <InputGroup>
-                <InputGroupAddon>
-                  <InputGroupText>$</InputGroupText>
-                </InputGroupAddon>
-                <InputGroupInput
-                  {...field}
-                  ref={ref}
-                  type="number"
-                  min={0}
-                  placeholder="0.00"
-                  value={Number.isNaN(value) ? "" : value ?? ""}
-                  onInput={(event) => {
-                    if (event.currentTarget.validity.badInput || Number.isNaN(value)) {
-                      onChange(
-                        event.currentTarget.validity.badInput
-                          ? Number.NaN
-                          : toOptionalNumber(event.currentTarget.value) ?? null,
-                      );
-                    }
-                  }}
-                  onChange={(event) =>
-                    onChange(event.target.validity.badInput ? Number.NaN : toOptionalNumber(event.target.value) ?? null)
+      </DirectoryFormSection>
+      <DirectoryFormSection section="limits">
+        <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
+          {({ ref, value, onChange, ...field }) => (
+            <InputGroup>
+              <InputGroupAddon>
+                <InputGroupText>$</InputGroupText>
+              </InputGroupAddon>
+              <InputGroupInput
+                {...field}
+                ref={ref}
+                type="number"
+                min={0}
+                placeholder="0.00"
+                value={Number.isNaN(value) ? "" : value ?? ""}
+                onInput={(event) => {
+                  if (event.currentTarget.validity.badInput || Number.isNaN(value)) {
+                    onChange(
+                      event.currentTarget.validity.badInput
+                        ? Number.NaN
+                        : toOptionalNumber(event.currentTarget.value) ?? null,
+                    );
                   }
-                />
-              </InputGroup>
-            )}
-          </FormField>
-        </div>
-      </FieldGroup>
+                }}
+                onChange={(event) =>
+                  onChange(event.target.validity.badInput ? Number.NaN : toOptionalNumber(event.target.value) ?? null)
+                }
+              />
+            </InputGroup>
+          )}
+        </FormField>
+      </DirectoryFormSection>
 
       <Collapsible
         open={advancedOpen}
         onOpenChange={onAdvancedOpenChange}
-        className="mt-6 rounded-lg border border-border bg-muted"
+        className="rounded-xl border border-border bg-card"
       >
         <CollapsibleTrigger
           render={
@@ -243,14 +243,11 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
           }
         />
         <CollapsibleContent className="px-4 pb-4">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold text-foreground">{t("Block Project")}</span>
-            <FormField control={form.control} name="isBlocked" className="w-auto">
-              {({ id, value, onChange, ref: _ref, ...field }) => (
-                <Switch {...field} id={id} checked={value} onCheckedChange={onChange} />
-              )}
-            </FormField>
-          </div>
+          <FormField control={form.control} name="isBlocked" label={t("Block Project")}>
+            {({ id, value, onChange, ref: _ref, ...field }) => (
+              <Switch {...field} id={id} checked={value} onCheckedChange={onChange} />
+            )}
+          </FormField>
 
           {isBlocked ? (
             <Alert variant="warning" className="mt-3">

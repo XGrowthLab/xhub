@@ -1,5 +1,7 @@
 "use client";
 import { useT } from "@/i18n";
+import { Layers3 } from "lucide-react";
+import { protocolLabel, endpointLabel, type EndpointDescriptor, type EndpointTransport } from "@/components/add_model/endpointCatalog";
 import { useState } from "react";
 import ModelFallbackEditor, { type FallbackPolicy } from "./ModelFallbackEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,7 +45,9 @@ function priceSummary(model: EditorModel, rows: Record<string, CatalogRow>, t: R
     .join(" · ");
 }
 
-/** 展示声明的上游执行配置，不推断协议。 */
+/** 列表共用后台登记的协议名；目录不可用时保留原始标识，供管理员排查。 */
+type ProtocolCatalog = { endpoint_types?: EndpointDescriptor[]; transports?: EndpointTransport[] };
+/** 从部署信息读取已声明的上游执行标识；无声明返回空串，供列表显示未记录。 */
 function callType(info: Record<string, unknown>): string {
   if (typeof info.transport === "string") return info.transport;
   return Array.isArray(info.endpoint_types) ? String(info.endpoint_types[0] ?? "") : "";
@@ -54,12 +58,14 @@ function callType(info: Record<string, unknown>): string {
  */
 function GroupDeployments({
   group,
+  catalog,
   accessToken,
   rows,
   onSaved,
   openModel,
 }: {
   group: ModelGroup;
+  catalog?: ProtocolCatalog;
   accessToken: string;
   rows: Record<string, CatalogRow>;
   onSaved: () => void;
@@ -127,45 +133,53 @@ function GroupDeployments({
           {policyError(draft)}
         </p>
       )}
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full min-w-[42rem] text-left text-sm">
+          <thead className="bg-muted/60 text-xs text-muted-foreground">
             <tr>
-              <th className="p-2">{t("providerGuideUI.connectionHeading")}</th>
-              <th className="p-2">{t("providerGuideUI.protocolHeading")}</th>
-              <th className="p-2">{t("providerGuideUI.pricingHeading")}</th>
-              <th className="p-2">{t("providerGuideUI.status")}</th>
-              {showWeights && <th className="p-2">{t("providerGuideUI.weight")}</th>}
-              <th className="p-2">{t("providerGuideUI.actions")}</th>
+              <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.connectionHeading")}</th>
+              <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.protocolHeading")}</th>
+              <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.pricingHeading")}</th>
+              <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.status")}</th>
+              {showWeights && <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.weight")}</th>}
+              <th scope="col" className="px-3 py-2.5 font-medium">{t("providerGuideUI.actions")}</th>
             </tr>
           </thead>
           <tbody>
             {group.deployments.map((dep) => {
               const id = dep.id;
+              const transportId = callType(dep.model_info);
+              const transport = catalog?.transports?.find((item) => item.id === transportId);
+              const endpoints = Array.isArray(dep.model_info.endpoint_types) ? dep.model_info.endpoint_types.map(String) : [];
               return (
                 <tr key={id} className="border-t">
-                  <td className="p-2">
-                    <p>{String(dep.litellm_params.litellm_credential_name || t("providerGuideUI.standalone"))}</p>
-                    <p>{String(dep.litellm_params.model)}</p>
-                    <p className="text-xs text-muted-foreground">{id}</p>
+                  <td className="px-3 py-3 align-top">
+                    <p className="font-medium">{String(dep.litellm_params.litellm_credential_name || t("providerGuideUI.standalone"))}</p>
+                    <p className="mt-1 break-all text-xs text-muted-foreground">{String(dep.litellm_params.model)}</p>
                   </td>
-                  <td className="p-2">
-                    <p>{callType(dep.model_info)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {Array.isArray(dep.model_info.endpoint_types)
-                        ? dep.model_info.endpoint_types.join(" · ")
-                        : t("providerGuideUI.noEndpoints")}
-                    </p>
+                  <td className="px-3 py-3 align-top">
+                    <p className="font-medium text-foreground">{transport ? protocolLabel(transport) : transportId || t("providerGuideUI.unspecifiedProtocol")}</p>
+                    {endpoints.length ? (
+                      <details className="mt-1 text-xs text-muted-foreground">
+                        <summary className="cursor-pointer text-primary">{t("providerGuideUI.endpointCount", { count: endpoints.length })}</summary>
+                        <ul className="mt-2 space-y-1 border-s-2 border-primary/25 ps-3">
+                          {endpoints.map((id) => {
+                            const descriptor = catalog?.endpoint_types?.find((item) => item.id === id);
+                            return <li key={id}>{descriptor ? endpointLabel(descriptor) : id}</li>;
+                          })}
+                        </ul>
+                      </details>
+                    ) : <p className="mt-1 text-xs text-muted-foreground">{t("providerGuideUI.noEndpoints")}</p>}
                   </td>
-                  <td className="p-2">
+                  <td className="px-3 py-3 align-top">
                     <p>{priceSummary(dep, rows, t)}</p>
-                    <p className="text-xs text-muted-foreground">{effectivePricing(dep, rows).source}</p>
+                    <p className="mt-1 break-words text-xs text-muted-foreground">{effectivePricing(dep, rows).source}</p>
                   </td>
-                  <td className="p-2">
+                  <td className="px-3 py-3 align-top">
                     <ModelStatusToggle model={dep} />
                   </td>
                   {showWeights && (
-                    <td className="p-2">
+                    <td className="px-3 py-3 align-top">
                       {draft ? (
                         <Input
                           className="w-24"
@@ -189,7 +203,7 @@ function GroupDeployments({
                       )}
                     </td>
                   )}
-                  <td className="p-2">
+                  <td className="px-3 py-3 align-top">
                     <Button variant="ghost" size="sm" onClick={() => openModel(String(dep.model_info.id))}>
                       {t("providerGuideUI.details")}
                     </Button>
@@ -212,6 +226,12 @@ export default function AllModelsPanel() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const queryClient = useQueryClient();
+  const catalog = useQuery({
+    queryKey: ["public-endpoints"],
+    queryFn: () => apiClient.get<ProtocolCatalog>("/public/endpoints"),
+    staleTime: 300_000,
+    enabled: !!accessToken,
+  });
   const models = useQuery({
     queryKey: ["models", "list", "groups", page, search, accessToken],
     enabled: !!accessToken,
@@ -255,12 +275,12 @@ export default function AllModelsPanel() {
         <section
           key={group.model_name}
           aria-label={t("providerGuideUI.publicGroup", { name: group.model_name })}
-          className="space-y-4 rounded-xl border bg-card p-5"
+          className="min-w-0 space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-5"
         >
           {/* 回退入口紧邻公开模型名，单部署也显示；点击后在弹窗中编辑，不展开模型卡片。 */}
-          <div className="flex flex-wrap items-start gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="text-lg font-semibold">{group.model_name}</h3>
+              <h3 className="flex items-center gap-2 break-all text-base font-semibold"><Layers3 className="size-4 shrink-0 text-primary" aria-hidden="true" />{group.model_name}</h3>
               <p className="text-sm text-muted-foreground">
                 {t("providerGuideUI.deploymentCount", { count: group.deployments.length })}
               </p>
@@ -282,6 +302,7 @@ export default function AllModelsPanel() {
           {accessToken && (
             <GroupDeployments
               group={group}
+              catalog={catalog.data}
               accessToken={accessToken}
               rows={rows}
               openModel={openModel}

@@ -196,6 +196,15 @@ describe("EditProjectModal submit payload", () => {
     expect(variables().params.project_alias).toBe("Renamed");
   });
 
+  /** 真实网关返回顶层零预算，确认编辑器回显零，保存后仍为零；内存 mutation 自动清理。 */
+  it("preserves the current zero cap when saving a project", async () => {
+    renderModal({ ...project, max_budget: 0, litellm_budget_table: null } as unknown as ProjectResponse);
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(0);
+    await save(setup());
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.max_budget).toBe(0);
+  });
+
   it("omits max_budget when the project has no budget row", async () => {
     const user = setup();
     renderModal({ ...project, litellm_budget_table: null } as unknown as ProjectResponse);

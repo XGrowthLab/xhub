@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { TruncatedValue } from "./TruncatedValue";
@@ -22,6 +23,15 @@ describe("TruncatedValue", () => {
     render(<TruncatedValue value="some-long-id-value" />);
     const el = screen.getByText("some-long-id-value");
     expect(el).toHaveStyle({ maxWidth: "180px" });
+  });
+
+  /** 前置窄列与长标识，复制按钮必须复制完整原文；userEvent 管理模拟剪贴板，组件自动卸载。 */
+  it("copies the complete value from a constrained field", async () => {
+    const user = userEvent.setup();
+    const value = "a-long-upstream-model-identifier";
+    render(<TruncatedValue value={value} maxWidth={28} />);
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await navigator.clipboard.readText()).toBe(value);
   });
 
   it("should apply custom maxWidth when provided", () => {

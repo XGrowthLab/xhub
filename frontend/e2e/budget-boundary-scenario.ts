@@ -19,25 +19,34 @@ export function registerBudgetBoundary(layer: "organization" | "team" | "persona
     };
     /** 读取当前层持久化快照，返回额度及支出；只读，拒绝前后比较用于防止误扣费。 */
     const info = async () => {
-      const path = layer === "organization" ? "/organization/info?organization_id=" + organization
-        : layer === "team" ? "/team/info?team_id=" + team
-        : layer === "project" ? "/project/info?project_id=" + project
-        : layer === "personal" ? "/user/info?user_id=" + user : "/key/info?key=" + keyID;
+      const path = {
+        organization: "/organization/info?organization_id=" + organization,
+        team: "/team/info?team_id=" + team,
+        project: "/project/info?project_id=" + project,
+        personal: "/user/info?user_id=" + user,
+        key: "/key/info?key=" + keyID,
+      }[layer];
       const response = await page.request.get(GATEWAY + path, { headers });
       expect(response.status(), await response.text()).toBe(200);
       const data = await response.json();
-      return layer === "organization" ? data : layer === "team" ? data.team_info : layer === "project" ? data.project : layer === "personal" ? data.user_info : data.info;
+      if (layer === "organization") return data;
+      return data[{ team: "team_info", project: "project", personal: "user_info", key: "info" }[layer]];
     };
     /** 页面保存预算；value 为新限额，无返回；验证保存契约与持久化，副作用只限自建资源。 */
     const configure = async (value: number) => {
-      const path = layer === "organization" ? "/organizations?org=" + organization
-        : layer === "team" ? "/teams?team=" + team
-        : layer === "project" ? "/projects?project=" + project
-        : layer === "personal" ? "/users?user=" + user : "/api-keys?key=" + keyID;
+      const path = {
+        organization: "/organizations?org=" + organization,
+        team: "/teams?team=" + team,
+        project: "/projects?project=" + project,
+        personal: "/users?user=" + user,
+        key: "/api-keys?key=" + keyID,
+      }[layer];
       await stableGoto(page, path);
       if (layer === "personal") {
         await page.getByRole("button", { name: t("pages.users.editUser"), exact: true }).click();
       } else if (layer === "project") {
+        // 真实零预算须同时显示在详情与编辑框中，并由下方数据面断言验证阻断和恢复。
+        await expect(page.getByText(t("pages.projects.budgetLimit").replace("{amount}", "0.00"), { exact: true })).toBeVisible();
         await page.getByRole("button", { name: t("Edit Project"), exact: true }).click();
       } else if (layer !== "key") {
         // 密钥详情链接直接打开编辑表单，团队和组织仍需从设置页签进入。
@@ -48,6 +57,11 @@ export function registerBudgetBoundary(layer: "organization" | "team" | "persona
       const budgetInput = layer === "personal"
         ? page.getByRole("spinbutton", { name: new RegExp("^" + t("pages.users.maxBudget")) })
         : page.getByLabel(t("Max Budget (USD)"), { exact: true });
+      // 数据面恢复前，确认实际编辑器将预算放在具名字段组，并能按当前语言定位输入。
+      if (layer === "project" || layer === "personal") {
+        await expect(page.getByRole("group", { name: t("directoryForm.limits") }).getByRole("spinbutton").first()).toHaveValue("0");
+      }
+      if (layer === "project") await expect(budgetInput).toHaveValue("0");
       await budgetInput.fill(String(value));
       const saving = page.waitForResponse(r => new URL(r.url()).pathname === "/" + (layer === "personal" ? "user" : layer) + "/update" && r.request().method() === (layer === "organization" ? "PATCH" : "POST"));
       await page.getByRole("button", { name: t(layer === "personal" ? "pages.users.saveChanges" : "Save Changes"), exact: true }).click();

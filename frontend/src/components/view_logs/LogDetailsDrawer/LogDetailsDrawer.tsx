@@ -4,7 +4,6 @@ import { Bot, Check, Copy, Sparkles, Wrench } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
-import { isRequestFailure } from "../logErrors";
 import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
@@ -87,7 +86,8 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   return (
     <button
       type="button"
-      className={`w-full text-left pl-8 pr-2 py-1 transition-colors ${isSelected ? "bg-info/10" : "hover:bg-accent"}`}
+      aria-current={isSelected || undefined}
+      className={`w-full border-l-2 py-2.5 pl-5 pr-3 text-left transition-colors ${isSelected ? "border-primary bg-primary/10" : "border-transparent hover:bg-accent"}`}
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
@@ -97,21 +97,11 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
         </span>
         <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
-      <div className="text-[11px] text-muted-foreground mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono">
-        <span>{durationValue}s</span>
-        {row.spend != null ? (
-          <>
-            <span>·</span>
-            <span>{formatLogCost(row.spend, row)}</span>
-          </>
-        ) : null}
-        {row.total_tokens ? (
-          <>
-            <span>·</span>
-            <span>{row.total_tokens} tok</span>
-          </>
-        ) : null}
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+        <span className="whitespace-nowrap">{durationValue}s</span>
+        {row.total_tokens != null && <span>{t("logsTrace.tokens", { count: row.total_tokens })}</span>}
       </div>
+      {row.spend != null && <div className="mt-1 break-words text-xs font-medium tabular-nums">{formatLogCost(row.spend, row)}</div>}
     </button>
   );
 }
@@ -150,7 +140,7 @@ export function LogDetailsDrawer({
       if (saved !== null && saved.trim() !== "") setDrawerWidth(clampDrawerWidth(Number(saved)));
     } catch { /* 浏览器可能禁用本地存储。 */ }
     const updateViewport = () => {
-      const compact = window.innerWidth < 640;
+      const compact = window.innerWidth <= 640;
       setViewportWidth(window.innerWidth);
       setIsCompact(compact);
       if (compact) setIsSidebarCollapsed(true);
@@ -266,7 +256,7 @@ export function LogDetailsDrawer({
   // 打开时依据当前屏宽收起侧栏；关闭时清理临时选择，避免窄屏文字被挤压。
   useEffect(() => {
     if (open) {
-      setIsSidebarCollapsed(window.innerWidth < 640);
+      setIsSidebarCollapsed(window.innerWidth <= 640);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
       setSessionSortMode("duration");
@@ -315,9 +305,7 @@ export function LogDetailsDrawer({
   const metadata = currentLog?.metadata || {};
 
   // Status display values
-  const hasError = enrichedLog ? isRequestFailure(enrichedLog) : false;
-  const statusLabel = t(requestLogStatus(enrichedLog || { status: "" }).label);
-  const statusColor = hasError ? ("error" as const) : ("success" as const);
+  const status = requestLogStatus(enrichedLog || { status: "" });
   const environment = metadata?.user_api_key_team_alias || t("logsUX.teamUnknown");
   const minimumWidth = viewportWidth > 0 ? Math.min(100, Math.max(MIN_DRAWER_WIDTH, 640 / viewportWidth * 100)) : MIN_DRAWER_WIDTH;
   const displayedWidth = Math.max(minimumWidth, drawerWidth);
@@ -415,51 +403,20 @@ export function LogDetailsDrawer({
                     </div>
                   </div>
                 </div>
-                <div className="mt-1 text-[11px] text-muted-foreground font-mono">
-                  {logsForList.length} {t("req")}
-                  {[
-                    isSessionMode
-                      ? llmCount
-                      : logsForList.filter(
-                          (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-                        ).length,
-                    isSessionMode
-                      ? agentCount
-                      : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
-                    isSessionMode
-                      ? mcpCount
-                      : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
-                  ].map((count, i) => {
-                    const label = [" LLM", " Agent", " MCP"][i];
-                    return count > 0 ? (
-                      <span key={label}>
-                        <span className="mx-1.5">·</span>
-                        {count}
-                        {label}
-                      </span>
-                    ) : null;
-                  })}
-                  <span className="mx-1.5">·</span>
-                  {isSessionMode
-                    ? formatLogCost(totalSessionCost, unpricedSessionLog)
-                    : formatLogCost(enrichedLog.spend, enrichedLog)}
-                  {isSessionMode && (
-                    <>
-                      <span className="mx-1.5">·</span>
-                      {sessionDurationSeconds}s
-                    </>
-                  )}
+                <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-xs tabular-nums text-muted-foreground">
+                  <span>{t("logsTrace.requests", { count: logsForList.length })}</span>
+                  {isSessionMode && <>
+                    {llmCount > 0 && <span>{t("logsTrace.llm", { count: llmCount })}</span>}
+                    {agentCount > 0 && <span>{t("logsTrace.agents", { count: agentCount })}</span>}
+                    {mcpCount > 0 && <span>{t("logsTrace.mcp", { count: mcpCount })}</span>}
+                    <span>{sessionDurationSeconds}s</span>
+                  </>}
                 </div>
-                {isSessionMode && (
-                  <div className="text-[11px] text-muted-foreground font-mono break-words">
-                    {t("Response cache hits")}: {cacheHitCount}/{logsForList.length}
-                  </div>
-                )}
-                {isSessionMode && sessionTruncated && (
-                  <div className="mt-1 text-[11px] text-warning font-mono">
-                    {t("Showing most recent {value0} of {sessionTotalCount}", { value0: (logsForList.length), sessionTotalCount })}
-                  </div>
-                )}
+                {isSessionMode && <>
+                  <div className="mt-1 text-xs font-semibold tabular-nums">{formatLogCost(totalSessionCost, unpricedSessionLog)}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{t("Response cache hits")}: {cacheHitCount}/{logsForList.length}</div>
+                  {sessionTruncated && <div className="mt-1 text-xs text-warning">{t("Showing most recent {value0} of {sessionTotalCount}", { value0: logsForList.length, sessionTotalCount })}</div>}
+                </>}
                 {isSessionMode && (
                   <Tabs
                     className="mt-1.5"
@@ -530,12 +487,16 @@ export function LogDetailsDrawer({
               onClose={onClose}
               isSidebarCollapsed={isSidebarCollapsed}
               onToggleSidebar={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
-              isExpanded={isExpanded}
-              onToggleExpanded={() => setIsExpanded((value) => !value)}
+              isExpanded={isExpanded || displayedWidth >= 100}
+              onToggleExpanded={isCompact ? undefined : () => {
+                // 已拖拽到 100% 时，恢复按钮仍需能改变实际宽度。窄屏始终全宽，不提供空操作。
+                if (displayedWidth >= 100) updateDrawerWidth(DEFAULT_DRAWER_WIDTH);
+                else setIsExpanded((value) => !value);
+              }}
               onPrevious={selectPreviousLog}
               onNext={selectNextLog}
-              statusLabel={statusLabel}
-              statusColor={statusColor}
+              statusLabel={t(status.label)}
+              statusColor={status.tone}
               environment={environment}
             />
             <div className="flex-1 overflow-y-auto">
