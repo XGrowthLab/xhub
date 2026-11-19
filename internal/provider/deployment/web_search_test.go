@@ -40,7 +40,7 @@ func TestDeploymentSearchPolicy(t *testing.T) {
 			if (len(pool) == 1) != tc.allowed || (err == nil) != tc.allowed || (len(dropped) > 0) != tc.dropped {
 				t.Fatalf("候选/编码结果不一致: %v %v %v", decisions, dropped, err)
 			}
-			if !tc.allowed && (!errors.Is(err, llmdialogue.ErrWebSearchUnsupported) || !decisions[0].SearchUnsupported) {
+			if !tc.allowed && (!errors.Is(err, llmdialogue.ErrWebSearchUnsupported) || decisions[0].CapabilityError != llmdialogue.ErrWebSearchUnsupported) {
 				t.Fatal("搜索错误丢失明确的能力标记")
 			}
 			if tools, ok := payload["tools"].([]any); tc.dropped && ok && len(tools) > 0 {
