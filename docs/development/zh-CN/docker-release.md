@@ -21,3 +21,4 @@
     docker pull ghcr.io/qiniu/xhub-console:1.0.0
 
 真实 GHCR 写入和 Release 创建需在 GitHub 验证；本地夹具不会发布资源。现有本地 Dockerfile 和 deploy/build.sh 保持原用法，CI 控制台使用 deploy/Dockerfile.release 保留 Next.js standalone 目录层级。
+记录回退镜像并核对独立数据库恢复点，按备份恢复证据安排轮换。[部署备份盘点与轮换](deployment-backup-rotation.md)
