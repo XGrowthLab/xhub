@@ -8,7 +8,9 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+env:
+  CODECOV_UPLOAD_URL: https://codecov-upload.qiniuapi.com
 
 # 同一分支的新提交取代旧的质量检查，避免过期结果占用 runner。
 concurrency:
@@ -84,7 +86,8 @@ jobs:
           flags: backend
           name: backend
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && hashFiles('coverage/go.out') != '' }}
         with:
@@ -141,7 +144,8 @@ jobs:
           flags: frontend
           name: frontend
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && hashFiles('frontend/coverage/lcov.info') != '' }}
         with:
@@ -222,7 +226,8 @@ jobs:
           name: supplier-contract
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -251,7 +256,8 @@ jobs:
           name: skill-boundary
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive skill resource regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -280,7 +286,8 @@ jobs:
           name: plugin-registration
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive plugin registration regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -309,7 +316,8 @@ jobs:
           name: plugin-filter
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive plugin filter regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -338,7 +346,8 @@ jobs:
           name: plugin-activation
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive plugin activation regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -367,7 +376,8 @@ jobs:
           name: server-submission
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive server submission regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -396,7 +406,8 @@ jobs:
           name: server-runtime
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive server runtime regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -425,7 +436,8 @@ jobs:
           name: prompt-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive prompt regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -454,7 +466,8 @@ jobs:
           name: policy-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive policy regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -483,7 +496,8 @@ jobs:
           name: access-group-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive access group regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -512,7 +526,8 @@ jobs:
           name: vector-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive vector regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -541,7 +556,8 @@ jobs:
           name: tag-catalog
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive tag regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -570,7 +586,8 @@ jobs:
           name: metadata-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive metadata regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -599,7 +616,8 @@ jobs:
           name: budget-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive budget regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -628,7 +646,8 @@ jobs:
           name: operations-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive operations regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -656,7 +675,8 @@ jobs:
           name: cache-config
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive cache regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -685,7 +705,8 @@ jobs:
           name: server-oauth
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive server OAuth regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -714,7 +735,8 @@ jobs:
           name: guard-management
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive guard regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -743,7 +765,8 @@ jobs:
           name: skill-hub-support
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive SkillHub support regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -772,7 +795,8 @@ jobs:
           name: legacy-inference
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive legacy inference regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -801,7 +825,8 @@ jobs:
           name: provider-batch
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive provider batch regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -830,7 +855,8 @@ jobs:
           name: medical-alias
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Archive medical alias regression evidence
         uses: actions/upload-artifact@v4
         if: always()
@@ -888,7 +914,8 @@ jobs:
           name: user-contract
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -945,7 +972,8 @@ jobs:
           name: key-contract
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1002,7 +1030,8 @@ jobs:
           name: model-contract
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1063,7 +1092,8 @@ jobs:
           name: usage-contract
           disable_search: true
           fail_ci_if_error: true
-          use_oidc: true
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

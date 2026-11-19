@@ -24,8 +24,34 @@ test('quality workflow runs for pull requests and maintained branches', () => {
   assert.deepEqual(workflow.on.push.branches, ['main', 'dev']);
   assert.ok(workflow.on.workflow_dispatch !== undefined, '必须支持手动重跑');
   assert.equal(workflow.permissions.contents, 'read');
-  assert.equal(workflow.permissions['id-token'], 'write');
+  assert.equal(workflow.permissions['id-token'], undefined);
   assert.equal(workflow.concurrency['cancel-in-progress'], true);
+});
+
+/** 前置真实工作流和双语 README；验证每次上传均使用自建地址及仓库 Secret，上传失败会阻断，并验证徽章指向同一仓库；只读无清理。 */
+test('all coverage uploads and badges use self-hosted Codecov', () => {
+  assert.equal(workflow.env.CODECOV_UPLOAD_URL, 'https://codecov-upload.qiniuapi.com');
+  const uploads = Object.values(workflow.jobs)
+    .flatMap((job) => job.steps)
+    .filter((item) => item.uses?.startsWith('codecov/codecov-action@'));
+  assert.ok(uploads.length > 0, '缺少覆盖率上传步骤');
+  for (const upload of uploads) {
+    assert.equal(upload.with.url, '${{ env.CODECOV_UPLOAD_URL }}', upload.name);
+    assert.equal(upload.with.token, '${{ secrets.CODECOV_TOKEN }}', upload.name);
+    assert.equal(upload.with.use_oidc, undefined, upload.name);
+    assert.equal(upload.with.fail_ci_if_error, true, upload.name);
+  }
+
+  const repository = 'https://codecov.qiniuapi.com/github/XGrowthLab/xhub';
+  for (const filename of ['README.md', 'README.zh-CN.md']) {
+    const readme = readFileSync(join(root, filename), 'utf8');
+    const badge = readme.match(/\[!\[codecov\]\(([^)]+)\)\]\(([^)]+)\)/);
+    assert.ok(badge, filename);
+    const badgeUrl = new URL(badge[1]);
+    assert.equal(badgeUrl.origin + badgeUrl.pathname, `${repository}/graph/badge.svg`, filename);
+    assert.match(badgeUrl.searchParams.get('token') ?? '', /^[A-Za-z0-9]+$/, filename);
+    assert.equal(badge[2], repository, filename);
+  }
 });
 
 /** 前置真实 Go 作业；验证格式、race、原子覆盖率和独立 backend 上传，任一步失败均由 Actions 阻断；只读无清理。 */
@@ -54,7 +80,6 @@ test('Go gate produces atomic backend coverage and runs race checks', () => {
   assert.equal(upload.with.files, 'coverage/go.out');
   assert.equal(upload.with.flags, 'backend');
   assert.equal(upload.with.fail_ci_if_error, true);
-  assert.equal(upload.with.use_oidc, true);
 });
 
 /** 前置真实前端作业；验证锁文件安装、静态错误预算、已知失败隔离后的全量覆盖率和独立上传；只读无清理。 */
@@ -75,7 +100,6 @@ test('frontend gate ratchets existing debt and uploads Vitest coverage', () => {
   assert.equal(upload.with.files, 'frontend/coverage/lcov.info');
   assert.equal(upload.with.flags, 'frontend');
   assert.equal(upload.with.fail_ci_if_error, true);
-  assert.equal(upload.with.use_oidc, true);
 });
 
 /** 前置真实回归作业；验证质量工作流自身和 ESLint 预算工具均纳入 CI；只读配置，无需清理。 */
@@ -189,7 +213,6 @@ test('real contract regression coverage is validated archived and uploaded', () 
     assert.equal(upload.with.name, job);
     assert.equal(upload.with.disable_search, true);
     assert.equal(upload.with.fail_ci_if_error, true);
-    assert.equal(upload.with.use_oidc, true);
     assert.ok(!upload.if || upload.if === 'success()', '不上传失败或取消用例的覆盖率充当成功证据');
     const artifact = workflow.jobs[job].steps.find(item => item.uses === 'actions/upload-artifact@v4');
     assert.equal(artifact.if, 'always()');
