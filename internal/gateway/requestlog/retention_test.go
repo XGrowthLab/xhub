@@ -28,4 +28,7 @@ func TestSummarizeLegacyDiagnostic(t *testing.T) {
 		string(raw["usage"]) != `{"output_tokens":12}` || string(raw["future"]) != `{"nested":true}` {
 		t.Fatalf("诊断没有正确保留可观测字段: %s", value)
 	}
+	if again, replaced, recognized := summarizeLegacyDiagnostic(value); again != "" || replaced || !recognized {
+		t.Fatalf("已经规范化的诊断不应再次写入: %s", again)
+	}
 }

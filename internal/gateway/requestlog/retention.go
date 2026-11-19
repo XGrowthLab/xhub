@@ -42,7 +42,7 @@ func ProcessLegacyLogBatch(ctx context.Context, db *sql.DB, cutoff time.Time, af
 )
 SELECT p.id, COALESCE(legacy.request_id, ''), COALESCE(legacy.body_bytes, 0),
        COALESCE(legacy.error_summary_source, ''), COALESCE(legacy.diagnostic, ''),
-       COALESCE(legacy.diagnostic_too_large, false)
+       COALESCE(legacy.diagnostic_too_large, false), COALESCE(legacy.has_legacy_body, false)
 FROM page p
 LEFT JOIN LATERAL (
 	SELECT request_id,
@@ -50,9 +50,12 @@ LEFT JOIN LATERAL (
 	       CASE WHEN NOT $4 THEN '' WHEN octet_length(error) <= 65536 THEN error
 	            ELSE 'upstream error details exceed the summary limit' END AS error_summary_source,
 	       CASE WHEN octet_length(upstream_response) <= 65536 THEN upstream_response ELSE '' END AS diagnostic,
-	       octet_length(upstream_response) > 65536 AS diagnostic_too_large
+	       octet_length(upstream_response) > 65536 AS diagnostic_too_large,
+	       (request_body <> '' OR response_body <> '' OR proxy_request <> '' OR error <> '') AS has_legacy_body
 	FROM request_logs WHERE request_id = p.request_id AND p.ts <= $3 AND body_capture_status = ''
-	  AND (request_body <> '' OR response_body <> '' OR proxy_request <> '' OR error <> '')
+	  AND (request_body <> '' OR response_body <> '' OR proxy_request <> '' OR error <> ''
+	       OR CASE WHEN octet_length(upstream_response) > 65536 THEN true
+	               ELSE strpos(upstream_response, '"error":') > 0 END)
 	LIMIT 1`
 	if execute {
 		query += " FOR UPDATE"
@@ -66,6 +69,7 @@ LEFT JOIN LATERAL (
 	type update struct {
 		id, summary, diagnostic string
 		replaceDiagnostic       bool
+		markExpired             bool
 	}
 	var updates []update
 	result := LegacyRetentionBatch{Next: after}
@@ -73,8 +77,8 @@ LEFT JOIN LATERAL (
 		var id int64
 		var bodyBytes int64
 		var requestID, previousError, diagnostic string
-		var diagnosticTooLarge bool
-		if err := rows.Scan(&id, &requestID, &bodyBytes, &previousError, &diagnostic, &diagnosticTooLarge); err != nil {
+		var diagnosticTooLarge, hasLegacyBody bool
+		if err := rows.Scan(&id, &requestID, &bodyBytes, &previousError, &diagnostic, &diagnosticTooLarge, &hasLegacyBody); err != nil {
 			return LegacyRetentionBatch{}, err
 		}
 		result.Scanned++
@@ -82,14 +86,19 @@ LEFT JOIN LATERAL (
 		if requestID == "" {
 			continue
 		}
-		result.Eligible++
-		result.LegacyBodyBytes += bodyBytes
 		cleanDiagnostic, replace, recognized := summarizeLegacyDiagnostic(diagnostic)
 		if diagnosticTooLarge || !recognized {
 			result.UnchangedDiagnostics++
 		}
+		// 旧传输诊断可能独立保留上游错误。当只有诊断副本时，保持正文状态为空，
+		// 且再次检查已规范化的摘要不会重复写入。
+		if !hasLegacyBody && !replace {
+			continue
+		}
+		result.Eligible++
+		result.LegacyBodyBytes += bodyBytes
 		if execute {
-			updates = append(updates, update{requestID, FailureSummary(previousError), cleanDiagnostic, replace})
+			updates = append(updates, update{requestID, FailureSummary(previousError), cleanDiagnostic, replace, hasLegacyBody})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -98,10 +107,11 @@ LEFT JOIN LATERAL (
 	rows.Close()
 	for _, row := range updates {
 		change, err := tx.ExecContext(ctx, `UPDATE request_logs
-SET request_body = '', response_body = '', proxy_request = '', error = $2, body_capture_status = 'expired',
+SET request_body = '', response_body = '', proxy_request = '', error = $2,
+    body_capture_status = CASE WHEN $5 THEN 'expired' ELSE body_capture_status END,
     upstream_response = CASE WHEN $3 THEN $4 ELSE upstream_response END
 WHERE request_id = $1 AND body_capture_status = ''`,
-			row.id, row.summary, row.replaceDiagnostic, row.diagnostic)
+			row.id, row.summary, row.replaceDiagnostic, row.diagnostic, row.markExpired)
 		if err != nil {
 			return LegacyRetentionBatch{}, err
 		}
@@ -140,6 +150,9 @@ func summarizeLegacyDiagnostic(raw string) (string, bool, bool) {
 			return "", false, false
 		}
 		summary = string(encoded)
+	}
+	if summary == string(source) {
+		return "", false, true
 	}
 	fields["error"] = json.RawMessage(summary)
 	encoded, err := json.Marshal(fields)

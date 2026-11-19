@@ -23,7 +23,7 @@ func TestUserContractLegacyLogBodyRetention(t *testing.T) {
 	db := h.db.Engine.DB().DB
 	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
 	var ids []string
-	for _, ts := range []time.Time{cutoff, cutoff.Add(time.Hour), cutoff.Add(-time.Hour), cutoff.Add(-time.Hour)} {
+	for _, ts := range []time.Time{cutoff, cutoff.Add(time.Hour), cutoff.Add(-time.Hour), cutoff.Add(-time.Hour), cutoff.Add(-time.Hour)} {
 		response := h.ok(http.MethodPost, "/v1/chat/completions", member.key, chatRequest("retention-model", "Synthetic legacy request."))
 		h.flushSpend()
 		id := response.header("x-litellm-call-id")
@@ -45,6 +45,11 @@ upstream_response = $1 WHERE request_id = $2`, diag, id); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE request_logs SET body_capture_status = '',
+upstream_response = '{"status_code":200,"error":{"error":{"code":"embedded_error","payload":{"text":"diagnostic-only-marker"}}}}'
+WHERE request_id = $1`, ids[4]); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.store.WriteHistory(ctx, "legacy-retention-history", "test-scope", `[{"role":"user","content":"history-marker"}]`); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +62,7 @@ upstream_response = $1 WHERE request_id = $2`, diag, id); err != nil {
 		t.Fatalf("只读试算未准确命中一条记录: %+v %v", first, err)
 	}
 	next, err := requestlog.ProcessLegacyLogBatch(ctx, db, cutoff, first.Next, 10, false)
-	if err != nil || next.Scanned != 3 || next.Eligible != 1 || next.UnchangedDiagnostics != 1 || !next.Done {
+	if err != nil || next.Scanned != 4 || next.Eligible != 2 || next.UnchangedDiagnostics != 1 || !next.Done {
 		t.Fatalf("游标、近期正文、独立正文或未知诊断统计错误: %+v %v", next, err)
 	}
 	if check := logDetail(t, h, member.session, ids[0]); check["response"] != before["response"] {
@@ -94,7 +99,7 @@ upstream_response = $1 WHERE request_id = $2`, diag, id); err != nil {
 		}()
 	}
 	wg.Wait()
-	if sum := <-cleared + <-cleared; sum != 2 {
+	if sum := <-cleared + <-cleared; sum != 3 {
 		t.Fatalf("并发清理遗漏或重复记录: %d", sum)
 	}
 	after := logDetail(t, h, member.session, ids[0])
@@ -109,6 +114,10 @@ upstream_response = $1 WHERE request_id = $2`, diag, id); err != nil {
 	}
 	if logs, err := h.db.GetRequestLog(ctx, ids[2]); err != nil || len(logs.UpstreamResponse) != 65537 {
 		t.Fatalf("不能识别的诊断未保留: %v", err)
+	}
+	if logs, err := h.db.GetRequestLog(ctx, ids[4]); err != nil || logs.BodyCaptureStatus != "" ||
+		!strings.Contains(logs.UpstreamResponse, "embedded_error") || strings.Contains(logs.UpstreamResponse, "diagnostic-only-marker") {
+		t.Fatalf("仅保留嵌入式错误的旧日志未正确处理: %v", err)
 	}
 	if got := h.do(http.MethodGet, "/spend/logs/ui/"+ids[0], other.session, nil); got.status != 404 && got.status != 403 {
 		t.Fatalf("清理后其他用户可以读取日志: %s", got.describe())
