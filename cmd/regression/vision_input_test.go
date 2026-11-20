@@ -26,7 +26,7 @@ func visionRequest(protocol, model string, stream bool) map[string]any {
 	return map[string]any{"model": model, "stream": stream, capField: 128, key: []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": text, "text": "Before"}, image, map[string]any{"type": text, "text": "After"}}}}}
 }
 
-// TestVisionInputProtocolMatrix 验证三种客户/上游协议在硬额度下的 JSON/SSE 图片完整性、失败契约、护栏和实测账单归属。
+// TestVisionInputProtocolMatrix 验证三种客户/上游协议在软预算下的 JSON/SSE 图片完整性、失败契约、护栏和实测账单归属。
 // 前置真实网关、独立 PostgreSQL schema 和有限额个人 Key，本地上游独立校验图片字节/MIME/顺序；Cleanup 关闭服务并删除 schema。
 func TestVisionInputProtocolMatrix(t *testing.T) {
 	protocols := []string{"openai-chat", "openai-responses", "anthropic-messages"}
@@ -131,6 +131,25 @@ func TestVisionInputProtocolMatrix(t *testing.T) {
 				}
 			}
 			before := calls.Load()
+			// 不可等价转译的精度必须在出站前给出能力错误，避免误导用户更换有视觉能力的模型。
+			if target == "anthropic-messages" {
+				for _, stream := range []bool{false, true} {
+					body := visionRequest("openai-responses", dep.ModelName, stream)
+					image := body["input"].([]any)[0].(map[string]any)["content"].([]any)[1].(map[string]any)
+					image["detail"] = "original"
+					reply := h.do("POST", "/v1/responses", owner.key, body)
+					if reply.status != 400 || !strings.Contains(reply.text(), "unsupported_capability") ||
+						!strings.Contains(reply.text(), "image detail cannot be expressed by Messages") ||
+						!strings.Contains(reply.text(), "auto") || calls.Load() != before {
+						t.Fatalf("显式图片精度 stream=%v 未得到零出站的能力错误: %s", stream, reply.describe())
+					}
+					h.flushSpend()
+					bill := h.ok("GET", "/spend/logs/ui/"+reply.header("x-litellm-call-id"), admin, nil).json()
+					if bill["status"] != "error" || bill["spend"] != float64(0) {
+						t.Fatalf("精度拒绝不应产生费用或成功记录: %v", bill)
+					}
+				}
+			}
 
 			if r := h.do("POST", "/v1/responses", "", visionRequest("openai-responses", dep.ModelName, false)); r.status != 401 {
 				t.Fatal("图片请求绕过鉴权")

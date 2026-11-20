@@ -11,8 +11,8 @@ import (
 type CandidateDecision struct {
 	Deployment config.ModelEntry
 	Reason     string
-	// 搜索能力失败标记只供错误映射使用，不把连接配置输出给客户端。
-	SearchUnsupported bool
+	// CapabilityError 仅包含可公开的已知能力错误，其他排除原因只供诊断使用。
+	CapabilityError error
 }
 
 // Candidates 对已匹配公开模型的部署执行目录、声明和请求能力筛选。
@@ -44,7 +44,12 @@ func Candidates(list []config.ModelEntry, endpoint string, dialogue *llmdialogue
 		decision := CandidateDecision{Deployment: dep}
 		if err != nil {
 			decision.Reason = err.Error()
-			decision.SearchUnsupported = errors.Is(err, llmdialogue.ErrWebSearchUnsupported)
+			switch {
+			case errors.Is(err, llmdialogue.ErrWebSearchUnsupported):
+				decision.CapabilityError = llmdialogue.ErrWebSearchUnsupported
+			case errors.Is(err, llmdialogue.ErrMessagesImageDetailUnsupported):
+				decision.CapabilityError = llmdialogue.ErrMessagesImageDetailUnsupported
+			}
 		} else {
 			pool = append(pool, dep)
 		}
