@@ -112,11 +112,14 @@ class BackupPlanTests(unittest.TestCase):
         self.evidence(pending)
         linked = current.parent / "postgres.dump.partial"
         os.link(pending, linked)
-        empty = self.archive("starting", 400, "schema.dump.partial")
-        empty.write_bytes(b"")
+        empty = self.root / "starting" / "schema.dump.partial"
+        empty.parent.mkdir()
+        empty.touch()
+        os.utime(empty, (400, 400))
         (empty.parent / "accounts-before.dump.partial").symlink_to(pending)
         self.archive("unrecognized", 500, "unrelated.dump.partial")
-        self.args.inspect_limit = self.args.verify_limit = 2
+        self.args.inspect_limit = 5
+        self.args.verify_limit = 2
 
         result = rotation.plan(self.args)
         unfinished = [row for row in result["archives"] if row["classification"] == "unfinished"]

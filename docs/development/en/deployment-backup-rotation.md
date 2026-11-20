@@ -17,7 +17,7 @@ python3 scripts/deployment_backup_plan.py --root "$BACKUP_ROOT" --inspect-limit 
 
 The tool inventories known archive files in deployment subdirectories. The first command reads file metadata. The second checks up to eight archive tables of contents using a PostgreSQL client that supports the archive format and compression. An archive with table-data entries for users, keys, organizations, usage and history is classified as a full-backup candidate. Schema-only and account-only snapshots remain separate. Verify recoverability with an actual restore.
 
-A known archive name with a `.partial` suffix, such as `database.dump.partial`, is reported as `unfinished`. Its bytes count toward disk use. The file may still be growing or may be left over from an interrupted export. Rotation evidence and table-of-contents checks apply only after the archive is published under its final name.
+A known archive name with a `.partial` suffix, such as `database.dump.partial`, is reported as `unfinished`. Its bytes count toward disk use. The file may still be growing or may be left over from an interrupted export. Once published, the archive is checked according to its final name and backup scope.
 
 Reports omit archive contents, connection strings and offsite references. Total allocation for recognized archives is deduplicated by device and inode. Other files, unrecognized layouts, filesystem compression and snapshots can affect disk reconciliation. The tool orders archives by modification time. Compare this ordering with actual recovery points before scheduling rotation.
 

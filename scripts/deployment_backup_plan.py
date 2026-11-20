@@ -55,7 +55,7 @@ def read_small_json(path):
 
 
 def discover(root):
-    """读取 root 直属备份目录中的正式及未完成文件，返回按时间排序的归档和未分类目录数。盘点只取文件元数据。"""
+    """读取 root 直属备份目录中的正式及未完成文件，返回按时间排序的归档和未分类目录数。归档本身只取文件元数据。"""
     archives = []
     unclassified = 0
     for directory in root.iterdir():
