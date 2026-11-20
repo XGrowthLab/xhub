@@ -23,3 +23,29 @@ XHUB_DATABASE_URL="$YOUR_DATABASE_URL" go run ./cmd/history-compact --execute --
 Resume with `--after` using the printed `next` value. Starting again from an empty cursor skips records already migrated. The confirmation flag is an operator assertion, not an automatic check of other instances. Running the migration while an older writer is active can leave its copy stale.
 
 Before release, test JSON and streaming continuation, tool calls, identity isolation, failures, concurrent writes, migration reruns and browser flows with an isolated PostgreSQL database and local provider fixture. Measure storage and latency against representative data. Before removing any old copies, validate references, backup restoration and available disk space; ordinary PostgreSQL vacuum usually makes space reusable rather than immediately returning it to the filesystem.
+
+## Protocol storage reports and legacy compression estimates
+
+Run the commands against an existing schema using a read-only database account. Set `XHUB_DATABASE_URL` in the environment. Assign a unique, stable `--deployment` label to each installation and take two snapshots from the same schema.
+
+```sh
+go run ./cmd/storage-report snapshot --deployment=primary --days=7 > first.json
+go run ./cmd/storage-report snapshot --deployment=primary --days=7 --baseline=first.json > second.json
+```
+
+`routes` groups usage by UTC request day, inbound and outbound protocol, explicit bypass and streaming. It counts calls and attributes the stored bytes of diagnostics, embedded bodies and separately captured documents. Empty fields count as zero. An unlinked capture uses its creation day and a null streaming flag. The window starts at midnight on the first day and ends at the observation time. Legacy history has creation dates and categories. Previously hashed routing keys cannot reliably identify individual protocols. Blocks and manifests have no creation timestamps and appear under undated.
+
+`physical_bytes` includes the database, main tables, TOAST including its own indexes, and main-table indexes. A role with access to the WAL directory also sees current cluster-wide WAL files. A second snapshot records signed changes under `physical_delta_bytes`. Interpret these separately from the present sizes of fields attributed to their creation day. On the host, pass `--backups-dir`, `--container-logs-dir`, `--redis-dir`, `--billing-spool-dir` or `--images-dir` to measure allocated blocks on the same filesystem. Compare identical directories on the same host. Only category names appear in the report.
+
+```sh
+go run ./cmd/storage-report plan --before=2026-11-19T00:00:00Z \
+  --rows=100 --batch-bytes=33554432 --record-bytes=16777216
+```
+
+The planner visits legacy history with recognized hashed keys and UTC creation times strictly before the whole-second cutoff. It reads metadata first, fetches bodies within the byte budget, tests Zstandard compression and verifies the original length and SHA-256. The default row and index allowance is 1 KiB per selected record. Adjust it with `--reserve-bytes`. Oversized or previously covered rows require metadata only. The snapshot counts unrecognized keys and unknown creation times separately. Follow `has_more` and `next_cursor` with the original cutoff. On failure, retry from the last successful cursor. Each batch has its own consistent snapshot. Recheck original content before performing a conversion.
+
+`estimated_selected_savings_bytes` is a field-size estimate using the chosen allowance. A migration needs additional space for old copies, TOAST, WAL and rollback. Measure physical growth and filesystem reclamation on a restored database.
+
+The estimate compares the current PostgreSQL/TOAST field size with a whole-record Zstandard frame. The `history-compact` command uses separate message blocks, deduplication and manifests with different costs. The snapshot accepts `--days=1..31` (default 7). Set `--before` to an RFC 3339 whole second in the past or present. Defaults are 100 rows (1–1000), 32 MiB per batch (maximum 256 MiB), 16 MiB per record (maximum 64 MiB, within the batch limit), and 1 KiB allowance per record (maximum 1 MiB). Pass `next_cursor` to the next invocation using `--cursor`. Stop at `has_more=false`; the last cursor may remain populated.
+
+Protocol attribution reads events and captures for the time window. Large databases without independent timestamp indexes may perform sequential scans. Statements have a 15-second timeout. Physical deltas cover categories observed in both snapshots. An absent optional metric was unobserved. Supply actual mount directories. Unknown creation times and unrecognized legacy keys are counted separately.

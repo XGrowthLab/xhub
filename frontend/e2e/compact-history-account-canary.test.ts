@@ -22,6 +22,25 @@ function historyCounts(): number[] {
     .split("|").map(Number);
 }
 
+/** 以当前浏览器私有 schema 运行真实运维 CLI。仅返回聚合 JSON，配置只传给子进程，构建由 Go 缓存复用。 */
+function storageReport(args: string[]) {
+  const dir = process.env.E2E_RUN_DIR!;
+  const schema = readFileSync(path.join(dir, "schema.txt"), "utf8").trim();
+  expect(schema).toMatch(/^e2e_[0-9]+_[0-9]+$/);
+  const dsn: string = JSON.parse(readFileSync(path.join(dir, "c.yaml"), "utf8")).general_settings.database_url;
+  expect(new URL(dsn).searchParams.get("search_path") === schema).toBe(true);
+  return JSON.parse(execFileSync("go", ["run", "./cmd/storage-report", ...args], {
+    cwd: path.resolve(__dirname, "../.."), env: { ...process.env, XHUB_DATABASE_URL: dsn },
+    encoding: "utf8", timeout: 60_000,
+  }));
+}
+
+/** 从实际容量快照中汇总 Responses 转 Chat 的 JSON 或 SSE 调用；仅比较本轮真实浏览器新增量。 */
+function bridgeCount(report: ReturnType<typeof storageReport>, streamed: boolean): number {
+  return report.routes.reduce((sum: number, row: { inbound: string; outbound: string; explicit_bypass: boolean; streamed: boolean; calls: number }) =>
+    sum + (row.inbound === "responses" && row.outbound === "chat" && !row.explicit_bypass && row.streamed === streamed ? row.calls : 0), 0);
+}
+
 // 此场景使用专门的灰度套件。常规全量压缩和旧格式的套件保留各自的测试。
 test.skip(process.env.XHUB_COMPACT_HISTORY !== "canary", "Requires account-scoped history storage");
 
@@ -41,6 +60,8 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
     RETURNING id;`)).toBe(fixed);
   try {
     const [compact, legacy] = historyCounts();
+    const snapshotArgs = ["snapshot", "--deployment=browser", "--days=2"];
+    const before = storageReport(snapshotArgs);
     const outsider = await page.request.post(GATEWAY + "/v1/responses", {
       headers: adminHeaders, data: { model: "e2e-responses-history", input: "continuation-1", user: fixed, store: false },
     });
@@ -68,6 +89,17 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
     expect(result.followup).toBe(200);
     expect(result.sse).toContain("response.completed");
     expect(result.sse).toContain("history-ok-2");
+    expect(historyCounts()).toEqual([compact + 2, legacy + 1]);
+    const after = storageReport(snapshotArgs);
+    expect(bridgeCount(after, false) - bridgeCount(before, false)).toBe(2);
+    expect(bridgeCount(after, true) - bridgeCount(before, true)).toBe(1);
+    // 生产旧格式的创建时间精确到秒，等待独占上界跨过本轮写入，再确认试算后仍可读。
+    await expect.poll(() => runCanarySQL(`SELECT coalesce(max(created_at) < to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),true)
+      FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%';`)).toBe("t");
+    const cutoff = runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`);
+    const plan = storageReport(["plan", "--before=" + cutoff, "--rows=1000"]);
+    expect(plan.has_more).toBe(false);
+    expect(plan.scanned).toBe(legacy + 1);
     expect(historyCounts()).toEqual([compact + 2, legacy + 1]);
   } finally {
     const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: fixed } });
