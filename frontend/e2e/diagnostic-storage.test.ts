@@ -34,7 +34,7 @@ for (const locale of ["en", "zh-CN"] as const) test("Read packed diagnostic in l
       WHERE request_id='${id}' AND ts < date_trunc('second', now());`;
     await expect.poll(() => runStorageSQL(query)).not.toBe("");
     const [event, cutoff] = runStorageSQL(query).split("|");
-    const args = ["--before=" + cutoff, "--after=" + (BigInt(event) - BigInt(1)).toString(), "--through=" + event, "--rows=1", "--min-bytes=1024"];
+    const args = ["--before=" + cutoff, "--from-event=" + event, "--through=" + event, "--rows=1", "--min-bytes=1024"];
     expect(storageReport(["plan", ...args], "diagnostic-pack").selected).toBe(1);
     expect(storageReport(["pack", "--execute", ...args], "diagnostic-pack").selected).toBe(1);
     const after = await (await page.request.get(detailURL, { headers })).json();

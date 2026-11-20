@@ -18,6 +18,9 @@ import (
 const Family = "xhub:diagnostic:"
 const Prefix = Family + "zstd:1:"
 
+// 诊断最多同时占用一个解码槽。即使大日志详情积压，续聊仍能使用其余三个共用槽。
+var detailSlot = make(chan struct{}, 1)
+
 // Encode 把单条脱敏诊断的完整 UTF-8 字节编码成适用于 TEXT 的 ASCII 值，返回内容和错误。
 // 返回值包含原始长度和 SHA-256，供维护程序在实际存储有收益时写入。
 func Encode(raw string) (string, error) {
@@ -50,6 +53,12 @@ func Read(ctx context.Context, value string, limit int64) (string, bool, error) 
 	}
 	if n > limit {
 		return "", true, nil
+	}
+	select {
+	case detailSlot <- struct{}{}:
+		defer func() { <-detailSlot }()
+	case <-ctx.Done():
+		return "", false, ctx.Err()
 	}
 	frame, err := base64.RawStdEncoding.DecodeString(payload)
 	if err != nil {

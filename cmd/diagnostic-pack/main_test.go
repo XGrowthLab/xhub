@@ -75,7 +75,7 @@ func TestDiagnosticCommand(t *testing.T) {
 	if out, e := run(t.Context(), recoverArgs, dsn, strings.NewReader(raw)); e != nil || string(out) != `{"recovered":false}` {
 		t.Fatal("重复恢复影响了新版本", e)
 	}
-	for _, args := range [][]string{nil, {"other", cutoff}, {"plan", "--execute", cutoff}, {"pack", cutoff}, {"plan", "--before=no"}, {"plan", cutoff, "--rows=0"}, {"pack", "--execute", cutoff, "--backup-manifest=" + manifest + "missing"}} {
+	for _, args := range [][]string{nil, {"other", cutoff}, {"plan", cutoff, "--from-event=3", "--through=1"}, {"plan", cutoff, "--cursor=invalid"}, {"recover", "--execute", "--event=1", "--backup-manifest=" + manifest, "--cursor=invalid"}, {"plan", "--execute", cutoff}, {"pack", cutoff}, {"plan", "--before=no"}, {"plan", cutoff, "--rows=0"}, {"pack", "--execute", cutoff, "--backup-manifest=" + manifest + "missing"}} {
 		if value, e := run(t.Context(), args, dsn, strings.NewReader("")); e == nil || value != nil || strings.Contains(e.Error(), dsn) {
 			t.Fatal("非法运维调用被接受或泄漏连接信息", args)
 		}

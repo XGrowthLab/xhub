@@ -45,3 +45,24 @@ func TestDiagnosticFrame(t *testing.T) {
 		t.Fatal("空诊断进入编码")
 	}
 }
+
+// TestDiagnosticDecodeQueueCancellation 模拟一个大日志占用诊断额度。另一个等待者取消后立即退出，
+// 已占用的槽释放后，同一份有效诊断可正常还原；通道令牌由 defer 清理。
+func TestDiagnosticDecodeQueueCancellation(t *testing.T) {
+	value, err := Encode("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		detailSlot <- struct{}{}
+		defer func() { <-detailSlot }()
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, _, err := Read(ctx, value, 100); err != context.Canceled {
+			t.Fatal("取消的详情读取仍等待解码资源", err)
+		}
+	}()
+	if got, over, err := Read(t.Context(), value, 100); err != nil || over || got != "fixture" {
+		t.Fatal("排队取消影响后续详情", err)
+	}
+}

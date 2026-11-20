@@ -32,6 +32,8 @@ go run ./cmd/diagnostic-pack pack --execute --before="$CUTOFF" --rows=50 --backu
 go run ./cmd/diagnostic-pack restore --execute --before="$CUTOFF" --rows=50
 ```
 
-先让所有提供流量的实例支持编码读取，再在隔离环境验证。生产批次建立临时加密恢复点。诊断清单的第一列为请求 ID 的 SHA-256，第二列为旧诊断原始 UTF-8 字节的 SHA-256，按第一列升序。每次成功提交后用固定的 `through` 和上一批的 `next` 分别传给 `--through`、`--after`，以 `has_more=false` 结束。单批和单条默认上限为 16 MiB、8 MiB，过大的记录单列。保持截止秒和大小条件一致。转换读回数据库核验，在 `selected_stored_before` 和 `selected_stored_after` 报告已转换字段的实际存储大小。反向展开使用新的游标，恢复普通文本后才能回退到旧网关。
+先让所有提供流量的实例支持编码读取，再在隔离环境验证。生产批次建立临时加密恢复点。诊断清单的第一列为请求 ID 的 SHA-256，第二列为旧诊断原始 UTF-8 字节的 SHA-256，按第一列升序。每次成功提交后，把返回的 `next_cursor` 传给同一操作的 `--cursor`，直到 `has_more=false`。游标绑定库、schema、操作、截止秒、单条筛选范围及清单。需要单独处理一段事件可用 `--from-event` 和 `--through` 指定起止序号，两个边界均包含在内。单批和单条默认上限为 16 MiB、8 MiB，过大的记录单列。保持截止秒和大小条件一致。转换读回数据库核验，在 `selected_stored_before` 和 `selected_stored_after` 报告已转换字段的实际存储大小。反向展开使用新的游标，恢复普通文本后才能回退到旧网关。
 
 当帧损坏时，先认证并解密临时备份，在可信主机把单条原文通过标准输入传给 `diagnostic-pack recover --execute --event=… --backup-manifest=…`。命令锁定当前日志，核对原版本头、请求身份与独立清单。元数据冲突会保留当前记录供人工核对。
+
+试算可用只读连接，转换、还原和原件修复需要写权限。提供备份清单时，核对 `changed_or_unbacked` 中备份后变动或缺少原件的记录。试算与转换把损坏的既有版本头计入 `malformed_packed`，普通还原遇到这类记录会返回对应事件序号。原件修复的清单摘要错误使命令失败，当前版本不匹配或不存在则返回 `recovered=false`。\n

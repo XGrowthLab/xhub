@@ -139,8 +139,25 @@ func TestDiagnosticBatchBounds(t *testing.T) {
 	if e != nil || p.Deferred != 1 || p.Scanned != 2 || !p.More {
 		t.Fatal("预算被超出或跳过下一行", p, e)
 	}
-	o.Through = p.Through
-	o.After = p.Next
+	o.Cursor = p.Cursor
+	for _, change := range []func(*DiagnosticOptions){
+		func(v *DiagnosticOptions) { v.Before = v.Before.Add(-time.Second) },
+		func(v *DiagnosticOptions) { v.MinBytes++ },
+		func(v *DiagnosticOptions) { v.Cursor += "0" },
+		func(v *DiagnosticOptions) { v.Through = p.Through },
+	} {
+		other := o
+		change(&other)
+		if _, err := DiagnosticBatch(ctx, db, other, "plan"); err == nil {
+			t.Fatal("诊断续跑错误接受了不同的扫描条件")
+		}
+	}
+	if _, err := DiagnosticBatch(ctx, db, o, "pack"); err == nil {
+		t.Fatal("写入错误接受了试算的游标")
+	}
+	if _, err := DiagnosticBatch(ctx, fixture(t), o, "plan"); err == nil {
+		t.Fatal("不同 schema 错误复用了游标")
+	}
 	p, e = DiagnosticBatch(ctx, db, o, "plan")
 	if e != nil || p.More || p.Scanned != 3 {
 		t.Fatal("续跑遗漏记录", p, e)
@@ -182,5 +199,40 @@ func TestPackedDiagnosticRetention(t *testing.T) {
 		if e != nil || tooLarge || status != "expired" || !strings.Contains(got, "capacity") || strings.Contains(got, "remove-private-value") != (i == 1) {
 			t.Fatal("清理后诊断或正文期限不正确", i, e)
 		}
+	}
+}
+
+// TestMalformedDiagnosticMaintenance 给一个有过期正文的日志注入损坏的版本头。
+// 三种维护模式分别验证跳过与计数、拒绝不可信恢复、依旧清理到期正文；私有 schema 自动回收。
+func TestMalformedDiagnosticMaintenance(t *testing.T) {
+	db := fixture(t)
+	ctx := t.Context()
+	cut := time.Now().UTC().Truncate(time.Second)
+	const id = "fixture-broken-retention"
+	var event int64
+	if err := db.QueryRow("INSERT INTO usage_events(request_id,owner_type,ts) VALUES($1,'personal',$2) RETURNING id", id, cut.Add(-time.Hour)).Scan(&event); err != nil {
+		t.Fatal(err)
+	}
+	damaged := logframe.Prefix + "invalid"
+	if _, err := db.Exec("INSERT INTO request_logs(request_id,upstream_response,request_body) VALUES($1,$2,'expired')", id, damaged); err != nil {
+		t.Fatal(err)
+	}
+	o := DiagnosticOptions{Before: cut, Rows: 10, BatchBytes: 16384, RecordBytes: 16384, MinBytes: 64}
+	for _, mode := range []string{"plan", "pack"} {
+		r, err := DiagnosticBatch(ctx, db, o, mode)
+		if err != nil || r.Malformed != 1 || r.Selected != 0 || r.Next != event {
+			t.Fatal("损坏帧阻塞了独立诊断", mode, r, err)
+		}
+	}
+	if _, err := DiagnosticBatch(ctx, db, o, "restore"); err == nil || !strings.Contains(err.Error(), fmt.Sprint(event)) {
+		t.Fatal("损坏帧未报告需核对的事件")
+	}
+	ret, err := requestlog.ProcessLegacyLogBatch(ctx, db, cut, 0, 10, true)
+	if err != nil || ret.UnchangedDiagnostics != 1 || ret.Cleared != 1 {
+		t.Fatal("损坏诊断阻塞到期正文", ret, err)
+	}
+	var ok bool
+	if err = db.QueryRow("SELECT upstream_response=$2 AND request_body='' AND body_capture_status='expired' FROM request_logs WHERE request_id=$1", id, damaged).Scan(&ok); err != nil || !ok {
+		t.Fatal("清理后损坏原件或到期正文状态异常", err)
 	}
 }

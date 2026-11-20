@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,8 +17,9 @@ import (
 )
 
 // DiagnosticOptions 用截止时间及固定用量事件主键上界界定扫描。首批 Through 为零时从已提交的最大主键取值。
-// 后续使用上批返回的 Through 与 Next，读取的原文字节总数和单条大小分别受限。Preimages 绑定已恢复验证的原件。
+// 续跑使用上批返回的 Cursor，读取的原文字节总数和单条大小分别受限。Preimages 绑定已恢复验证的原件。
 type DiagnosticOptions struct {
+	Cursor                            string
 	Before                            time.Time
 	After, Through                    int64
 	Rows                              int
@@ -24,9 +27,11 @@ type DiagnosticOptions struct {
 	Preimages                         *Preimages
 }
 
-// DiagnosticReport 只返回聚合及数字游标。StoredBefore/After 对仅有收益的候选计量，plan 的 After 为文本编码上界。
+// DiagnosticReport 返回聚合、数字位置及与当前扫描绑定的续跑游标。StoredBefore/After 对仅有收益的候选计量，plan 的 After 为文本编码上界。
 // pack 的 After 来自更新后的 PostgreSQL 物理字段，恢复及不适合转换的行另行计数。
 type DiagnosticReport struct {
+	Cursor       string    `json:"next_cursor,omitempty"`
+	Malformed    int       `json:"malformed_packed"`
 	Mode         string    `json:"mode"`
 	Before       time.Time `json:"before"`
 	Through      int64     `json:"through"`
@@ -52,6 +57,36 @@ type diagnosticRow struct {
 	packed          bool
 }
 
+// diagnosticCursor 将已确认位置与库、schema、操作、时间窗、单条边界及恢复清单绑定。
+// 行数和单批预算可以调整；两者只控制批次大小，不改变哪些事件有资格进入转换。
+func diagnosticCursor(scope, mode string, o DiagnosticOptions, next int64) string {
+	manifest := ""
+	if o.Preimages != nil {
+		manifest = o.Preimages.id
+	}
+	bounds := fmt.Sprintf("%s/%s/%d/%d/%d/%d/%d/%s", scope, mode, o.Before.Unix(), o.MinBytes, o.RecordBytes, next, o.Through, manifest)
+	return fmt.Sprintf("v1/%d/%d/%x", next, o.Through, sha256.Sum256([]byte(bounds)))
+}
+
+// resumeDiagnostic 验证上一成功批次的游标，返回供本次事务使用的高水位及其后首行。
+// 新扫描可显式限定事件范围，续跑时拒绝混入其他扫描的位置或选择条件。
+func resumeDiagnostic(scope, mode string, o DiagnosticOptions) (DiagnosticOptions, error) {
+	if o.Cursor == "" {
+		return o, nil
+	}
+	parts := strings.Split(o.Cursor, "/")
+	if o.After != 0 || o.Through != 0 || len(parts) != 4 || parts[0] != "v1" {
+		return o, OperatorError("invalid diagnostic resume cursor or conflicting event range")
+	}
+	next, e1 := strconv.ParseInt(parts[1], 10, 64)
+	through, e2 := strconv.ParseInt(parts[2], 10, 64)
+	o.After, o.Through = next, through
+	if e1 != nil || e2 != nil || next < 1 || next > through || diagnosticCursor(scope, mode, o, next) != o.Cursor {
+		return o, OperatorError("diagnostic cursor database, operation or selection bounds mismatch")
+	}
+	return o, nil
+}
+
 // DiagnosticBatch 在一个小事务内访问后台日志。plan 为只读；pack/restore 先锁单条日志再重读并校验。
 // 使用当前用量事件的稳定 ID，只修改 upstream_response，保留可搜索错误、授权、采集期限和账单。
 func DiagnosticBatch(ctx context.Context, db *sql.DB, o DiagnosticOptions, mode string) (*DiagnosticReport, error) {
@@ -68,11 +103,17 @@ func DiagnosticBatch(ctx context.Context, db *sql.DB, o DiagnosticOptions, mode 
 	}
 	defer tx.Rollback()
 	var future bool
-	if err = tx.QueryRowContext(ctx, "SELECT $1::timestamptz>transaction_timestamp()", o.Before).Scan(&future); err != nil {
+	var scope string
+	if err = tx.QueryRowContext(ctx, `SELECT $1::timestamptz>transaction_timestamp(),current_database()||'/'||current_schema()
+	||'/'||d.oid::text||'/'||current_schema()::regnamespace::oid::text FROM pg_database d WHERE datname=current_database()`, o.Before).Scan(&future, &scope); err != nil {
 		return nil, err
 	}
 	if future {
 		return nil, OperatorError("diagnostic cutoff is in the future")
+	}
+	o, err = resumeDiagnostic(scope, mode, o)
+	if err != nil {
+		return nil, err
 	}
 	if o.Through == 0 {
 		if err = tx.QueryRowContext(ctx, "SELECT coalesce(max(id),0) FROM usage_events").Scan(&o.Through); err != nil {
@@ -114,9 +155,12 @@ func DiagnosticBatch(ctx context.Context, db *sql.DB, o DiagnosticOptions, mode 
 			}
 		}
 		if d.raw < 0 {
-			return nil, OperatorError("invalid diagnostic frame header")
-		}
-		if d.packed != (mode == "restore") || d.raw == 0 || (!d.packed && d.raw < o.MinBytes) {
+			if mode == "restore" {
+				return nil, OperatorError(fmt.Sprintf("cannot restore malformed diagnostic at event %d", d.id))
+			}
+			// 试算及压缩只处理普通文本。损坏的旧帧保留并计数，以便继续处理后面的有效记录。
+			r.Malformed++
+		} else if d.packed != (mode == "restore") || d.raw == 0 || (!d.packed && d.raw < o.MinBytes) {
 			r.Kept++
 		} else if d.raw > o.RecordBytes {
 			r.Deferred++
@@ -129,6 +173,9 @@ func DiagnosticBatch(ctx context.Context, db *sql.DB, o DiagnosticOptions, mode 
 		r.Next = d.id
 	}
 	r.More = len(page) > r.Scanned
+	if r.More {
+		r.Cursor = diagnosticCursor(scope, mode, o, r.Next)
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}

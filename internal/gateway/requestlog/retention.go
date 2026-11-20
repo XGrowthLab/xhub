@@ -92,7 +92,11 @@ LEFT JOIN LATERAL (
 			// 编码后的短字段也可能对应超大的旧诊断。使用原长和此前的 64 KiB 阈值决定是否参与错误摘要清理。
 			diagnostic, diagnosticTooLarge, err = logframe.Read(ctx, diagnostic, 65536)
 			if err != nil {
-				return LegacyRetentionBatch{}, err
+				if ctx.Err() != nil {
+					return LegacyRetentionBatch{}, ctx.Err()
+				}
+				// 保留损坏的原始诊断供单独恢复，同一条已到期正文仍按原规则清理。
+				diagnostic, diagnosticTooLarge = "", true
 			}
 		}
 		cleanDiagnostic, replace, recognized := summarizeLegacyDiagnostic(diagnostic)

@@ -1,4 +1,4 @@
-// diagnostic-pack 对上游诊断执行按用量事件分页的试算、转换或还原。
+// diagnostic-pack 对上游诊断执行按用量事件分页的试算、转换、还原或凭原件修复。
 package main
 
 import (
@@ -18,7 +18,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/verifiedzstd"
 )
 
-// run 解析单批边界，只对明确要求执行的 pack/restore 开启写事务。错误只报告受控类型和 SQLSTATE。
+// run 解析单批边界，只对明确要求执行的 pack/restore/recover 开启写事务。错误只报告受控类型和 SQLSTATE。
 // 成功返回该批的统计、固定上界与下一游标，供运维在核对备份及服务读兼容后运行。
 func run(ctx context.Context, args []string, dsn string, input io.Reader) ([]byte, error) {
 	if len(args) < 1 || dsn == "" {
@@ -30,20 +30,33 @@ func run(ctx context.Context, args []string, dsn string, input io.Reader) ([]byt
 	cutoff := f.String("before", "", "fixed whole-second UTC cutoff")
 	exec := f.Bool("execute", false, "commit one maintenance batch")
 	manifest := f.String("backup-manifest", "", "verified SHA-256 request identity and original diagnostic digest manifest")
-	f.Int64Var(&o.After, "after", 0, "last inspected usage event ID")
-	f.Int64Var(&o.Through, "through", 0, "fixed high water mark from the first batch")
+	first := f.Int64("from-event", 0, "optional inclusive first event for a fresh range")
+	f.StringVar(&o.Cursor, "cursor", "", "next_cursor from the last committed batch")
+	f.Int64Var(&o.Through, "through", 0, "optional inclusive last event for a fresh range")
 	f.IntVar(&o.Rows, "rows", 50, "maximum usage rows to visit")
 	f.Int64Var(&o.MinBytes, "min-bytes", 16384, "minimum original length to try packing")
 	f.Int64Var(&o.RecordBytes, "record-bytes", 8<<20, "maximum raw bytes per diagnostic")
 	f.Int64Var(&o.BatchBytes, "batch-bytes", 16<<20, "maximum raw bytes per batch")
 	event := f.Int64("event", 0, "single event ID for verified external recovery")
 	mode := args[0]
-	if f.Parse(args[1:]) != nil || f.NArg() != 0 || (mode != "plan" && mode != "pack" && mode != "restore" && mode != "recover") || *exec != (mode != "plan") {
-		return nil, errors.New("plan is read-only; pack and restore require --execute")
+	if f.Parse(args[1:]) != nil || f.NArg() != 0 || *first < 0 {
+		return nil, errors.New("invalid diagnostic command flags")
+	}
+	if mode != "plan" && mode != "pack" && mode != "restore" && mode != "recover" {
+		return nil, errors.New("expected plan, pack, restore or recover")
+	}
+	if *first != 0 {
+		if o.Cursor != "" || o.Through < *first {
+			return nil, errors.New("a fresh event range requires --through and no resume cursor")
+		}
+		o.After = *first - 1
+	}
+	if *exec != (mode != "plan") {
+		return nil, errors.New("plan is read-only; pack, restore and recover require --execute")
 	}
 	var err error
 	if mode == "recover" {
-		if *event < 1 || *manifest == "" || *cutoff != "" || o.After != 0 || o.Through != 0 {
+		if *event < 1 || *manifest == "" || *cutoff != "" || *first != 0 || o.Through != 0 || o.Cursor != "" {
 			return nil, errors.New("recover requires --event and --backup-manifest")
 		}
 	} else {
