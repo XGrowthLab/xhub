@@ -7,14 +7,15 @@ WITH events AS (
    {{diagnostics}} AS diagnostic_bytes, {{embedded}} AS embedded_body_bytes,
    {{capture}} AS capture_bytes, (c.request_id IS NOT NULL)::int AS captures
  FROM usage_events u
- LEFT JOIN request_logs l USING (request_id) LEFT JOIN request_log_captures c USING (request_id)
+ LEFT JOIN request_logs l USING (request_id) LEFT JOIN request_log_captures c ON c.request_id=u.request_id AND c.created_at >= $1 AND c.created_at < $2
  WHERE u.ts >= $1 AND u.ts < $2
  UNION ALL
- -- 采集表允许先于用量落盘。单独保留无归属项，不能凭正文或当前配置推断协议。
- SELECT (c.created_at AT TIME ZONE 'UTC')::date, '', '', NULL, 0, 0, 0,
-   {{capture}}, 1
- FROM request_log_captures c WHERE c.created_at >= $1 AND c.created_at < $2
-   AND NOT EXISTS (SELECT 1 FROM usage_events u WHERE u.request_id=c.request_id)
+ -- 采集和用量能跨过 UTC 边界。保留窗内采集的字节和已有路由，计费调用只按事件自己的时间统计。
+ SELECT (c.created_at AT TIME ZONE 'UTC')::date,
+   coalesce(rtrim(split_part(u.inbound_endpoint,'?',1),'/'),''),coalesce(rtrim(split_part(u.outbound_endpoint,'?',1),'/'),''),
+   u.streamed, 0, 0, 0, {{capture}}, 1
+ FROM request_log_captures c LEFT JOIN usage_events u USING(request_id)
+ WHERE c.created_at >= $1 AND c.created_at < $2 AND (u.request_id IS NULL OR u.ts < $1 OR u.ts >= $2)
 )
 SELECT day::text, {{inbound}}, {{outbound}}, inbound LIKE '/bypass/%', streamed,
  sum(calls), sum(diagnostic_bytes), sum(embedded_body_bytes), sum(capture_bytes), sum(captures)

@@ -94,10 +94,12 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
     expect(bridgeCount(after, false) - bridgeCount(before, false)).toBe(2);
     expect(bridgeCount(after, true) - bridgeCount(before, true)).toBe(1);
     // 生产旧格式的创建时间精确到秒，等待独占上界跨过本轮写入，再确认试算后仍可读。
-    await expect.poll(() => {
-      const cutoff = runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`);
-      return storageReport(["plan", "--before=" + cutoff, "--rows=1000"]).scanned;
-    }).toBe(legacy + 1);
+    await expect.poll(() => runCanarySQL(`SELECT coalesce(max(created_at) < to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),true)
+      FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%';`)).toBe("t");
+    const cutoff = runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`);
+    const plan = storageReport(["plan", "--before=" + cutoff, "--rows=1000"]);
+    expect(plan.has_more).toBe(false);
+    expect(plan.scanned).toBe(legacy + 1);
     expect(historyCounts()).toEqual([compact + 2, legacy + 1]);
   } finally {
     const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: fixed } });

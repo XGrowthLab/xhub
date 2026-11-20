@@ -17,6 +17,12 @@ const legacyKeyPattern = "^" + historyPrefix + "[0-9a-f]{64}$"
 
 var digestPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 
+// OperatorError 仅由维护模块用固定文案构造。命令行可直接提示处置方向，驱动错误仍由调用方脱敏。
+type OperatorError string
+
+// Error 返回固定的运维参数或数据状态说明，不含数据库地址、记录键和原文。
+func (e OperatorError) Error() string { return string(e) }
+
 // PlanOptions 固定旧历史的创建上界、单批条数及原文字节预算。Cursor 只含本次截止时间和网关生成的摘要。
 type PlanOptions struct {
 	Before       time.Time
@@ -53,14 +59,14 @@ type Plan struct {
 // startKey 校验所有维护上限并核对游标的截止时间。返回绑定查询用的内部键，不向报告回显任意原始 ID。
 func (o PlanOptions) startKey() (string, error) {
 	if o.Before.IsZero() || o.Before.Nanosecond() != 0 || o.Rows < 1 || o.Rows > 1000 || o.BatchBytes < 1 || o.BatchBytes > 256<<20 || o.RecordBytes < 1 || o.RecordBytes > 64<<20 || o.RecordBytes > o.BatchBytes || o.ReserveBytes < 0 || o.ReserveBytes > 1<<20 {
-		return "", errors.New("invalid planning bounds")
+		return "", OperatorError("invalid planning bounds")
 	}
 	if o.Cursor == "" {
 		return historyPrefix, nil
 	}
 	cutoff, digest, ok := strings.Cut(o.Cursor, "/")
 	if !ok || cutoff != o.Before.UTC().Format(time.RFC3339) || !digestPattern.MatchString(digest) {
-		return "", errors.New("cursor does not match cutoff or history key format")
+		return "", OperatorError("cursor does not match cutoff or history key format")
 	}
 	return historyPrefix + digest, nil
 }
@@ -82,7 +88,7 @@ func Estimate(ctx context.Context, db *sql.DB, o PlanOptions) (*Plan, error) {
 		return nil, err
 	}
 	if o.Before.After(now) {
-		return nil, errors.New("history cutoff is in the future")
+		return nil, OperatorError("history cutoff is in the future")
 	}
 	cutoff := o.Before.UTC().Format(time.RFC3339)
 	// 先取 TOAST 长度及索引状态。只有受限范围内且可能受益的正文才会从数据库传到编码器。
