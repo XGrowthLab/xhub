@@ -74,7 +74,12 @@ func routeQuery() string {
 
 // beginRead 建立有锁等待和单条语句上限的一致只读快照；调用方负责关闭事务，ctx 控制整次采集寿命。
 func beginRead(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	return boundedTx(ctx, db, sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+}
+
+// boundedTx 对一次维护查询或转换设置锁等待及语句上限。调用方指定事务隔离与读写模式，并负责提交或回滚。
+func boundedTx(ctx context.Context, db *sql.DB, opts sql.TxOptions) (*sql.Tx, error) {
+	tx, err := db.BeginTx(ctx, &opts)
 	if err != nil {
 		return nil, err
 	}
@@ -158,13 +163,22 @@ func Capture(ctx context.Context, db *sql.DB, deployment string, days int) (*Sna
 	if err = routes.Err(); err != nil {
 		return nil, err
 	}
+	cols, err := hasPackedColumns(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	packedKind, bodyBytes := "", "pg_column_size(body)::bigint"
+	if cols {
+		packedKind = "WHEN history_frame IS NOT NULL THEN 'packed_history' "
+		bodyBytes += " + coalesce(pg_column_size(history_frame)::bigint,0) + coalesce(pg_column_size(history_raw_size),0) + coalesce(pg_column_size(history_sha256),0)"
+	}
 	histories, err := tx.QueryContext(ctx, `SELECT
       CASE WHEN created_at IS NULL OR created_at !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' THEN 'unknown'
         WHEN created_at<$1 THEN 'before_window' ELSE left(created_at,10) END AS day,
-      CASE WHEN starts_with(id,'session_route:v1:history:') AND id !~ $2 THEN 'unrecognized_legacy_key'
+      CASE `+packedKind+` WHEN starts_with(id,'session_route:v1:history:') AND id !~ $2 THEN 'unrecognized_legacy_key'
         WHEN split_part(id,':',3) IN ('response','owner','messages','history','preference') AND starts_with(id,'session_route:v1:') THEN split_part(id,':',3)
         ELSE 'other_conversation' END AS bucket,
-      count(*), coalesce(sum(pg_column_size(body)::bigint),0) FROM kv WHERE kind='conversation_state' GROUP BY 1,2
+      count(*), coalesce(sum(`+bodyBytes+`),0) FROM kv WHERE kind='conversation_state' GROUP BY 1,2
       UNION ALL SELECT 'undated','compact_blocks',count(*),coalesce(sum(pg_column_size(payload)::bigint),0) FROM conversation_history_blocks
       UNION ALL SELECT 'undated','compact_manifests',count(*),coalesce(sum(pg_column_size(digests)::bigint),0) FROM conversation_history_manifests
       ORDER BY 1,2`, s.Since.Format(time.RFC3339), legacyKeyPattern)

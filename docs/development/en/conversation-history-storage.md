@@ -49,3 +49,26 @@ The planner visits legacy history with recognized hashed keys and UTC creation t
 The estimate compares the current PostgreSQL/TOAST field size with a whole-record Zstandard frame. The `history-compact` command uses separate message blocks, deduplication and manifests with different costs. The snapshot accepts `--days=1..31` (default 7). Set `--before` to an RFC 3339 whole second in the past or present. Defaults are 100 rows (1–1000), 32 MiB per batch (maximum 256 MiB), 16 MiB per record (maximum 64 MiB, within the batch limit), and 1 KiB allowance per record (maximum 1 MiB). Pass `next_cursor` to the next invocation using `--cursor`. Stop at `has_more=false`; the last cursor may remain populated.
 
 Protocol attribution reads events and captures for the time window. Large databases without independent timestamp indexes may perform sequential scans. Statements have a 15-second timeout. Physical deltas cover categories observed in both snapshots. An absent optional metric was unobserved. Supply actual mount directories. Unknown creation times and unrecognized legacy keys are counted separately.
+
+## Selective conversion and targeted rollback
+
+Gateway startup adds three nullable columns to `kv` for a Zstandard frame, original length and SHA-256. The original key, authorization boundary and creation time are preserved. The reader supports legacy text, block manifests and packed legacy records. It decodes a packed record on demand and rejects unknown versions, incorrect sizes and checksum failures. Conversion runs through a separate maintenance command.
+
+First deploy the compatible reader to every serving instance and verify ordinary, SSE and tool continuation as well as rollback. Establish and restore an independent backup covering the conversion cutoff. Use `--key-digest` for a single known history key. Start a fresh scan when moving to batches. Estimate savings with `storage-report plan` using the same bounds.
+
+```sh
+go run ./cmd/history-pack pack --execute --before=2026-11-19T00:00:00Z \
+  --rows=50 --batch-bytes=16777216 --record-bytes=8388608
+go run ./cmd/history-pack restore --execute --before=2026-11-19T00:00:00Z \
+  --rows=50 --batch-bytes=16777216 --record-bytes=8388608
+```
+
+Each command commits one transaction. Save `next_cursor` after a successful exit and pass it via `--cursor` until `has_more=false`. Preserve the operation, database, schema, cutoff, per-record limit and selection parameters. Start rollback with an empty cursor. If a connection fails, including after an ambiguous commit, retry from the last confirmed cursor. The current row format identifies previously completed work. Start a fresh cursor for oversized records, using `--min-raw-bytes`, `--record-bytes` and `--batch-bytes`. The per-record maximum is 64 MiB.
+
+The gateway and converter share a per-response transaction lock. Conversion rechecks the row, cutoff and manifest with a row lock and only writes valid history arrays with enough savings to cover the allowance (64 B minimum, 1 KiB default). It verifies the bytes read back from PostgreSQL before committing. An error rolls back the entire batch. Rollback only expands rows still in the packed format. A newer response takes precedence. Restore packed rows and verify a zero remaining count before downgrading to a gateway without packed readers. Use the isolated backup to validate recovery and the targeted command for in-place rollback to preserve later billing and conversations.
+
+Monitor filesystem headroom, TOAST, WAL, replication lag and continuation latency between batches. Record reusable PostgreSQL pages and released filesystem bytes separately. Table rewrites require their own space and availability assessment.
+
+For production conversions, encrypt the affected original records at the source and retain the ciphertext on the temporary backup host. Read back the remote archive and verify each original key digest, byte length and SHA-256 in a temporary table on the trusted source. Write the verified lowercase key digest and content SHA-256 separated by one space per line, sorted by key, to a restricted file. Pass `--backup-manifest=/restricted/batch.manifest` to `pack`. The converter checks the original under the row lock and reports missing or changed records in `not_backed_up_or_changed`. Use a fresh cursor when switching manifests. Retain the temporary ciphertext until conversion, rollback checks and observation finish.
+
+Use `restore` for healthy frames. For a damaged frame, authenticate and decrypt the retained archive on the trusted source. Pipe the exact original UTF-8 bytes, without appending a newline, into `history-pack recover --execute --key-digest=… --created-at=… --backup-manifest=…`. Recovery requires a matching verified manifest, creation time, raw length and original digest on the current packed row. It rechecks the restored bytes in PostgreSQL. A replaced or already restored record returns `recovered=false`. Conflicting version metadata requires separate investigation.

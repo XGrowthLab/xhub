@@ -21,3 +21,19 @@ stdout 每批输出一行 JSON，包含检查及命中行数、确认提交的�
 ## 哪些字段会变
 
 清理针对截止时间及以前且没有新正文状态的请求，只移除旧的请求、响应及代理请求副本，标记正文已到期。旧错误正文降为有界错误摘要。仅在上游诊断中保存旧错误副本时，只规范化可识别的内嵌错误并保留原正文状态。其他诊断属性、账单、用量、续聊历史与新正文记录保持原样。超过 64 KiB 或无法识别的旧诊断记录计入 `unchanged_diagnostics`，保留供独立核查。命令不输出正文、身份或连接信息。
+
+## 完整诊断的无损压缩
+
+维护工具以 `usage_events.id` 分页，只处理时间范围内的完整上游诊断。默认从 16 KiB 开始试压，保留原字节、原长度和 SHA-256。相同时间窗中的 Chat、Messages、Responses 和显式透传均可参与。错误文本继续用于搜索。详情读取、跨账号审计、采集有效期和异步任务的后续覆盖沿用网关原有流程。
+
+```sh
+go run ./cmd/diagnostic-pack plan --before="$CUTOFF" --rows=50
+go run ./cmd/diagnostic-pack pack --execute --before="$CUTOFF" --rows=50 --backup-manifest="$VERIFIED_MANIFEST"
+go run ./cmd/diagnostic-pack restore --execute --before="$CUTOFF" --rows=50
+```
+
+先让所有提供流量的实例支持编码读取，再在隔离环境验证。生产批次建立临时加密恢复点。诊断清单的第一列为请求 ID 的 SHA-256，第二列为旧诊断原始 UTF-8 字节的 SHA-256，按第一列升序。每次成功提交后，把返回的 `next_cursor` 传给同一操作的 `--cursor`，直到 `has_more=false`。游标绑定库、schema、操作、截止秒、单条筛选范围及清单。需要单独处理一段事件可用 `--from-event` 和 `--through` 指定起止序号，两个边界均包含在内。单批和单条默认上限为 16 MiB、8 MiB，过大的记录单列。保持截止秒和大小条件一致。转换读回数据库核验，在 `selected_stored_before` 和 `selected_stored_after` 报告已转换字段的实际存储大小。反向展开使用新的游标，恢复普通文本后才能回退到旧网关。
+
+当帧损坏时，先认证并解密临时备份，在可信主机把单条原文通过标准输入传给 `diagnostic-pack recover --execute --event=… --backup-manifest=…`。命令锁定当前日志，核对原版本头、请求身份与独立清单。元数据冲突会保留当前记录供人工核对。
+
+试算可用只读连接，转换、还原和原件修复需要写权限。提供备份清单时，核对 `changed_or_unbacked` 中备份后变动或缺少原件的记录。试算与转换把损坏的既有版本头计入 `malformed_packed`，普通还原遇到这类记录会返回对应事件序号。原件修复的清单摘要错误使命令失败，当前版本不匹配或不存在则返回 `recovered=false`。\n

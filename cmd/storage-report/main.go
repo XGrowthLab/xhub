@@ -117,6 +117,8 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 		result, err = s, e
 	} else {
 		before := fs.String("before", "", "fixed exclusive UTC cutoff (RFC3339, whole seconds)")
+		minRaw := fs.Int64("min-raw-bytes", 0, "minimum raw bytes for separate size classes")
+		only := fs.String("key-digest", "", "optional single history digest")
 		cursor := fs.String("cursor", "", "next_cursor from a completed batch")
 		rows := fs.Int("rows", 100, "maximum rows to visit")
 		batch := fs.Int64("batch-bytes", 32<<20, "maximum raw bytes to fetch per batch")
@@ -129,7 +131,7 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 		if e != nil {
 			return nil, errors.New("invalid --before cutoff")
 		}
-		result, err = storageaudit.Estimate(ctx, db, storageaudit.PlanOptions{Before: cutoff, Cursor: *cursor, Rows: *rows, BatchBytes: *batch, RecordBytes: *record, ReserveBytes: *reserve})
+		result, err = storageaudit.Estimate(ctx, db, storageaudit.PlanOptions{MinRawBytes: *minRaw, OnlyDigest: *only, Before: cutoff, Cursor: *cursor, Rows: *rows, BatchBytes: *batch, RecordBytes: *record, ReserveBytes: *reserve})
 	}
 	if err != nil {
 		var usage storageaudit.OperatorError
