@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -71,45 +70,79 @@ func legacyHistoryScope(key string) string {
 	return "legacy:" + hex.EncodeToString(sum[:])
 }
 
-// encodeHistory 把历史数组拆为去重内容块及顺序索引；输入为历史 JSON，供写入和迁移使用。
-// 返回可批量插入的块与摘要序列；损坏或非数组输入返回错误，所有内容和顺序均保留。
-func encodeHistory(value string) ([]historyBlock, []string, error) {
+// indexHistory 从完整历史得到有序摘要及唯一原文。数组顺序和重复引用保留，无效输入返回错误。
+// 原文引用 json.RawMessage 自持的缓冲区，供同一次事务挑选缺失块；这里无需复制或压缩已存在的前文。
+func indexHistory(value string) ([]string, map[string]json.RawMessage, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal([]byte(value), &items); err != nil || items == nil {
-		return nil, nil, fmt.Errorf("conversation history must be a JSON array")
+		return nil, nil, errors.New("conversation history must be a JSON array")
 	}
-	blocks := make([]historyBlock, 0, len(items))
 	ids := make([]string, 0, len(items))
-	seen := make(map[string]bool, len(items))
+	unique := make(map[string]json.RawMessage, len(items))
 	for _, item := range items {
 		sum := sha256.Sum256(item)
 		id := hex.EncodeToString(sum[:])
 		ids = append(ids, id)
-		if seen[id] {
-			continue
+		unique[id] = item
+	}
+	return ids, unique, nil
+}
+
+// encodeHistoryBlock 将已经确认缺失的一个原文及摘要编码为现有块格式。小块或压缩收益为负时保留原文。
+// 编码错误阻止当前事务发布清单；调用方按块作用域持久化返回值。
+func encodeHistoryBlock(digest string, item json.RawMessage) (historyBlock, error) {
+	block := historyBlock{Digest: digest, Payload: item, Size: len(item)}
+	if len(item) < 256 {
+		return block, nil
+	}
+	var out bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&out, zlib.BestSpeed)
+	if err != nil {
+		return historyBlock{}, err
+	}
+	if _, err = zw.Write(item); err != nil {
+		return historyBlock{}, err
+	}
+	if err = zw.Close(); err != nil {
+		return historyBlock{}, err
+	}
+	if out.Len() < len(item) {
+		block.Payload = out.Bytes()
+		block.Compressed = true
+	}
+	return block, nil
+}
+
+// missingHistoryBlocks 在写清单的事务内按可信 scope 找出缺失摘要，只编码这些块。数据库按一致顺序返回，
+// 并发写入者同时发现缺失时，后续 INSERT 的唯一约束负责仲裁；查询或编码失败交由调用方回滚。
+func missingHistoryBlocks(ctx context.Context, tx *sql.Tx, scope string, unique map[string]json.RawMessage) ([]historyBlock, error) {
+	if len(unique) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(unique))
+	for key := range unique {
+		keys = append(keys, key)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT k.digest FROM unnest($2::text[]) AS k(digest)
+ WHERE NOT EXISTS (SELECT 1 FROM conversation_history_blocks b WHERE b.scope=$1 AND b.digest=k.digest)
+ ORDER BY k.digest COLLATE "C"`, scope, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var blocks []historyBlock
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
 		}
-		seen[id] = true
-		block := historyBlock{Digest: id, Payload: append([]byte(nil), item...), Size: len(item)}
-		if len(item) >= 256 {
-			var out bytes.Buffer
-			zw, err := zlib.NewWriterLevel(&out, zlib.BestSpeed)
-			if err != nil {
-				return nil, nil, err
-			}
-			if _, err = zw.Write(item); err != nil {
-				return nil, nil, err
-			}
-			if err = zw.Close(); err != nil {
-				return nil, nil, err
-			}
-			if out.Len() < len(item) {
-				block.Payload = out.Bytes()
-				block.Compressed = true
-			}
+		block, err := encodeHistoryBlock(id, unique[id])
+		if err != nil {
+			return nil, err
 		}
 		blocks = append(blocks, block)
 	}
-	return blocks, ids, nil
+	return blocks, rows.Err()
 }
 
 // decodeHistoryBlock 验证并解压单个内容块；参数为存储行和预期摘要，供读取时还原历史。
@@ -149,14 +182,10 @@ func decodeHistoryBlock(b historyBlock) ([]byte, error) {
 // putHistoryTx 在调用方事务中写入块和索引；参数分别是作用域、响应键及完整历史。
 // 所有块和索引同一事务发布，已有块只复用不覆盖；编码或数据库出错由调用方回滚。
 func putHistoryTx(ctx context.Context, tx *sql.Tx, key, scope, value string, onlyNew bool) (bool, error) {
-	blocks, ids, err := encodeHistory(value)
-	if err != nil {
-		return false, err
-	}
-	// 先锁定索引，防止迁移与实时写入覆盖；迁移只为不存在的索引创建新副本。
+	// 调用方已持响应键事务锁。重复迁移直接返回，避免重新处理整段历史。
 	if onlyNew {
 		var present bool
-		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_history_manifests WHERE id=$1)`, key).Scan(&present)
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_history_manifests WHERE id=$1)`, key).Scan(&present)
 		if err != nil {
 			return false, err
 		}
@@ -164,13 +193,19 @@ func putHistoryTx(ctx context.Context, tx *sql.Tx, key, scope, value string, onl
 			return false, nil
 		}
 	}
-	// 并发响应按相同摘要顺序持有块行锁，避免相反消息顺序造成数据库死锁。
-	sort.Slice(blocks, func(i, j int) bool { return blocks[i].Digest < blocks[j].Digest })
-	payload, err := json.Marshal(blocks)
+	ids, unique, err := indexHistory(value)
+	if err != nil {
+		return false, err
+	}
+	blocks, err := missingHistoryBlocks(ctx, tx, scope, unique)
 	if err != nil {
 		return false, err
 	}
 	if len(blocks) > 0 {
+		payload, err := json.Marshal(blocks)
+		if err != nil {
+			return false, err
+		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO conversation_history_blocks(scope,digest,payload,raw_size,compressed)
  SELECT $1, b->>'digest', decode(b->>'payload','base64'), (b->>'size')::bigint, (b->>'compressed')::boolean
  FROM jsonb_array_elements($2::jsonb) AS b ON CONFLICT(scope,digest) DO NOTHING`, scope, string(payload))

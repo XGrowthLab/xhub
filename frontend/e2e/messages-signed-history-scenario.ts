@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { translate } from "../src/i18n/translate";
+import { expectCompactHistoryReuse, historyReuseReferences } from "./compact-history-assertions";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 type SignedResponse = { id: string; output: Record<string, unknown>[]; usage: { input_tokens: number; output_tokens: number } };
@@ -26,6 +27,7 @@ export function registerMessagesSignedHistoryScenario(locale: "zh-CN" | "en") {
    * 覆盖语言切换、JSON/SSE签名隐藏和原样回放、伪造及跨Key零外发；finally删除自建Key/模型，运行器回收schema。 */
   test("Messages signed reasoning and dependent tools " + locale, async ({ page }) => {
     test.setTimeout(120000);
+    const previousReuse = historyReuseReferences();
     await loginAdmin(page);
     if (locale === "en") await page.getByRole("button", { name: "English", exact: true }).click();
     const tr = (key: string, values?: Record<string, string | number>) => translate(locale, key, values);
@@ -109,6 +111,7 @@ export function registerMessagesSignedHistoryScenario(locale: "zh-CN" | "en") {
           replay = [...history];
         }
       }
+      expectCompactHistoryReuse(previousReuse);
       const beforeDenied = (await (await page.request.get(UPSTREAM + "/e2e/request-count")).json()).requests;
       expect(beforeDenied - startCount).toBe(6);
       const base = { model, max_output_tokens: 64, reasoning: { effort: "low" } };
