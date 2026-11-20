@@ -23,13 +23,13 @@ function historyCounts(): number[] {
 }
 
 /** 以当前浏览器私有 schema 运行真实运维 CLI。仅返回聚合 JSON，配置只传给子进程，构建由 Go 缓存复用。 */
-function storageReport(args: string[]) {
+function storageReport(args: string[], program: "storage-report" | "history-pack" = "storage-report") {
   const dir = process.env.E2E_RUN_DIR!;
   const schema = readFileSync(path.join(dir, "schema.txt"), "utf8").trim();
   expect(schema).toMatch(/^e2e_[0-9]+_[0-9]+$/);
   const dsn: string = JSON.parse(readFileSync(path.join(dir, "c.yaml"), "utf8")).general_settings.database_url;
   expect(new URL(dsn).searchParams.get("search_path") === schema).toBe(true);
-  return JSON.parse(execFileSync("go", ["run", "./cmd/storage-report", ...args], {
+  return JSON.parse(execFileSync("go", ["run", "./cmd/" + program, ...args], {
     cwd: path.resolve(__dirname, "../.."), env: { ...process.env, XHUB_DATABASE_URL: dsn },
     encoding: "utf8", timeout: 60_000,
   }));
@@ -103,4 +103,47 @@ for (const locale of ["en", "zh-CN"] as const) test("Compact history account can
     const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: fixed } });
     expect(removed.ok(), await removed.text()).toBeTruthy();
   }
+});
+
+// 使用真实浏览器、网关和 PostgreSQL，只转换本例新创建的旧历史。切换格式及反向还原后均通过控制台续聊，
+// 对照数据库原文字节摘要，确认还原逐字节一致；测试结束由独立 schema 回收历史与账单。
+for (const locale of ["en", "zh-CN"] as const) test("Packed legacy history rollback " + locale, async ({ page }) => {
+  await loginAdmin(page);
+  if (locale === "en") await page.getByRole("button", { name: translate("zh-CN", "language.en"), exact: true }).click();
+  await stableGoto(page, "/playground");
+  await expect(page.getByPlaceholder(translate(locale, "Select a Model"), { exact: true })).toBeVisible();
+  const bearer = await sessionBearer(page);
+  const tag = "storage-" + locale.toLowerCase() + "-" + Date.now();
+  const marker = tag + "-" + "amber-".repeat(130);
+  const prompt = "Remember the project marker " + marker + ". Reply with only that marker.";
+  /** 从已登录控制台走真正的代理及数据面。响应 ID 从网关获取，测试不构造任何路由或身份键。 */
+  const send = (input: string, previous = "", stream = false) => page.evaluate(async ({ bearer, input, previous, stream }) => {
+    const response = await fetch("/gw/v1/responses", { method: "POST", headers: {
+      Authorization: "Bearer " + bearer, "Content-Type": "application/json",
+    }, body: JSON.stringify({ model: "e2e-codex-agent", instructions: "Return the project marker.", input, stream, store: false, ...(previous ? { previous_response_id: previous } : {}) }) });
+    return { status: response.status, text: await response.text() };
+  }, { bearer, input, previous, stream });
+  const first = await send(prompt);
+  expect(first.status).toBe(200);
+  const id = JSON.parse(first.text).id as string;
+  expect(id).toBeTruthy();
+  const [digest, original, created] = runCanarySQL(`SELECT split_part(id,':',4), encode(sha256(convert_to(body,'UTF8')),'hex'), created_at
+    FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%' AND position('${tag}' in body)>0;`).split("|");
+  expect(digest).toMatch(/^[0-9a-f]{64}$/);
+  expect(original).toMatch(/^[0-9a-f]{64}$/);
+  await expect.poll(() => runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`) > created).toBe(true);
+  const cutoff = runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`);
+  const args = ["--execute", "--key-digest=" + digest, "--before=" + cutoff, "--reserve-bytes=64"];
+  expect(storageReport(["pack", ...args], "history-pack").selected).toBe(1);
+  const middle = await send("What project marker did I give you? Reply with only the marker.", id, true);
+  expect(middle.status).toBe(200);
+  expect(middle.text).toContain("response.completed");
+  expect(middle.text).toContain(marker);
+  expect(storageReport(["restore", ...args], "history-pack").restored).toBe(1);
+  expect(runCanarySQL(`SELECT encode(sha256(convert_to(body,'UTF8')),'hex') FROM kv WHERE kind='conversation_state'
+    AND id='session_route:v1:history:${digest}' AND history_frame IS NULL;`)).toBe(original);
+  const last = await send("What project marker did I give you? Reply with only the marker.", id);
+  expect(last.status).toBe(200);
+  expect(JSON.parse(last.text).id).toBeTruthy();
+  expect(last.text).toContain(marker);
 });

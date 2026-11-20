@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/sunqirui1987/xhub/internal/historypack"
 )
 
 // conversationKind 隔离持久会话状态与控制台登录及供应商配置；记录随数据库备份保存，不受缓存TTL影响。
@@ -17,12 +20,7 @@ func (s *Store) ReadConversation(ctx context.Context, key string) (string, error
 	if s == nil || s.DB == nil {
 		return "", fmt.Errorf("conversation storage unavailable")
 	}
-	var value string
-	err := s.DB.QueryRowContext(ctx, `SELECT body FROM kv WHERE kind=$1 AND id=$2`, conversationKind, key).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return value, err
+	return readConversationRow(s.DB.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
 }
 
 // CompareConversation 原子比较并保存会话归属；参数old为空表示仅首次创建，value为完整序列化值。
@@ -32,10 +30,11 @@ func (s *Store) CompareConversation(ctx context.Context, key, old, value string)
 		return "", fmt.Errorf("conversation storage unavailable")
 	}
 	if old == "" {
-		var actual string
-		err := s.DB.QueryRowContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4)
-   ON CONFLICT(kind,id) DO UPDATE SET body=kv.body RETURNING body`, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339)).Scan(&actual)
-		return actual, err
+		return readConversationRow(s.DB.QueryRowContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4)
+   ON CONFLICT(kind,id) DO UPDATE SET body=kv.body RETURNING `+conversationColumns, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339)), key)
+	}
+	if strings.HasPrefix(key, historypack.Prefix) {
+		return s.compareHistoryValue(ctx, key, old, value)
 	}
 	var actual string
 	err := s.DB.QueryRowContext(ctx, `UPDATE kv SET body=$1 WHERE kind=$2 AND id=$3 AND body=$4 RETURNING body`, value, conversationKind, key, old).Scan(&actual)
@@ -52,6 +51,6 @@ func (s *Store) WriteConversation(ctx context.Context, key, value string) error 
 		return fmt.Errorf("conversation storage unavailable")
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4)
- ON CONFLICT(kind,id) DO UPDATE SET body=EXCLUDED.body`, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339))
+ ON CONFLICT(kind,id) DO UPDATE SET body=EXCLUDED.body,history_frame=NULL,history_raw_size=NULL,history_sha256=NULL`, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339))
 	return err
 }

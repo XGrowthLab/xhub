@@ -24,9 +24,13 @@ type historyBlock struct {
 }
 
 // initHistoryTables 创建新格式的内容块和响应索引；调用方为 Store.Open，失败时不启动半成品存储。
-// 只使用新增表，不修改旧 kv；数据库连接应位于预期的 search_path，两个语句均可安全重复执行。
+// 初始化还为旧 kv 添加可空历史字段。已有库只修改目录元数据，已有字段的重启绕过热表 DDL。
 func initHistoryTables(ctx context.Context, db *sql.DB) error {
 	for _, q := range []string{
+		`DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid='kv'::regclass AND attname IN ('history_frame','history_raw_size','history_sha256') AND NOT attisdropped)<3 THEN
+		   PERFORM set_config('lock_timeout','2s',true);
+		   ALTER TABLE kv ADD COLUMN IF NOT EXISTS history_frame BYTEA, ADD COLUMN IF NOT EXISTS history_raw_size INTEGER, ADD COLUMN IF NOT EXISTS history_sha256 BYTEA;
+		 END IF; END $$`,
 		`CREATE TABLE IF NOT EXISTS conversation_history_blocks (scope TEXT NOT NULL, digest TEXT NOT NULL, payload BYTEA NOT NULL, raw_size BIGINT NOT NULL CHECK(raw_size >= 0), compressed BOOLEAN NOT NULL, PRIMARY KEY(scope,digest))`,
 		`CREATE TABLE IF NOT EXISTS conversation_history_manifests (id TEXT PRIMARY KEY, scope TEXT NOT NULL, digests JSONB NOT NULL)`,
 	} {
@@ -163,7 +167,7 @@ func putHistoryTx(ctx context.Context, tx *sql.Tx, key, scope, value string, onl
 		n, err := res.RowsAffected()
 		return n == 1, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO conversation_history_manifests(id,scope,digests) VALUES($1,$2,$3::jsonb) ON CONFLICT(id) DO UPDATE SET scope=EXCLUDED.scope,digests=EXCLUDED.digests`, key, scope, string(manifest))
+	_, err = tx.ExecContext(ctx, `WITH invalidated AS (DELETE FROM kv WHERE kind='conversation_state' AND id=$1 AND history_frame IS NOT NULL) INSERT INTO conversation_history_manifests(id,scope,digests) VALUES($1,$2,$3::jsonb) ON CONFLICT(id) DO UPDATE SET scope=EXCLUDED.scope,digests=EXCLUDED.digests`, key, scope, string(manifest))
 	return err == nil, err
 }
 
@@ -199,7 +203,7 @@ func (s *Store) WriteHistory(ctx context.Context, key, scope, value string, comp
 		if _, err = tx.ExecContext(ctx, `DELETE FROM conversation_history_manifests WHERE id=$1`, key); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(kind,id) DO UPDATE SET body=EXCLUDED.body`, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4) ON CONFLICT(kind,id) DO UPDATE SET body=EXCLUDED.body,history_frame=NULL,history_raw_size=NULL,history_sha256=NULL`, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
@@ -221,12 +225,7 @@ func (s *Store) ReadHistory(ctx context.Context, key, scope string) (string, err
 	var manifest []byte
 	err = tx.QueryRowContext(ctx, `SELECT scope,digests FROM conversation_history_manifests WHERE id=$1`, key).Scan(&actual, &manifest)
 	if errors.Is(err, sql.ErrNoRows) {
-		var value string
-		err = tx.QueryRowContext(ctx, `SELECT body FROM kv WHERE kind=$1 AND id=$2`, conversationKind, key).Scan(&value)
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil
-		}
-		return value, err
+		return readConversationRow(tx.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
 	}
 	if err != nil {
 		return "", err
@@ -298,7 +297,7 @@ func (s *Store) MigrateLegacyHistories(ctx context.Context, after string, limit 
 	if limit < 1 || limit > 1000 {
 		return after, 0, errors.New("migration limit must be between 1 and 1000")
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT k.id FROM kv k WHERE k.kind=$1 AND k.id LIKE 'session_route:v1:history:%' AND k.id>$2 AND NOT EXISTS(SELECT 1 FROM conversation_history_manifests m WHERE m.id=k.id) ORDER BY k.id LIMIT $3`, conversationKind, after, limit)
+	rows, err := s.DB.QueryContext(ctx, `SELECT k.id FROM kv k WHERE k.kind=$1 AND k.id LIKE 'session_route:v1:history:%' AND k.id>$2 AND k.history_frame IS NULL AND NOT EXISTS(SELECT 1 FROM conversation_history_manifests m WHERE m.id=k.id) ORDER BY k.id LIMIT $3`, conversationKind, after, limit)
 	if err != nil {
 		return after, 0, err
 	}
@@ -325,10 +324,13 @@ func (s *Store) MigrateLegacyHistories(ctx context.Context, after string, limit 
 		e = lockHistoryKey(ctx, tx, key)
 		var value string
 		if e == nil {
-			e = tx.QueryRowContext(ctx, `SELECT body FROM kv WHERE kind=$1 AND id=$2 FOR UPDATE`, conversationKind, key).Scan(&value)
+			e = tx.QueryRowContext(ctx, `SELECT body FROM kv WHERE kind=$1 AND id=$2 AND history_frame IS NULL FOR UPDATE`, conversationKind, key).Scan(&value)
 		}
 		var inserted bool
-		if e == nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			// 首次分页后网关可能已切换到分块格式，或另一维护事务已压缩原行。
+			e = nil
+		} else if e == nil {
 			inserted, e = putHistoryTx(ctx, tx, key, legacyHistoryScope(key), value, true)
 		}
 		if e == nil && inserted {

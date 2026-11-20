@@ -135,7 +135,7 @@ func TestPlanByteBoundaries(t *testing.T) {
 		if i == 6 {
 			date = cutoff
 		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES('conversation_state',$1,$2,$3)`, key, strings.Repeat("a", n), date.Format(time.RFC3339)); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES('conversation_state',$1,$2,$3)`, key, "["+strings.Repeat(" ", n-2)+"]", date.Format(time.RFC3339)); err != nil {
 			t.Fatal(err)
 		}
 		if i == 4 {

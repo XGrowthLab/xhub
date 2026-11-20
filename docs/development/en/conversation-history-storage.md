@@ -43,3 +43,22 @@ go run ./cmd/storage-report plan --before=2026-11-19T00:00:00Z \
 The planner visits legacy history with recognized hashed keys and UTC creation times strictly before the whole-second cutoff. It reads metadata first, fetches bodies within the byte budget, tests Zstandard compression and verifies the original length and SHA-256. The default row and index allowance is 1 KiB per selected record. Adjust it with `--reserve-bytes`. Oversized or previously covered rows require metadata only. The snapshot counts unrecognized keys and unknown creation times separately. Follow `has_more` and `next_cursor` with the original cutoff. On failure, retry from the last successful cursor. Each batch has its own consistent snapshot. Recheck original content before performing a conversion.
 
 `estimated_selected_savings_bytes` is a field-size estimate using the chosen allowance. A migration needs additional space for old copies, TOAST, WAL and rollback. Measure physical growth and filesystem reclamation on a restored database.
+
+## Selective conversion and targeted rollback
+
+Gateway startup adds three nullable columns to `kv` for a Zstandard frame, original length and SHA-256. The original key, authorization boundary and creation time are preserved. The reader supports legacy text, block manifests and packed legacy records. It decodes a packed record on demand and rejects unknown versions, incorrect sizes and checksum failures. Conversion runs through a separate maintenance command.
+
+First deploy the compatible reader to every serving instance and verify ordinary, SSE and tool continuation. Establish and restore an independent backup covering the conversion cutoff. Use `--key-digest` for a single known history key. Start a fresh scan when moving to batches. Estimate savings with `storage-report plan` using the same bounds.
+
+```sh
+go run ./cmd/history-pack pack --execute --before=2026-11-19T00:00:00Z \
+  --rows=50 --batch-bytes=16777216 --record-bytes=8388608
+go run ./cmd/history-pack restore --execute --before=2026-11-19T00:00:00Z \
+  --rows=50 --batch-bytes=16777216 --record-bytes=8388608
+```
+
+Each command commits one transaction. Save `next_cursor` after a successful exit and pass it via `--cursor` until `has_more=false`. Preserve the operation, database, schema, cutoff, per-record limit and selection parameters. Start rollback with an empty cursor. If a connection fails, including after an ambiguous commit, retry from the last confirmed cursor. The current row format identifies previously completed work. Start a fresh cursor for oversized records, using `--min-raw-bytes`, `--record-bytes` and `--batch-bytes`. The per-record maximum is 64 MiB.
+
+The gateway and converter share a per-response transaction lock. Conversion rechecks the row, cutoff and manifest with a row lock and only writes valid history arrays with enough savings to cover the allowance (64 B minimum, 1 KiB default). It verifies the bytes read back from PostgreSQL before committing. An error rolls back the entire batch. Rollback only expands rows still in the packed format. A newer response takes precedence. Restore packed rows and verify a zero remaining count before downgrading to a gateway without packed readers. Use the isolated backup to validate recovery and the targeted command for in-place rollback to preserve later billing and conversations.
+
+Monitor filesystem headroom, TOAST, WAL, replication lag and continuation latency between batches. Record reusable PostgreSQL pages and released filesystem bytes separately. Table rewrites require their own space and availability assessment.
