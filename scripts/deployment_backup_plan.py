@@ -15,6 +15,7 @@ from pathlib import Path
 
 ARCHIVES = ("database.dump", "postgres.dump")
 PARTIAL = ("accounts-before.dump", "schema.dump")
+UNFINISHED = tuple(name + ".partial" for name in ARCHIVES + PARTIAL)
 REQUIRED_TABLES = {"api_keys", "kv", "organizations", "usage_events", "users"}
 TABLE_DATA = re.compile(r"^\d+;\s+\d+\s+\d+\s+TABLE DATA (\S+) (\S+)\s")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -30,6 +31,13 @@ class Archive:
     info: os.stat_result
     partial: bool
     commit: str
+
+    @property
+    def initial_classification(self):
+        """根据已盘点文件名和快照范围返回初始分类，供目录检查及轮换使用。写入中的归档也可能已有完整目录头。"""
+        if self.path.name in UNFINISHED:
+            return "unfinished"
+        return "partial" if self.partial else "not_inspected"
 
 
 def read_small_json(path):
@@ -47,7 +55,7 @@ def read_small_json(path):
 
 
 def discover(root):
-    """读取根目录及直属备份目录中的已知文件，返回按时间排序的备份和未分类目录数，不递归读取备份内容。"""
+    """读取 root 直属备份目录中的正式及未完成文件，返回按时间排序的归档和未分类目录数。盘点只取文件元数据。"""
     archives = []
     unclassified = 0
     for directory in root.iterdir():
@@ -57,7 +65,7 @@ def discover(root):
         commit = marker.get("commit")
         commit = commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40,64}", commit) else ""
         found = False
-        for filename in ARCHIVES + PARTIAL:
+        for filename in ARCHIVES + PARTIAL + UNFINISHED:
             path = directory / filename
             try:
                 info = path.lstat()
@@ -72,9 +80,9 @@ def discover(root):
 
 
 def inspect_toc(archive, pg_restore):
-    """用对应 PostgreSQL 客户端只读目录项，返回分类和表数据数量；目录项只证明结构候选。"""
-    if archive.partial:
-        return "partial", 0
+    """用 pg_restore 读取正式归档的目录，返回分类和表数据数量。其余类型沿用盘点分类，无需打开内容。"""
+    if archive.initial_classification != "not_inspected":
+        return archive.initial_classification, 0
     try:
         result = subprocess.run(
             [pg_restore, "--list", str(archive.path)],
@@ -163,7 +171,7 @@ def plan(args):
             "archive": archive.path.name,
             "bytes": archive.info.st_size,
             "allocated_bytes": archive.info.st_blocks * 512,
-            "classification": "partial" if archive.partial else "not_inspected",
+            "classification": archive.initial_classification,
             "table_data_entries": 0,
             "evidence": "missing",
             "rotation": "retain",
@@ -171,7 +179,7 @@ def plan(args):
         if archive.commit:
             entry["commit"] = archive.commit
         physical[(archive.info.st_dev, archive.info.st_ino)] = entry["allocated_bytes"]
-        if not archive.partial and remaining_toc:
+        if entry["classification"] == "not_inspected" and remaining_toc:
             entry["classification"], entry["table_data_entries"] = inspect_toc(archive, args.pg_restore)
             remaining_toc -= 1
         if entry["classification"] == "full_candidate" and args.proof_dir:

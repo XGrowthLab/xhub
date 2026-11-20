@@ -102,6 +102,47 @@ class BackupPlanTests(unittest.TestCase):
         self.assertEqual(len(report["archives"]), 3)
         self.assertEqual(report["archives"][0]["classification"], "partial")
 
+    @patch.object(rotation, "inspect_toc", return_value=("full_candidate", 5))
+    def test_unfinished_files_count_space_without_displacing_restore_points(self, toc):
+        """模拟正式备份、截断文件、空文件和软硬链接并存，验证空间去重、检查配额及轮换。临时目录自动回收。"""
+        current = self.archive("current", 200)
+        self.evidence(current)
+        self.evidence(self.archive("older", 100))
+        pending = self.archive("interrupted", 300, "database.dump.partial")
+        self.evidence(pending)
+        linked = current.parent / "postgres.dump.partial"
+        os.link(pending, linked)
+        empty = self.archive("starting", 400, "schema.dump.partial")
+        empty.write_bytes(b"")
+        (empty.parent / "accounts-before.dump.partial").symlink_to(pending)
+        self.archive("unrecognized", 500, "unrelated.dump.partial")
+        self.args.inspect_limit = self.args.verify_limit = 2
+
+        result = rotation.plan(self.args)
+        unfinished = [row for row in result["archives"] if row["classification"] == "unfinished"]
+        self.assertEqual({(r["snapshot"], r["archive"]) for r in unfinished}, {
+            ("interrupted", pending.name), ("current", linked.name), ("starting", empty.name),
+        })
+        self.assertTrue(all(row["rotation"] == "retain" and row["evidence"] == "missing" for row in unfinished))
+        self.assertEqual(result["archive_allocated_bytes"], sum(
+            path.stat().st_blocks * 512 for path in (pending, empty, current, self.root / "older" / "database.dump")
+        ))
+        self.assertEqual(toc.call_count, 2)
+        self.assertEqual([r["snapshot"] for r in result["archives"] if r["rotation"] == "review_candidate"], ["older"])
+        self.assertEqual(result["unclassified_directories"], 1)
+
+    @patch.object(rotation.subprocess, "run")
+    def test_unfinished_archive_skips_toc_until_published(self, run):
+        """测试账号快照原子改名后从未完成恢复为部分范围，两个状态均跳过 pg_restore。临时文件自动清理。"""
+        staging = self.archive("release", 100, "accounts-before.dump.partial")
+        archive = rotation.discover(self.root)[0][0]
+        self.assertEqual(rotation.inspect_toc(archive, "pg_restore"), ("unfinished", 0))
+        run.assert_not_called()
+        staging.rename(staging.with_suffix(""))
+        limited = rotation.discover(self.root)[0][0]
+        self.assertEqual(rotation.inspect_toc(limited, "pg_restore"), ("partial", 0))
+        run.assert_not_called()
+
     @patch.object(rotation.subprocess, "run")
     def test_toc_anchors_must_be_in_one_schema(self, run):
         """解析合成 pg_restore 目录，验证表数据需齐全且同属一个 schema，失败如实标记。"""
