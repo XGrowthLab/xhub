@@ -1144,3 +1144,35 @@ jobs:
           name: contract-compatibility
           path: coverage/contract-compatibility.json
           if-no-files-found: error
+
+  refresh_storage_coverage_notifications:
+    name: Refresh Codecov notification for PR ${{ matrix.pr }}
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/315-coverage-notification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - pr: 322
+            revision: ac0b89957cfb05a9b158e2357045a7ddfbd137e0
+          - pr: 323
+            revision: 8ac49f3b510228fd57507d561073812a0f3342ba
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision }}
+          persist-credentials: false
+      # 让已配置的 Codecov 用现有的真实报告重新发送检查，不写入测试状态或覆盖率。
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac
+        with:
+          run_command: send-notifications
+          override_commit: ${{ matrix.revision }}
+          override_pr: ${{ matrix.pr }}
+          git_service: github
+          slug: XGrowthLab/xhub
+          url: ${{ env.CODECOV_UPLOAD_URL }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
