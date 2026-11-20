@@ -53,7 +53,7 @@ test('API client reliability gate runs all flows independently and preserves fai
         'proxy-body-limit.test.ts', 'client-docs-url-', 'client-cancellation-', 'stream-terminal-sc-', 'upstream-stream-errors-',
         'billing-pending-recovery', 'usage-spool-', 'key-lifecycle-', 'agent-history-', 'model-view-', 'hard-budget-', 'budget-reconciliation-', 'messages-signed-history-', 'claude-client-compat-', 'user-bulk-budget-',
         'scenarios/enterprise/saml-', 'scenarios/enterprise/sso-valid.test.ts', 'scenarios/directory/sso-config.test.ts',
-        'compact-history-account-canary.test.ts',
+        'compact-history-account-canary.test.ts', 'diagnostic-storage.test.ts',
       ]);
       assert.equal(readFileSync(join(directory, 'environment'), 'utf8'), '0\n1\n0\n');
     }

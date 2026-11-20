@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sunqirui1987/xhub/internal/logframe"
 	"github.com/sunqirui1987/xhub/internal/util"
+	"github.com/sunqirui1987/xhub/internal/verifiedzstd"
 	"xorm.io/builder"
 	"xorm.io/xorm"
 )
@@ -306,6 +308,13 @@ func (db *DB) GetRequestLog(ctx context.Context, requestID string) (*RequestLog,
 	}
 	if !ok {
 		return nil, ErrNotFound
+	}
+	// 普通文本沿用既有详情读取，包括超大旧日志；只有明确标记的诊断需要有界解压。
+	if strings.HasPrefix(row.UpstreamResponse, logframe.Family) {
+		row.UpstreamResponse, _, err = logframe.Read(ctx, row.UpstreamResponse, verifiedzstd.MaxRawBytes)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if row.BodyCaptureStatus == "saved" {
 		captureID := row.BodyCaptureID

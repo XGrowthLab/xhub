@@ -1,38 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, rmSync } from "node:fs";
+import { runStorageSQL as runCanarySQL, storageReport } from "./storage-maintenance";
+import { writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { GATEWAY, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 import { translate } from "../src/i18n/translate";
-
-/** 在运行器创建的独立 schema 中执行固定测试 SQL，返回单行结果。避免读取其他运行的数据。 */
-function runCanarySQL(statement: string): string {
-  const schema = readFileSync(path.join(process.env.E2E_RUN_DIR!, "schema.txt"), "utf8").trim();
-  expect(schema).toMatch(/^e2e_[0-9]+_[0-9]+$/);
-  return execFileSync("docker", ["exec", "-i", "xhub-postgres", "psql", "-X", "-U", "xhub", "-d",
-    process.env.E2E_DATABASE || "xhub", "-qAt", "-v", "ON_ERROR_STOP=1"], {
-    input: `SET search_path TO "${schema}"; ${statement}`, encoding: "utf8",
-  }).trim();
-}
 
 /** 读取新旧格式行数；调用方在每轮真实响应后比较当前运行增量。 */
 function historyCounts(): number[] {
   return runCanarySQL(`SELECT (SELECT count(*) FROM conversation_history_manifests),
     (SELECT count(*) FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%');`)
     .split("|").map(Number);
-}
-
-/** 以当前浏览器私有 schema 运行真实运维 CLI。仅返回聚合 JSON，配置只传给子进程，构建由 Go 缓存复用。 */
-function storageReport(args: string[], program: "storage-report" | "history-pack" = "storage-report", input?: string) {
-  const dir = process.env.E2E_RUN_DIR!;
-  const schema = readFileSync(path.join(dir, "schema.txt"), "utf8").trim();
-  expect(schema).toMatch(/^e2e_[0-9]+_[0-9]+$/);
-  const dsn: string = JSON.parse(readFileSync(path.join(dir, "c.yaml"), "utf8")).general_settings.database_url;
-  expect(new URL(dsn).searchParams.get("search_path") === schema).toBe(true);
-  return JSON.parse(execFileSync("go", ["run", "./cmd/" + program, ...args], {
-    cwd: path.resolve(__dirname, "../.."), env: { ...process.env, XHUB_DATABASE_URL: dsn },
-    encoding: "utf8", input, timeout: 60_000,
-  }));
 }
 
 /** 从实际容量快照中汇总 Responses 转 Chat 的 JSON 或 SSE 调用；仅比较本轮真实浏览器新增量。 */
