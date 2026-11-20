@@ -1158,8 +1158,6 @@ jobs:
         include:
           - pr: 322
             revision: ac0b89957cfb05a9b158e2357045a7ddfbd137e0
-          - pr: 323
-            revision: 8ac49f3b510228fd57507d561073812a0f3342ba
     steps:
       - uses: actions/checkout@v4
         with:
