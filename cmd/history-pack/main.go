@@ -20,6 +20,9 @@ import (
 // run 从参数读取本批模式、截止时间和预算。只连接已有 schema，库未升级或未指定执行开关时失败。
 // 返回 JSON 只含成功提交的汇总和游标。驱动错误不回显连接地址、键或正文。
 func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "recover" {
+		return recoverFromBackup(ctx, args[1:], dsn, os.Stdin)
+	}
 	if len(args) < 1 || (args[0] != "pack" && args[0] != "restore") {
 		return nil, errors.New("expected pack or restore")
 	}

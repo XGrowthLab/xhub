@@ -20,7 +20,7 @@ func (s *Store) ReadConversation(ctx context.Context, key string) (string, error
 	if s == nil || s.DB == nil {
 		return "", fmt.Errorf("conversation storage unavailable")
 	}
-	return readConversationRow(s.DB.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
+	return readConversationRow(ctx, s.DB.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
 }
 
 // CompareConversation 原子比较并保存会话归属；参数old为空表示仅首次创建，value为完整序列化值。
@@ -30,7 +30,7 @@ func (s *Store) CompareConversation(ctx context.Context, key, old, value string)
 		return "", fmt.Errorf("conversation storage unavailable")
 	}
 	if old == "" {
-		return readConversationRow(s.DB.QueryRowContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4)
+		return readConversationRow(ctx, s.DB.QueryRowContext(ctx, `INSERT INTO kv(kind,id,body,created_at) VALUES($1,$2,$3,$4)
    ON CONFLICT(kind,id) DO UPDATE SET body=kv.body RETURNING `+conversationColumns, conversationKind, key, value, time.Now().UTC().Format(time.RFC3339)), key)
 	}
 	if strings.HasPrefix(key, historypack.Prefix) {

@@ -20,7 +20,7 @@ const legacyKeyPattern = "^" + historyPrefix + "[0-9a-f]{64}$"
 
 var digestPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 
-// PlanOptions 固定旧历史的创建上界、单批条数及原文字节预算。Cursor 只含本次截止时间和网关生成的摘要。
+// PlanOptions 固定旧历史的创建上界、单批条数及原文字节预算。MinRawBytes 和 OnlyDigest 限定大小区间或单键。写游标另绑定操作、数据库、筛选和备份清单。
 type PlanOptions struct {
 	Preimages    *Preimages
 	MinRawBytes  int64
@@ -33,8 +33,8 @@ type PlanOptions struct {
 	ReserveBytes int64
 }
 
-// Plan 是一个完整只读批次的估算。只有 Selected 的新编码和每行预留开销计入估算收益。
-// Deferred 表示超大行，Covered 表示同键已有新格式；二者均未读取旧正文。
+// Plan 返回一个已完成的试算、转换或还原批次。Selected 是有收益的候选，在 pack 模式下是已提交的新帧。
+// Deferred 表示超大行，Covered 表示同键已有新格式；二者均未读取旧正文。AlreadyPacked、Malformed、Unbacked 与 Changed 说明跳过原因（含已被网关改写的行），Restored 是已还原数。
 type Plan struct {
 	Unbacked       int       `json:"not_backed_up_or_changed"`
 	Mode           string    `json:"mode"`
@@ -292,7 +292,7 @@ func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode s
 		if err := tx.QueryRowContext(ctx, "SELECT body,history_frame,history_sha256 FROM kv"+where+" AND octet_length(history_frame)::bigint<=history_raw_size::bigint+128", c.key).Scan(&marker, &frame, &digest); err != nil {
 			return err
 		}
-		raw, err := historypack.Decode(marker, frame, c.raw, digest)
+		raw, err := historypack.Decode(ctx, marker, frame, c.raw, digest)
 		if err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode s
 			return err
 		}
 	}
-	restored, err := historypack.Decode(marker, frame, size, check)
+	restored, err := historypack.Decode(ctx, marker, frame, size, check)
 	if err != nil || !bytes.Equal(restored, raw) {
 		return errors.New("history compression verification failed")
 	}

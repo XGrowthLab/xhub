@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TestCompactHistoryPersistence 验证真实 PostgreSQL 中历史去重、顺序和调用方隔离；使用独立 schema 并自动清理。
@@ -281,4 +284,48 @@ func TestCompactHistoryLargeItem(t *testing.T) {
 		t.Fatalf("大历史还原失败: %v", err)
 	}
 	t.Logf("合成 %d 字节历史：写入=%s 读取=%s", len(history), writeTime, time.Since(start))
+}
+
+// TestPackedHistoryDDLContention 持有旧库读取锁，确认首次升级使用 NOWAIT 且等待时可以取消。
+// 模拟冲突解除后正常升级；已升级重启可与读取锁并存。所有锁和数据仅在本例 schema 生效。
+func TestPackedHistoryDDLContention(t *testing.T) {
+	s, _ := openModelWeightStores(t)
+	ctx := t.Context()
+	if _, err := s.DB.Exec("ALTER TABLE kv DROP COLUMN history_frame,DROP COLUMN history_raw_size,DROP COLUMN history_sha256"); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback()
+	if _, err = holder.Exec("LOCK TABLE kv IN ACCESS SHARE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	limited, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+	if err = initPackedHistoryColumns(limited, s.DB); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("锁冲突后的退避没有响应超时", err)
+	}
+	var pg *pgconn.PgError
+	if err = initPackedHistoryColumns(ctx, s.DB); !errors.As(err, &pg) || pg.Code != "55P03" {
+		t.Fatal("读取锁下强行进行了表升级", err)
+	}
+	if err = holder.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err = initPackedHistoryColumns(ctx, s.DB); err != nil {
+		t.Fatal("释放锁后仍无法升级", err)
+	}
+	holder, err = s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback()
+	if _, err = holder.Exec("LOCK TABLE kv IN ACCESS SHARE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	if err = initPackedHistoryColumns(ctx, s.DB); err != nil {
+		t.Fatal("已有字段的重启仍需要排他锁", err)
+	}
 }

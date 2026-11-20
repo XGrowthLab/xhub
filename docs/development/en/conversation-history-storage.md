@@ -48,7 +48,7 @@ The planner visits legacy history with recognized hashed keys and UTC creation t
 
 Gateway startup adds three nullable columns to `kv` for a Zstandard frame, original length and SHA-256. The original key, authorization boundary and creation time are preserved. The reader supports legacy text, block manifests and packed legacy records. It decodes a packed record on demand and rejects unknown versions, incorrect sizes and checksum failures. Conversion runs through a separate maintenance command.
 
-First deploy the compatible reader to every serving instance and verify ordinary, SSE and tool continuation. Establish and restore an independent backup covering the conversion cutoff. Use `--key-digest` for a single known history key. Start a fresh scan when moving to batches. Estimate savings with `storage-report plan` using the same bounds.
+First deploy the compatible reader to every serving instance and verify ordinary, SSE and tool continuation as well as rollback. Establish and restore an independent backup covering the conversion cutoff. Use `--key-digest` for a single known history key. Start a fresh scan when moving to batches. Estimate savings with `storage-report plan` using the same bounds.
 
 ```sh
 go run ./cmd/history-pack pack --execute --before=2026-11-19T00:00:00Z \
@@ -64,3 +64,5 @@ The gateway and converter share a per-response transaction lock. Conversion rech
 Monitor filesystem headroom, TOAST, WAL, replication lag and continuation latency between batches. Record reusable PostgreSQL pages and released filesystem bytes separately. Table rewrites require their own space and availability assessment.
 
 For production conversions, encrypt the affected original records at the source and retain the ciphertext on the temporary backup host. Read back the remote archive and verify each original key digest, byte length and SHA-256 in a temporary table on the trusted source. Write the verified lowercase key digest and content SHA-256 separated by one space per line, sorted by key, to a restricted file. Pass `--backup-manifest=/restricted/batch.manifest` to `pack`. The converter checks the original under the row lock and reports missing or changed records in `not_backed_up_or_changed`. Use a fresh cursor when switching manifests. Retain the temporary ciphertext until conversion, rollback checks and observation finish.
+
+Use `restore` for healthy frames. For a damaged frame, authenticate and decrypt the retained archive on the trusted source. Pipe the exact original UTF-8 bytes, without appending a newline, into `history-pack recover --execute --key-digest=… --created-at=… --backup-manifest=…`. Recovery requires a matching verified manifest, creation time, raw length and original digest on the current packed row. It rechecks the restored bytes in PostgreSQL. A replaced or already restored record returns `recovered=false`. Conflicting version metadata requires separate investigation.

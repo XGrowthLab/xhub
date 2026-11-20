@@ -23,7 +23,7 @@ function historyCounts(): number[] {
 }
 
 /** 以当前浏览器私有 schema 运行真实运维 CLI。仅返回聚合 JSON，配置只传给子进程，构建由 Go 缓存复用。 */
-function storageReport(args: string[], program: "storage-report" | "history-pack" = "storage-report") {
+function storageReport(args: string[], program: "storage-report" | "history-pack" = "storage-report", input?: string) {
   const dir = process.env.E2E_RUN_DIR!;
   const schema = readFileSync(path.join(dir, "schema.txt"), "utf8").trim();
   expect(schema).toMatch(/^e2e_[0-9]+_[0-9]+$/);
@@ -31,7 +31,7 @@ function storageReport(args: string[], program: "storage-report" | "history-pack
   expect(new URL(dsn).searchParams.get("search_path") === schema).toBe(true);
   return JSON.parse(execFileSync("go", ["run", "./cmd/" + program, ...args], {
     cwd: path.resolve(__dirname, "../.."), env: { ...process.env, XHUB_DATABASE_URL: dsn },
-    encoding: "utf8", timeout: 60_000,
+    encoding: "utf8", input, timeout: 60_000,
   }));
 }
 
@@ -127,7 +127,7 @@ for (const locale of ["en", "zh-CN"] as const) test("Packed legacy history rollb
   expect(first.status).toBe(200);
   const id = JSON.parse(first.text).id as string;
   expect(id).toBeTruthy();
-  const [digest, original, created] = runCanarySQL(`SELECT split_part(id,':',4), encode(sha256(convert_to(body,'UTF8')),'hex'), created_at
+  const [digest, original, created, encoded] = runCanarySQL(`SELECT split_part(id,':',4), encode(sha256(convert_to(body,'UTF8')),'hex'), created_at, replace(encode(convert_to(body,'UTF8'),'base64'),chr(10),'')
     FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%' AND position('${tag}' in body)>0;`).split("|");
   expect(digest).toMatch(/^[0-9a-f]{64}$/);
   expect(original).toMatch(/^[0-9a-f]{64}$/);
@@ -150,6 +150,17 @@ for (const locale of ["en", "zh-CN"] as const) test("Packed legacy history rollb
   expect(middle.text).toContain("response.completed");
   expect(middle.text).toContain(marker);
   expect(storageReport(["restore", ...args], "history-pack").restored).toBe(1);
+  // 先验证正常反向展开，再验证帧被破坏时仍可从本测试已保存的原件恢复，后续对话继续使用同一身份。
+  try {
+    writeFileSync(manifest, digest + " " + original + "\n", { mode: 0o600, flag: "wx" });
+    expect(storageReport(["pack", ...args, "--backup-manifest=" + manifest], "history-pack").selected).toBe(1);
+    runCanarySQL(`UPDATE kv SET history_frame=decode('00','hex') WHERE kind='conversation_state'
+      AND id='session_route:v1:history:${digest}' AND history_frame IS NOT NULL;`);
+    expect(storageReport(["recover", "--execute", "--key-digest=" + digest, "--created-at=" + created,
+      "--backup-manifest=" + manifest], "history-pack", Buffer.from(encoded, "base64").toString("utf8")).recovered).toBe(true);
+  } finally {
+    rmSync(manifest, { force: true });
+  }
   expect(runCanarySQL(`SELECT encode(sha256(convert_to(body,'UTF8')),'hex') FROM kv WHERE kind='conversation_state'
     AND id='session_route:v1:history:${digest}' AND history_frame IS NULL;`)).toBe(original);
   const last = await send("What project marker did I give you? Reply with only the marker.", id);

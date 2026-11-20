@@ -11,8 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"sort"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // historyBlock 是同一隔离范围内可复用的完整历史项；JSON 只用于向 PostgreSQL 批量传输。
@@ -23,14 +26,34 @@ type historyBlock struct {
 	Compressed bool   `json:"compressed"`
 }
 
+// initPackedHistoryColumns 在首次部署时为热表锁做非等待尝试，避免排队的 DDL 堵住正常请求。
+// 参数是启动上下文和数据库；仅遇到锁冲突时短暂退避重试，其他错误直接返回。已建好字段的实例不请求排他锁。
+func initPackedHistoryColumns(ctx context.Context, db *sql.DB) error {
+	const ddl = `DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid='kv'::regclass AND attname IN ('history_frame','history_raw_size','history_sha256') AND NOT attisdropped)<3 THEN
+		   LOCK TABLE kv IN ACCESS EXCLUSIVE MODE NOWAIT;
+		   ALTER TABLE kv ADD COLUMN IF NOT EXISTS history_frame BYTEA, ADD COLUMN IF NOT EXISTS history_raw_size INTEGER, ADD COLUMN IF NOT EXISTS history_sha256 BYTEA;
+		 END IF; END $$`
+	for attempt := 0; ; attempt++ {
+		_, err := db.ExecContext(ctx, ddl)
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != "55P03" || attempt >= 3 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(45+attempt*40+rand.IntN(35)) * time.Millisecond):
+		}
+	}
+}
+
 // initHistoryTables 创建新格式的内容块和响应索引；调用方为 Store.Open，失败时不启动半成品存储。
 // 初始化还为旧 kv 添加可空历史字段。已有库只修改目录元数据，已有字段的重启绕过热表 DDL。
 func initHistoryTables(ctx context.Context, db *sql.DB) error {
+	if err := initPackedHistoryColumns(ctx, db); err != nil {
+		return fmt.Errorf("initialize packed history columns: %w", err)
+	}
 	for _, q := range []string{
-		`DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid='kv'::regclass AND attname IN ('history_frame','history_raw_size','history_sha256') AND NOT attisdropped)<3 THEN
-		   PERFORM set_config('lock_timeout','2s',true);
-		   ALTER TABLE kv ADD COLUMN IF NOT EXISTS history_frame BYTEA, ADD COLUMN IF NOT EXISTS history_raw_size INTEGER, ADD COLUMN IF NOT EXISTS history_sha256 BYTEA;
-		 END IF; END $$`,
 		`CREATE TABLE IF NOT EXISTS conversation_history_blocks (scope TEXT NOT NULL, digest TEXT NOT NULL, payload BYTEA NOT NULL, raw_size BIGINT NOT NULL CHECK(raw_size >= 0), compressed BOOLEAN NOT NULL, PRIMARY KEY(scope,digest))`,
 		`CREATE TABLE IF NOT EXISTS conversation_history_manifests (id TEXT PRIMARY KEY, scope TEXT NOT NULL, digests JSONB NOT NULL)`,
 	} {
@@ -225,7 +248,7 @@ func (s *Store) ReadHistory(ctx context.Context, key, scope string) (string, err
 	var manifest []byte
 	err = tx.QueryRowContext(ctx, `SELECT scope,digests FROM conversation_history_manifests WHERE id=$1`, key).Scan(&actual, &manifest)
 	if errors.Is(err, sql.ErrNoRows) {
-		return readConversationRow(tx.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
+		return readConversationRow(ctx, tx.QueryRowContext(ctx, selectConversation, conversationKind, key), key)
 	}
 	if err != nil {
 		return "", err
