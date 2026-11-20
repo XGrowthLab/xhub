@@ -52,16 +52,16 @@ func TestCompactHistorySubmittedBlocks(t *testing.T) {
 			}
 		}
 	}
-	var attempts, bytes, stored int64
-	if err := s.DB.QueryRowContext(ctx, `SELECT count(*),sum(payload_bytes),(SELECT sum(octet_length(payload)) FROM conversation_history_blocks)
-       FROM history_submissions`).Scan(&attempts, &bytes, &stored); err != nil {
+	var attempts, submittedBytes, stored int64
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(payload_bytes),0),(SELECT coalesce(sum(octet_length(payload)),0) FROM conversation_history_blocks)
+       FROM history_submissions`).Scan(&attempts, &submittedBytes, &stored); err != nil {
 		t.Fatal(err)
 	}
 	slices.Sort(writes)
 	slices.Sort(reads)
 	p95 := (len(writes)*95+99)/100 - 1
-	t.Logf("turns=%d candidates=%d candidate_payload_bytes=%d unique_payload_bytes=%d write_p95=%s read_p95=%s", len(writes), attempts, bytes, stored, writes[p95], reads[p95])
-	if attempts != turns*2 || bytes != stored {
-		t.Fatalf("重复历史仍提交给 PostgreSQL，候选 %d，预期 %d", attempts, turns*2)
+	t.Logf("turns=%d candidates=%d candidate_payload_bytes=%d unique_payload_bytes=%d write_p95=%s read_p95=%s", len(writes), attempts, submittedBytes, stored, writes[p95], reads[p95])
+	if attempts != turns*2 || submittedBytes != stored {
+		t.Fatalf("重复历史仍提交给 PostgreSQL，候选 %d，预期 %d；提交字节 %d，唯一块字节 %d", attempts, turns*2, submittedBytes, stored)
 	}
 }

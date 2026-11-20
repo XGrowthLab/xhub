@@ -102,6 +102,14 @@ func TestCompactHistoryAccountCanary(t *testing.T) {
 	}
 	second := followSSE("Continue during the canary.", parent)
 	counts(2, 0)
+	// 两轮必须分别引用同一个历史块，仅在同一清单内重复不满足续聊复用。
+	var shared bool
+	if err := h.store.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversation_history_manifests a
+		JOIN conversation_history_manifests b ON a.scope=b.scope AND a.id<b.id
+		CROSS JOIN LATERAL jsonb_array_elements_text(a.digests) AS first(digest)
+		WHERE b.digests ? first.digest)`).Scan(&shared); err != nil || !shared {
+		t.Fatal("首轮和续轮清单没有共同历史块", err)
+	}
 
 	session := h.ok(http.MethodPost, path, listed.session, mkBody("Start a session fixture.", false))
 	if stringField(session.json(), "id") == "" {

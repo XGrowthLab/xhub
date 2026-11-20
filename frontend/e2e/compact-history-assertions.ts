@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-/** 读取独立浏览器 schema 中各范围的重复历史引用总数。供有前后对照的多轮场景使用，旧格式套件返回零。 */
+/** 读取独立浏览器 schema 中各范围的重复历史引用总数。供有前后对照的多轮场景使用，旧格式套件返回零。这里观察库中最终的引用复用，数据库插入候选由后端触发器回归独立核查。 */
 export function historyReuseReferences(): number {
   if (process.env.XHUB_COMPACT_HISTORY !== "1") return 0;
   const schema = fs.readFileSync(path.join(process.env.E2E_RUN_DIR!, "schema.txt"), "utf8").trim();
