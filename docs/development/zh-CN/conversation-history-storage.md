@@ -31,3 +31,25 @@ XHUB_DATABASE_URL="$YOUR_DATABASE_URL" go run ./cmd/history-compact --execute --
 先在隔离环境验证中文、英文界面的请求流程，真实 PostgreSQL 的 JSON/SSE 续接、工具调用、身份隔离、并发、错误处理和迁移重跑；测量存储占用、写入/恢复耗时以及迁移过程的磁盘余量。测试上游使用合成数据，不需要生产凭据。合成样本节省率不代表线上效果。
 
 发布时先让所有实例支持双格式读取，再决定是否启用新写入。关闭开关只能改变之后的写入；已经创建的新格式仍需要兼容读取，因此不能直接回退到不认识新格式的旧二进制。旧记录暂不删除。最终清理前需验证完整恢复、引用关系、空间预算和数据库维护方式；普通 PostgreSQL vacuum 主要回收可复用空间，不保证立即归还文件系统。
+
+## 协议容量统计与旧会话压缩预估
+
+运维可在已有 schema 上以只读数据库账号运行以下命令。连接配置从 `XHUB_DATABASE_URL` 读取。命令不初始化表。为每套部署指定稳定且唯一的 `--deployment` 值，再对同一 schema 连续取两次快照。
+
+```sh
+go run ./cmd/storage-report snapshot --deployment=primary --days=7 > first.json
+go run ./cmd/storage-report snapshot --deployment=primary --days=7 --baseline=first.json > second.json
+```
+
+`routes` 用 UTC 请求日、入站和出站协议、显式透传及流式标志归因，给出调用数、诊断字段、内嵌正文和独立采集字段的字节数。字段大小按 PostgreSQL 当前压缩后的存储大小计算，空字段记零。未关联用量的采集按采集日期计数，流式状态为 null。覆盖从窗口第一天零点至采样时刻。旧历史按创建日和种类统计，无法还原的维度保持未归因。块和清单没有创建时间，列在 undated。
+
+`physical_bytes` 给出数据库大小和各类主表、TOAST（含自己的索引）及主表索引大小。只读角色具备查看 WAL 目录的权限时也返回整个 PostgreSQL 实例当前的 WAL 文件大小。两个快照的 `physical_delta_bytes` 表示净变化，可为负数。按创建日期归因的现存字段字节与两个快照间的物理差值独立解读。宿主机上可按需指定 `--backups-dir`、`--container-logs-dir`、`--redis-dir`、`--billing-spool-dir` 或 `--images-dir`，以同一文件系统的已分配块计量。比较时应在同一宿主机上使用同一组目录。报告只输出分类名。
+
+```sh
+go run ./cmd/storage-report plan --before=2026-11-19T00:00:00Z \
+  --rows=100 --batch-bytes=33554432 --record-bytes=16777216
+```
+
+`plan` 只访问早于指定秒级截止点、具有已知格式摘要键及 UTC 创建时间的旧历史。每批先查元数据，再读取预算内的正文，逐条 Zstandard 试压并按原长度和 SHA-256 验证。每个候选默认预留 1 KiB 行与索引开销，可通过 `--reserve-bytes` 调整。单条过大和已有清单的记录只计数。无法识别的旧键或创建时间可在容量快照中核对。按 `has_more` 和 `next_cursor` 续跑，同一批次失败时沿用上一成功游标及原截止点。各批次拥有各自的一致快照，实际转换时还须重新校验原值。
+
+`estimated_selected_savings_bytes` 仅表示按当前假设试算的字段收益。临时新写入空间还需计入并存旧副本、TOAST、WAL 和回滚余量；生产文件系统回收量须通过隔离转换和回收实测。

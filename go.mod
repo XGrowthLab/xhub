@@ -16,6 +16,7 @@ require (
 	github.com/gofrs/flock v0.8.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/klauspost/compress v1.20.5
 	github.com/mattermost/xml-roundtrip-validator v0.1.0
 	github.com/openai/openai-go/v3 v3.74.0
 	github.com/qiniu/go-sdk/v7 v7.26.4
