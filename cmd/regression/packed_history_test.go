@@ -2,6 +2,7 @@ package regression
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -33,6 +34,16 @@ func TestPackedHistoryContinuation(t *testing.T) {
 	}
 	ctx := t.Context()
 	o := storageaudit.PlanOptions{Before: time.Now().UTC().Truncate(time.Second), Rows: 5, BatchBytes: 1 << 20, RecordBytes: 1 << 20, ReserveBytes: 64}
+	// 在 HTTP 生成的数据上验证备份版本筛选，另一账号仍走原来的隔离检查。
+	var key, sha string
+	if err := h.store.DB.QueryRow("SELECT right(id,64),encode(sha256(convert_to(body,'UTF8')),'hex') FROM kv WHERE kind='conversation_state' AND id LIKE 'session_route:v1:history:%'").Scan(&key, &sha); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	o.Preimages, err = storageaudit.ReadPreimages(strings.NewReader(fmt.Sprintf("%s %s", key, sha)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	p, err := storageaudit.Convert(ctx, h.store.DB, o, "pack")
 	if err != nil || p.Selected != 1 {
 		t.Fatalf("网关产生的历史未能转换: %+v %v", p, err)

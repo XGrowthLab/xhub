@@ -22,6 +22,7 @@ var digestPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 
 // PlanOptions 固定旧历史的创建上界、单批条数及原文字节预算。Cursor 只含本次截止时间和网关生成的摘要。
 type PlanOptions struct {
+	Preimages    *Preimages
 	MinRawBytes  int64
 	OnlyDigest   string
 	Before       time.Time
@@ -35,6 +36,7 @@ type PlanOptions struct {
 // Plan 是一个完整只读批次的估算。只有 Selected 的新编码和每行预留开销计入估算收益。
 // Deferred 表示超大行，Covered 表示同键已有新格式；二者均未读取旧正文。
 type Plan struct {
+	Unbacked       int       `json:"not_backed_up_or_changed"`
 	Mode           string    `json:"mode"`
 	AlreadyPacked  int       `json:"already_packed"`
 	Malformed      int       `json:"malformed"`
@@ -112,6 +114,9 @@ func Estimate(ctx context.Context, db *sql.DB, o PlanOptions) (*Plan, error) {
 // Convert 在单个事务中执行选定的 pack 或 restore 批次。只有备份检查及所有节点兼容读取后，操作员才从独立命令调用。
 // 以与网关相同的响应键锁串行化，提交之前从数据库逐条读回核验，失败回滚整批。
 func Convert(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (*Plan, error) {
+	if mode == "restore" && o.Preimages != nil {
+		return nil, errors.New("preimage verification applies only to packing")
+	}
 	if mode != "pack" && mode != "restore" {
 		return nil, errors.New("expected pack or restore")
 	}
@@ -163,7 +168,11 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 	cutoff := o.Before.UTC().Format(time.RFC3339)
 	resumePrefix := ""
 	if mode != "plan" {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%d/%d/%d", dbScope, o.OnlyDigest, o.MinRawBytes, o.RecordBytes, o.ReserveBytes)))
+		identity := fmt.Sprintf("%s/%s/%d/%d/%d", dbScope, o.OnlyDigest, o.MinRawBytes, o.RecordBytes, o.ReserveBytes)
+		if o.Preimages != nil {
+			identity += "/" + o.Preimages.id
+		}
+		sum := sha256.Sum256([]byte(identity))
 		resumePrefix = fmt.Sprintf("%s/%x/", mode, sum[:])
 		if cursor != "" && !strings.HasPrefix(cursor, resumePrefix) {
 			return nil, errors.New("cursor database or selection bounds mismatch")
@@ -208,8 +217,15 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 		if p.Scanned == o.Rows {
 			break
 		}
+		var expected *[sha256.Size]byte
+		if o.Preimages != nil {
+			if h, ok := o.Preimages.hashes[strings.TrimPrefix(c.key, historyPrefix)]; ok {
+				expected = &h
+			}
+		}
+		unbacked := o.Preimages != nil && expected == nil
 		changed := false
-		if mode != "plan" && !c.covered && c.packed == (mode == "restore") {
+		if !unbacked && mode != "plan" && !c.covered && c.packed == (mode == "restore") {
 			if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", c.key); err != nil {
 				return nil, err
 			}
@@ -226,6 +242,8 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 			p.Covered++
 		case c.packed && mode != "restore":
 			p.AlreadyPacked++
+		case unbacked:
+			p.Unbacked++
 		case c.raw > o.RecordBytes:
 			p.Deferred++
 			p.DeferredRaw += c.raw
@@ -237,7 +255,7 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 				p.More = true
 			}
 			if !p.More {
-				if err = processRecord(ctx, tx, c, p, mode); err != nil {
+				if err = processRecord(ctx, tx, c, p, mode, expected); err != nil {
 					return nil, err
 				}
 			}
@@ -262,7 +280,7 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 
 // processRecord 只读取已获准的单行，校验内容后计量或写入。试算和实际写入都先验原文为历史数组，避免更改损坏数据；
 // 对入库后的帧或回退正文再次读取并核对，任何触发器、编码或存储故障都使调用方回滚。
-func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode string) error {
+func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode string, expected *[sha256.Size]byte) error {
 	p.Read += c.raw
 	const where = " WHERE kind='conversation_state' AND id=$1"
 	if mode == "restore" {
@@ -306,6 +324,11 @@ func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode s
 	frame, digest, err := historypack.Encode(raw)
 	if err != nil {
 		return err
+	}
+	// 备份之后即使同键在网关被重用，也只有锁内原文与已恢复验证的摘要相同才允许维护写入。
+	if expected != nil && digest != *expected {
+		p.Unbacked++
+		return nil
 	}
 	// 预留至少足够放版本、摘要、原长和 varlena 头；默认的 1 KiB 还覆盖额外的行和 TOAST 开销。
 	candidateSize := int64(len(frame)) + max(p.Reserve, int64(64))

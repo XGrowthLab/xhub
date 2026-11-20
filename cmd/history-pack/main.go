@@ -27,6 +27,7 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 	f.SetOutput(io.Discard)
 	var o storageaudit.PlanOptions
 	before := f.String("before", "", "fixed exclusive UTC cutoff")
+	manifest := f.String("backup-manifest", "", "verified original SHA-256 manifest for this batch")
 	execute := f.Bool("execute", false, "commit this batch")
 	f.StringVar(&o.OnlyDigest, "key-digest", "", "optional single trusted history digest for targeted recovery")
 	f.StringVar(&o.Cursor, "cursor", "", "cursor from the last committed batch of this operation")
@@ -41,6 +42,20 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 	var err error
 	if o.Before, err = time.Parse(time.RFC3339, *before); err != nil {
 		return nil, errors.New("invalid cutoff")
+	}
+	if *manifest != "" {
+		if args[0] != "pack" {
+			return nil, errors.New("backup manifest is only valid for packing")
+		}
+		file, err := os.Open(*manifest)
+		if err != nil {
+			return nil, errors.New("could not open verified preimage manifest")
+		}
+		defer file.Close()
+		o.Preimages, err = storageaudit.ReadPreimages(file)
+		if err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {

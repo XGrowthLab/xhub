@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { GATEWAY, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 import { translate } from "../src/i18n/translate";
@@ -134,7 +134,17 @@ for (const locale of ["en", "zh-CN"] as const) test("Packed legacy history rollb
   await expect.poll(() => runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`) > created).toBe(true);
   const cutoff = runCanarySQL(`SELECT to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');`);
   const args = ["--execute", "--key-digest=" + digest, "--before=" + cutoff, "--reserve-bytes=64"];
-  expect(storageReport(["pack", ...args], "history-pack").selected).toBe(1);
+  // 先以过期的备份摘要尝试，再换成已验证的原件。只把摘要存进当前测试运行的私有目录。
+  const manifest = path.join(process.env.E2E_RUN_DIR!, tag + ".manifest");
+  try {
+    writeFileSync(manifest, digest + " " + "0".repeat(64) + "\n", { mode: 0o600, flag: "wx" });
+    const pack = ["pack", ...args, "--backup-manifest=" + manifest];
+    expect(storageReport(pack, "history-pack").not_backed_up_or_changed).toBe(1);
+    writeFileSync(manifest, digest + " " + original + "\n");
+    expect(storageReport(pack, "history-pack").selected).toBe(1);
+  } finally {
+    rmSync(manifest, { force: true });
+  }
   const middle = await send("What project marker did I give you? Reply with only the marker.", id, true);
   expect(middle.status).toBe(200);
   expect(middle.text).toContain("response.completed");
