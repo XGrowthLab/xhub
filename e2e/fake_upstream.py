@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -885,12 +886,7 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
         }
-        body = json.dumps(payload).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._json(payload, diagnostic_model=model)
 
     def _error_log_response(self, model: str) -> bool:
         """为错误日志 E2E 返回可辨识的上游失败；参数为请求模型，返回是否已处理。
@@ -979,6 +975,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _diagnostic_headers(self, model: str) -> None:
         """为续接模型加入多值响应头；参数为模型，无返回，供本地 JSON/SSE 验证完整记录及脱敏。"""
+        if model.startswith("e2e-packed-log-"):
+            # 合成的计数轨迹通过真实 HTTP 写入诊断。保持响应头在浏览器代理限制内。
+            sample = "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(42))
+            self.send_header("X-Storage-Proof", sample * 2)
         if model == "e2e-responses-history":
             self.send_header("X-Upstream-Trace", "trace-first")
             self.send_header("X-Upstream-Trace", "trace-second")

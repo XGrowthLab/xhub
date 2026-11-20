@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/sunqirui1987/xhub/internal/logframe"
 )
 
 // LegacyRetentionBatch 是一次有界扫描的统计。Next 是最后检查的用量事件序号，
@@ -55,13 +57,13 @@ LEFT JOIN LATERAL (
 	FROM request_logs WHERE request_id = p.request_id AND p.ts <= $3 AND body_capture_status = ''
 	  AND (request_body <> '' OR response_body <> '' OR proxy_request <> '' OR error <> ''
 	       OR CASE WHEN octet_length(upstream_response) > 65536 THEN true
-	               ELSE strpos(upstream_response, '"error":') > 0 END)
+	               ELSE starts_with(upstream_response,$5) OR strpos(upstream_response, '"error":') > 0 END)
 	LIMIT 1`
 	if execute {
 		query += " FOR UPDATE"
 	}
 	query += ") legacy ON true ORDER BY p.id"
-	rows, err := tx.QueryContext(ctx, query, after, limit, cutoff, execute)
+	rows, err := tx.QueryContext(ctx, query, after, limit, cutoff, execute, logframe.Family)
 	if err != nil {
 		return LegacyRetentionBatch{}, err
 	}
@@ -85,6 +87,13 @@ LEFT JOIN LATERAL (
 		result.Next = id
 		if requestID == "" {
 			continue
+		}
+		if !diagnosticTooLarge {
+			// 编码后的短字段也可能对应超大的旧诊断。使用原长和此前的 64 KiB 阈值决定是否参与错误摘要清理。
+			diagnostic, diagnosticTooLarge, err = logframe.Read(ctx, diagnostic, 65536)
+			if err != nil {
+				return LegacyRetentionBatch{}, err
+			}
 		}
 		cleanDiagnostic, replace, recognized := summarizeLegacyDiagnostic(diagnostic)
 		if diagnosticTooLarge || !recognized {

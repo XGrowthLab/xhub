@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Preimages 保存已完成恢复校验的备份清单。仅含存储键摘要和原文字节摘要，供离线批次在锁内比对。
+// Preimages 保存已完成恢复校验的备份清单。仅含会话键或请求 ID 的摘要，以及对应原文字节的摘要，供离线批次在锁内比对。
 type Preimages struct {
 	id     string
 	hashes map[string][sha256.Size]byte
