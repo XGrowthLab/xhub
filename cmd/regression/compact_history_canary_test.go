@@ -70,6 +70,14 @@ func TestCompactHistoryAccountCanary(t *testing.T) {
 		t.Fatal("灰度用户未得到响应 ID")
 	}
 	counts(1, 0)
+	// 真实 PostgreSQL 在唯一冲突判断之前触发 BEFORE INSERT。让本例的串行续聊拒绝重复候选，
+	// 确保 JSON 首轮到 SSE 续轮实际复用了已有块，同时让出站错误通过网关暴露。
+	if _, err := h.store.DB.ExecContext(t.Context(), `CREATE FUNCTION reject_repeated_candidate() RETURNS trigger LANGUAGE plpgsql AS $$
+	    BEGIN IF EXISTS(SELECT 1 FROM conversation_history_blocks WHERE scope=NEW.scope AND digest=NEW.digest)
+	    THEN RAISE EXCEPTION 'repeated history candidate'; END IF; RETURN NEW; END $$;
+	    CREATE TRIGGER check_candidate BEFORE INSERT ON conversation_history_blocks FOR EACH ROW EXECUTE FUNCTION reject_repeated_candidate()`); err != nil {
+		t.Fatal(err)
+	}
 	// 读取完整事件流，只接受成功终态中的可续接响应 ID。
 	followSSE := func(input, previous string) string {
 		t.Helper()

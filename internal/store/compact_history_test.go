@@ -148,20 +148,28 @@ func TestCompactHistoryStorageGrowth(t *testing.T) {
 
 // TestCompactHistoryEncodingBoundaries 验证空列表、损坏压缩块和内容摘要；纯内存测试，无需清理。
 func TestCompactHistoryEncodingBoundaries(t *testing.T) {
-	blocks, ids, err := encodeHistory(`[]`)
-	if err != nil || len(blocks) != 0 || len(ids) != 0 {
-		t.Fatal(blocks, ids, err)
+	ids, items, err := indexHistory(`[]`)
+	if err != nil || len(items) != 0 || len(ids) != 0 {
+		t.Fatal(items, ids, err)
 	}
 	for _, input := range []string{`null`, `{}`, `[`, ``} {
-		if _, _, err := encodeHistory(input); err == nil {
+		if _, _, err := indexHistory(input); err == nil {
 			t.Fatalf("非法历史未拒绝: %q", input)
 		}
 	}
-	blocks, _, err = encodeHistory(`["` + strings.Repeat("a", 4000) + `"]`)
-	if err != nil || !blocks[0].Compressed {
+	ids, items, err = indexHistory(`["` + strings.Repeat("a", 4000) + `",42,42]`)
+	if err != nil || len(ids) != 3 || ids[1] != ids[2] || len(items) != 2 {
+		t.Fatal("摘要顺序和重复引用不正确", err)
+	}
+	small, err := encodeHistoryBlock(ids[1], items[ids[1]])
+	if err != nil || small.Compressed || string(small.Payload) != "42" {
+		t.Fatal("小块未保留原文", err)
+	}
+	block, err := encodeHistoryBlock(ids[0], items[ids[0]])
+	if err != nil || !block.Compressed {
 		t.Fatal("大块未压缩", err)
 	}
-	b := blocks[0]
+	b := block
 	if _, err = decodeHistoryBlock(b); err != nil {
 		t.Fatal(err)
 	}
@@ -169,12 +177,12 @@ func TestCompactHistoryEncodingBoundaries(t *testing.T) {
 	if _, err = decodeHistoryBlock(b); err == nil {
 		t.Fatal("损坏压缩内容被接受")
 	}
-	b = blocks[0]
+	b = block
 	b.Digest = strings.Repeat("0", 64)
 	if _, err = decodeHistoryBlock(b); err == nil {
 		t.Fatal("错误摘要被接受")
 	}
-	b = blocks[0]
+	b = block
 	b.Size--
 	if _, err = decodeHistoryBlock(b); err == nil {
 		t.Fatal("错误长度被接受")
