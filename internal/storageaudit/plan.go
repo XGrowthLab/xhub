@@ -20,6 +20,12 @@ const legacyKeyPattern = "^" + historyPrefix + "[0-9a-f]{64}$"
 
 var digestPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 
+// OperatorError 仅由维护模块用固定文案构造。命令行可直接提示处置方向，驱动错误仍由调用方脱敏。
+type OperatorError string
+
+// Error 返回固定的运维参数或数据状态说明，不含数据库地址、记录键和原文。
+func (e OperatorError) Error() string { return string(e) }
+
 // PlanOptions 固定旧历史的创建上界、单批条数及原文字节预算。MinRawBytes 和 OnlyDigest 限定大小区间或单键。写游标另绑定操作、数据库、筛选和备份清单。
 type PlanOptions struct {
 	Preimages    *Preimages
@@ -65,14 +71,14 @@ type Plan struct {
 // startKey 校验所有维护上限并核对游标的截止时间。返回绑定查询用的内部键，不向报告回显任意原始 ID。
 func (o PlanOptions) startKey() (string, error) {
 	if o.MinRawBytes < 0 || o.MinRawBytes > o.RecordBytes || (o.OnlyDigest != "" && !digestPattern.MatchString(o.OnlyDigest)) || o.Before.IsZero() || o.Before.Nanosecond() != 0 || o.Rows < 1 || o.Rows > 1000 || o.BatchBytes < 1 || o.BatchBytes > 256<<20 || o.RecordBytes < 1 || o.RecordBytes > historypack.MaxRawBytes || o.RecordBytes > o.BatchBytes || o.ReserveBytes < 0 || o.ReserveBytes > 1<<20 {
-		return "", errors.New("invalid planning bounds")
+		return "", OperatorError("invalid planning bounds")
 	}
 	if o.Cursor == "" {
 		return historyPrefix, nil
 	}
 	cutoff, digest, ok := strings.Cut(o.Cursor, "/")
 	if !ok || cutoff != o.Before.UTC().Format(time.RFC3339) || !digestPattern.MatchString(digest) {
-		return "", errors.New("cursor does not match cutoff or history key format")
+		return "", OperatorError("cursor does not match cutoff or history key format")
 	}
 	return historyPrefix + digest, nil
 }
@@ -115,10 +121,10 @@ func Estimate(ctx context.Context, db *sql.DB, o PlanOptions) (*Plan, error) {
 // 以与网关相同的响应键锁串行化，提交之前从数据库逐条读回核验，失败回滚整批。
 func Convert(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (*Plan, error) {
 	if mode == "restore" && o.Preimages != nil {
-		return nil, errors.New("preimage verification applies only to packing")
+		return nil, OperatorError("preimage verification applies only to packing")
 	}
 	if mode != "pack" && mode != "restore" {
-		return nil, errors.New("expected pack or restore")
+		return nil, OperatorError("expected pack or restore")
 	}
 	return processBatch(ctx, db, o, mode)
 }
@@ -133,7 +139,7 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 			o.Cursor = parts[2]
 		}
 		if len(parts) != 3 || parts[0] != mode {
-			return nil, errors.New("cursor operation mismatch")
+			return nil, OperatorError("cursor operation mismatch")
 		}
 	}
 	after, err := o.startKey()
@@ -156,14 +162,14 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 		return nil, err
 	}
 	if o.Before.After(now) {
-		return nil, errors.New("history cutoff is in the future")
+		return nil, OperatorError("history cutoff is in the future")
 	}
 	cols, err := hasPackedColumns(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	if !cols && mode != "plan" {
-		return nil, errors.New("packed history reader schema required")
+		return nil, OperatorError("packed history reader schema required")
 	}
 	cutoff := o.Before.UTC().Format(time.RFC3339)
 	resumePrefix := ""
@@ -175,7 +181,7 @@ func processBatch(ctx context.Context, db *sql.DB, o PlanOptions, mode string) (
 		sum := sha256.Sum256([]byte(identity))
 		resumePrefix = fmt.Sprintf("%s/%x/", mode, sum[:])
 		if cursor != "" && !strings.HasPrefix(cursor, resumePrefix) {
-			return nil, errors.New("cursor database or selection bounds mismatch")
+			return nil, OperatorError("cursor database or selection bounds mismatch")
 		}
 	}
 	selectRow := candidateSelect(cols)
@@ -315,7 +321,7 @@ func processRecord(ctx context.Context, tx *sql.Tx, c candidate, p *Plan, mode s
 		return err
 	}
 	if int64(len(raw)) != c.raw {
-		return errors.New("history size changed during batch")
+		return OperatorError("history size changed during batch")
 	}
 	if !json.Valid(raw) || !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
 		p.Malformed++

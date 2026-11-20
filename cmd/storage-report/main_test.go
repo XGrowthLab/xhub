@@ -79,6 +79,9 @@ func TestStorageReportRejectsUnsafeInput(t *testing.T) {
 			t.Fatalf("接受错误参数 %v", args)
 		}
 	}
+	if _, err := run(t.Context(), []string{"plan", "--before=2026-01-01T00:00:00Z", "--rows=0"}, "postgres://unused"); err == nil || err.Error() != "invalid planning bounds" {
+		t.Fatal("没有给出可操作的参数错误", err)
+	}
 	if _, err := run(t.Context(), []string{"snapshot"}, ""); err == nil {
 		t.Fatal("空连接串被接受")
 	}

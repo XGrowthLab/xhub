@@ -44,6 +44,10 @@ The planner visits legacy history with recognized hashed keys and UTC creation t
 
 `estimated_selected_savings_bytes` is a field-size estimate using the chosen allowance. A migration needs additional space for old copies, TOAST, WAL and rollback. Measure physical growth and filesystem reclamation on a restored database.
 
+The estimate compares the current PostgreSQL/TOAST field size with a whole-record Zstandard frame. The `history-compact` command uses separate message blocks, deduplication and manifests with different costs. The snapshot accepts `--days=1..31` (default 7). Set `--before` to an RFC 3339 whole second in the past or present. Defaults are 100 rows (1–1000), 32 MiB per batch (maximum 256 MiB), 16 MiB per record (maximum 64 MiB, within the batch limit), and 1 KiB allowance per record (maximum 1 MiB). Pass `next_cursor` to the next invocation using `--cursor`. Stop at `has_more=false`; the last cursor may remain populated.
+
+Protocol attribution reads events and captures for the time window. Large databases without independent timestamp indexes may perform sequential scans. Statements have a 15-second timeout. Physical deltas cover categories observed in both snapshots. An absent optional metric was unobserved. Supply actual mount directories. Unknown creation times and unrecognized legacy keys are counted separately.
+
 ## Selective conversion and targeted rollback
 
 Gateway startup adds three nullable columns to `kv` for a Zstandard frame, original length and SHA-256. The original key, authorization boundary and creation time are preserved. The reader supports legacy text, block manifests and packed legacy records. It decodes a packed record on demand and rejects unknown versions, incorrect sizes and checksum failures. Conversion runs through a separate maintenance command.

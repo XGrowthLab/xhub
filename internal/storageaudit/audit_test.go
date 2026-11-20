@@ -208,3 +208,41 @@ func TestPlanCursorAndSnapshotIdentity(t *testing.T) {
 		t.Fatal("接受了跨来源或乱序的基线")
 	}
 }
+
+// TestSnapshotMonitorPrivilegesAndLateCapture 使用 PostgreSQL 自带的普通读数据角色，验证无 WAL 权限仍能盘点。
+// 设置跨窗请求和采集，验证已有协议、零重复调用与遗漏处理。角色仅在私有连接生效，结束后重置并回收 schema。
+func TestSnapshotMonitorPrivilegesAndLateCapture(t *testing.T) {
+	db := fixture(t)
+	db.SetMaxOpenConns(1)
+	ctx := t.Context()
+	_, err := db.ExecContext(ctx, `INSERT INTO usage_events(request_id,ts,owner_type,inbound_endpoint,outbound_endpoint)
+ VALUES ('late-capture',now()-interval '5 days','personal','/v1/messages','/v1/responses'),('old-capture',now(),'personal','/v1/embeddings','/v1/embeddings');
+ INSERT INTO request_log_captures(request_id,source,created_at,expires_at,request_document,size_bytes)
+ VALUES('late-capture','global',now(),now(),'abc',3),('old-capture','global',now()-interval '5 days',now(),'abc',3)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, "SET ROLE pg_read_all_data"); err != nil {
+		t.Fatal(err)
+	}
+	defer db.ExecContext(ctx, "RESET ROLE")
+	report, err := Capture(ctx, db, "plain-reader", 1)
+	if err != nil {
+		t.Fatal("受限角色无法读取快照", err)
+	}
+	if _, present := report.Physical["cluster.wal_files"]; present {
+		t.Fatal("普通读取角色拿到了特权 WAL 指标")
+	}
+	var late, old bool
+	for _, r := range report.Routes {
+		if r.Inbound == "messages" {
+			late = r.Calls == 0 && r.Captures == 1 && r.Captured == 4
+		}
+		if r.Inbound == "embeddings" {
+			old = r.Calls == 1 && r.Captures == 0 && r.Captured == 0
+		}
+	}
+	if !late || !old {
+		t.Fatal("跨窗采集被漏记或重复", report.Routes)
+	}
+}

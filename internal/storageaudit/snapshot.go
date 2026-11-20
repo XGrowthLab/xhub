@@ -104,10 +104,10 @@ func Capture(ctx context.Context, db *sql.DB, deployment string, days int) (*Sna
 	s := &Snapshot{Version: 1, Routes: []Route{}, History: []Cohort{}, Physical: map[string]int64{}}
 	var identity string
 	var databaseBytes int64
-	var wal sql.NullInt64
+	var mayReadWAL bool
 	err = tx.QueryRowContext(ctx, `SELECT transaction_timestamp(), d.oid::text||'/'||n.oid::text, pg_database_size(d.oid),
-      CASE WHEN has_function_privilege('pg_catalog.pg_ls_waldir()', 'EXECUTE') THEN (SELECT coalesce(sum(size),0) FROM pg_catalog.pg_ls_waldir()) END
-      FROM pg_database d JOIN pg_namespace n ON n.nspname=current_schema() WHERE d.datname=current_database()`).Scan(&s.At, &identity, &databaseBytes, &wal)
+      has_function_privilege('pg_catalog.pg_ls_waldir()', 'EXECUTE')
+      FROM pg_database d JOIN pg_namespace n ON n.nspname=current_schema() WHERE d.datname=current_database()`).Scan(&s.At, &identity, &databaseBytes, &mayReadWAL)
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +115,13 @@ func Capture(ctx context.Context, db *sql.DB, deployment string, days int) (*Sna
 	s.Since = s.At.Truncate(24*time.Hour).AddDate(0, 0, 1-days)
 	s.Source = fmt.Sprintf("%x", sha256.Sum256([]byte(deployment+"\x00"+identity)))
 	s.Physical["database"] = databaseBytes
-	if wal.Valid {
-		s.Physical["cluster.wal_files"] = wal.Int64
+	if mayReadWAL {
+		// 只有角色具有 EXECUTE 时才提交含 pg_ls_waldir 的语句，普通只读角色无需获得集群监控权限。
+		var wal int64
+		if err = tx.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM pg_catalog.pg_ls_waldir()").Scan(&wal); err != nil {
+			return nil, err
+		}
+		s.Physical["cluster.wal_files"] = wal
 	}
 	// 对本 schema 的表逐个计主表、TOAST（含自己的索引）及主表索引；其余应用表匿名合并。
 	rows, err := tx.QueryContext(ctx, `SELECT bucket, sum(table_bytes-toast_bytes)::bigint, sum(toast_bytes)::bigint, sum(index_bytes)::bigint FROM (

@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +26,8 @@ import (
 // addDirectories 统计操作员明确指定的本机目录已分配字节。du 限同一文件系统，错误时放弃整个快照。
 // 各类别可有包含关系，报告保留独立数字；只记录固定类别，目录路径和文件名不写入结果。
 func addDirectories(ctx context.Context, s *storageaudit.Snapshot, dirs map[string]*string) error {
-	for kind, ptr := range dirs {
+	for _, kind := range slices.Sorted(maps.Keys(dirs)) {
+		ptr := dirs[kind]
 		if *ptr == "" {
 			continue
 		}
@@ -131,6 +134,10 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 		result, err = storageaudit.Estimate(ctx, db, storageaudit.PlanOptions{MinRawBytes: *minRaw, OnlyDigest: *only, Before: cutoff, Cursor: *cursor, Rows: *rows, BatchBytes: *batch, RecordBytes: *record, ReserveBytes: *reserve})
 	}
 	if err != nil {
+		var usage storageaudit.OperatorError
+		if errors.As(err, &usage) {
+			return nil, usage
+		}
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) {
 			return nil, fmt.Errorf("%s failed (SQLSTATE %s)", args[0], pg.Code)

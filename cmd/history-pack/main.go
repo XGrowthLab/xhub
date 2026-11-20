@@ -67,6 +67,10 @@ func run(ctx context.Context, args []string, dsn string) ([]byte, error) {
 	defer db.Close()
 	p, err := storageaudit.Convert(ctx, db, o, args[0])
 	if err != nil {
+		var usage storageaudit.OperatorError
+		if errors.As(err, &usage) {
+			return nil, usage
+		}
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) {
 			return nil, fmt.Errorf("batch failed (SQLSTATE %s); retry from last confirmed cursor", pg.Code)
