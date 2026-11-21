@@ -25,7 +25,7 @@ class DeploymentBackupRestoreTest(unittest.TestCase):
         )
 
     def test_read_only_plan_with_completed_restore(self):
-        """备份两个发布点并从合成外部镜像副本完整恢复，验证保留、范围、账单值及只读行为。"""
+        """在一次性容器备份和恢复两个发布点，再加入能读目录的截断副本，验证盘点、保留与账单；测试后删除容器和文件。"""
         self.container = "xhub-backup-test-" + uuid.uuid4().hex[:10]
         subprocess.run(["docker", "run", "--rm", "-d", "--name", self.container,
                         "-e", "POSTGRES_PASSWORD=synthetic-fixture", "postgres:16"],
@@ -41,6 +41,8 @@ class DeploymentBackupRestoreTest(unittest.TestCase):
         self.docker_pg("createdb", "-U", "postgres", "fixture")
         tables = ["api_keys", "kv", "organizations", "usage_events", "users", "extra_runtime_table"]
         sql = "".join(f"CREATE TABLE {name}(value integer); INSERT INTO {name} VALUES (7);" for name in tables)
+        # 末尾带有足够大的真实数据段，截掉尾部后目录仍可列出，完整读出则必须失败。
+        sql += "CREATE TABLE zz_payload AS SELECT md5(i::text) AS value FROM generate_series(1,2048) AS i;"
         self.docker_pg("psql", "-U", "postgres", "-d", "fixture", "-v", "ON_ERROR_STOP=1",
                        input=sql.encode(), capture_output=True)
         with tempfile.TemporaryDirectory() as work:
@@ -86,6 +88,17 @@ class DeploymentBackupRestoreTest(unittest.TestCase):
                                restored_at=datetime.now(timezone.utc).isoformat(),
                                offsite_reference="synthetic-isolated-copy")
                 (proofs / f"{name}.{archive.name}.json").write_text(json.dumps(receipt), encoding="utf-8")
+            unfinished = backups / "interrupted-release" / "database.dump.partial"
+            unfinished.parent.mkdir()
+            unfinished.write_bytes((backups / "current-release" / "database.dump").read_bytes()[:-1024])
+            with unfinished.open("rb") as source:
+                toc = self.docker_pg("pg_restore", "--list", stdin=source, capture_output=True)
+                self.assertIn(b"TABLE DATA public usage_events", toc.stdout)
+                source.seek(0)
+                with self.assertRaises(subprocess.CalledProcessError) as truncated:
+                    self.docker_pg("pg_restore", "--file=/dev/null", stdin=source, capture_output=True)
+                self.assertIn(b"could not read from input file", truncated.exception.stderr)
+            original = unfinished.read_bytes()
             default = json.loads(subprocess.check_output(command, timeout=25))
             self.assertEqual(default["review_candidates"], 0)
             report = json.loads(subprocess.check_output(command + ["--proof-dir", str(proofs), "--verify-limit", "2"], timeout=25))
@@ -94,8 +107,23 @@ class DeploymentBackupRestoreTest(unittest.TestCase):
             self.assertEqual(archived["accounts-only"]["classification"], "partial")
             self.assertEqual(archived["current-release"]["rotation"], "retain")
             self.assertEqual(archived["older-release"]["rotation"], "review_candidate")
+            pending = archived["interrupted-release"]
+            self.assertEqual((pending["classification"], pending["rotation"], pending["evidence"]),
+                             ("unfinished", "retain", "missing"))
+            self.assertEqual(pending["bytes"], len(original))
+            self.assertEqual(unfinished.read_bytes(), original)
+            self.assertEqual(report["archive_allocated_bytes"], sum(
+                f.stat().st_blocks * 512 for folder in backups.iterdir() for f in folder.iterdir()
+            ))
             self.assertTrue((backups / "older-release" / "database.dump").is_file())
             self.assertNotIn("synthetic-isolated-copy", json.dumps(report))
+            # 模拟导出任务重试成功后按正式名发布，同一工具下次盘点即可检查完整归档的目录。
+            shutil.copyfile(backups / "current-release" / "database.dump", unfinished)
+            unfinished.rename(unfinished.with_suffix(""))
+            published = json.loads(subprocess.check_output(command, timeout=25))
+            rows = [r for r in published["archives"] if r["snapshot"] == "interrupted-release"]
+            self.assertEqual([(r["archive"], r["classification"], r["rotation"]) for r in rows],
+                             [("database.dump", "full_candidate", "retain")])
 
 
 if __name__ == "__main__":
