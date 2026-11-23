@@ -82,14 +82,17 @@ export function registerProtocolProbe(locale: "en" | "zh-CN") {
       await stableGoto(page, "/mine-models");
       await page.getByRole("textbox", { name: tr("Search"), exact: true }).fill(name);
       const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
-      await card.getByRole("button", { name: tr("myModels.api"), exact: true }).click();
+      await card.getByRole("button", { name: tr("consoleUi.modelDetails"), exact: true }).click();
       const dialog = page.getByRole("dialog", { name, exact: true });
+      await dialog.getByRole("tab", { name: tr("myModels.api"), exact: true }).click();
       await dialog.screenshot({ path: testInfo.outputPath("protocol-selector-desktop.png") });
       // 页面生成的每个对话入口都实际执行；英文示例和公开名必须保持，未经验证媒体不出现在此列表。
       const available = await (await page.request.get(GATEWAY + "/model/available", { headers })).json();
       const endpoints = available.data.find((m: any) => m.id === name).endpoints;
       expect(endpoints).toHaveLength(10);
       for (const endpoint of endpoints) {
+        const mode = endpoint.kind === "bypass" ? "protocolProbe.bypass" : "protocolProbe.standard";
+        await dialog.getByRole("button", { name: tr(mode), exact: true }).click();
         await dialog.getByRole("combobox", { name: tr("myModels.selectEndpoint") }).click();
         await page
           .getByRole("option")
@@ -119,8 +122,13 @@ export function registerProtocolProbe(locale: "en" | "zh-CN") {
       await stableGoto(page, "/playground");
       await page.getByPlaceholder(tr("Select a Model"), { exact: true }).fill(name);
       await page.getByRole("option").filter({ hasText: name }).click();
+      const bypassMode = page.getByRole("button", { name: tr("protocolProbe.bypass"), exact: true });
+      await bypassMode.click();
+      await expect(bypassMode).toHaveAttribute("aria-pressed", "true");
       await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();
-      await page.getByRole("option").filter({ hasText: "/bypass/openai/v1/chat/completions" }).click();
+      const options = page.getByRole("option");
+      await expect(options.filter({ has: page.getByText("/v1/chat/completions", { exact: true }) })).toHaveCount(0);
+      await options.filter({ hasText: "/bypass/openai/v1/chat/completions" }).click();
       await page
         .getByPlaceholder(tr("Type your message... (Shift+Enter for new line)"))
         .fill("Reply briefly. 用户原文");

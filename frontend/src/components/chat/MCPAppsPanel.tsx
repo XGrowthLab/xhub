@@ -22,6 +22,7 @@ import {
 } from "../mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
+import { ApiError } from "@/lib/http/client";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { useT } from "@/i18n";
@@ -111,13 +112,29 @@ function getAvatarColor(name: string): string {
 }
 
 type TabKey = "all" | "connected";
+type ServerLoad = {
+  accessToken: string;
+  connectMode?: boolean;
+  attempt: number;
+  status: "ready" | "unavailable" | "failed";
+};
 
 const TOOLS_FETCH_CONCURRENCY = 5;
 
+/** 显示当前会话可用的 MCP 服务；接收会话凭据、已选服务和回调。
+ * 连接页调用，按网关结果区分服务为空、功能未提供和暂时读取失败；保留原授权流程。 */
 const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange, connectMode }) => {
   const t = useT();
   const [servers, setServers] = useState<MCPServer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [serverLoad, setServerLoad] = useState<ServerLoad>();
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  // 以本次会话和加载次数匹配读取结果，避免重试或切换账号时显示上次的列表。
+  const loadState =
+    serverLoad?.accessToken === accessToken &&
+    serverLoad.connectMode === connectMode &&
+    serverLoad.attempt === loadAttempt
+      ? serverLoad.status
+      : "loading";
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
@@ -145,13 +162,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   const detailServer = servers.find((s) => s.server_id === detailServerId);
 
+  /** 检查当前连接模式是否支持服务的认证类型；s 为网关服务，返回本地化提示或 null。 */
   const connectUnavailabilityLabel = useCallback(
     (s: MCPServer): string | null => {
       if (!connectMode) return null;
-      if (isUnsupportedOnGatewayConnect(s.auth_type)) return "Not supported on this connection";
+      if (isUnsupportedOnGatewayConnect(s.auth_type)) return t("connect.serverAuthUnsupported");
       return null;
     },
-    [connectMode],
+    [connectMode, t],
   );
 
   const connectableNow = useCallback(
@@ -200,8 +218,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
   );
 
   useEffect(() => {
+    if (!accessToken) return;
     let current = true;
     const isCurrentLoad = () => current;
+    const request = { accessToken, connectMode, attempt: loadAttempt };
 
     fetchMCPServers(accessToken, undefined, connectMode)
       .then(async (serverData) => {
@@ -211,7 +231,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         const oauthServers = reachable.filter((s) => getMcpOAuthMode(s) === "authorization_code");
         commitServers(reachable);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
-        setLoading(false);
+        setServerLoad({ ...request, status: "ready" });
 
         oauthServers.forEach((s) => checkOauthCredential(s, isCurrentLoad));
 
@@ -225,16 +245,16 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         }
         if (isCurrentLoad()) setLoadingCounts(false);
       })
-      .catch(() => {
-        if (isCurrentLoad()) {
-          commitServers([]);
-          setLoading(false);
-        }
+      .catch((error: unknown) => {
+        if (!isCurrentLoad()) return;
+        commitServers([]);
+        const status = error instanceof ApiError && [404, 410, 501].includes(error.status) ? "unavailable" : "failed";
+        setServerLoad({ ...request, status });
       });
     return () => {
       current = false;
     };
-  }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential]);
+  }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential, loadAttempt]);
 
   useEffect(() => {
     if (oauthConnected.size === 0) return;
@@ -339,17 +359,14 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     (s) => selectedServers.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null,
   ).length;
 
-  const emptyStateText = () => {
-    if (servers.length === 0) {
-      return connectMode
-        ? "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access."
-        : "No MCP servers configured. Add servers in Tools -> MCP Servers.";
-    }
-    return activeTab === "connected" ? "No servers connected yet." : "No servers match your search.";
-  };
+  // 暂时失败可重试；已下线或未实现的接口提供独立说明，避免把权限或服务故障当成空目录。
+  const emptyMessage =
+    servers.length === 0
+      ? t("connect.serversEmpty")
+      : t(activeTab === "connected" ? "connect.connectedEmpty" : "connect.searchEmpty");
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
-  if (detailServer) {
+  if (detailServer && loadState === "ready") {
     const name = nameOf(detailServer);
     const isConnected = selectedServers.includes(name);
     const isTogglingOn = togglingOn.has(name);
@@ -450,7 +467,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
           {[
             [t("Server ID"), detailServer.server_id],
             [t("Transport"), handleTransport(detailServer.transport, detailServer.spec_path)],
-            [t("Status"), isConnected ? t("Connected") : t("Not connected")],
+            [t("Status"), t(isConnected ? "connect.connected" : "connect.notConnected")],
           ]
             .filter(([, v]) => v)
             .map(([label, value], i, arr) => (
@@ -479,7 +496,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             ))}
           </div>
         ) : detailTools.length === 0 ? (
-          <div className="text-muted-foreground text-[13px] py-2">{t("No tools available")}</div>
+          <div className="text-muted-foreground text-[13px] py-2">{t("connect.toolsEmpty")}</div>
         ) : (
           <div className="flex flex-col gap-2">
             {detailTools.map((tool) => (
@@ -503,35 +520,34 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h2 className="m-0 text-lg font-semibold text-foreground">{t("connect.mcpServers")}</h2>
-            {!connectMode && (
-              <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5 uppercase tracking-wider">
-                {t("Beta")}
-              </span>
-            )}
           </div>
           {connectMode ? (
-            <p className="m-0 text-[13px] text-muted-foreground">{t("Click a server to see its tools and connect")}</p>
+            <p className="m-0 text-[13px] text-muted-foreground">{t("connect.browseConnectedApps")}</p>
           ) : (
             <div className="flex items-center gap-3">
-              <p className="m-0 text-[13px] text-muted-foreground">{t("Browse tools, authenticate once, use in chat")}</p>
-              {loadingCounts ? (
+              <p className="m-0 text-[13px] text-muted-foreground">{t("connect.browseChatApps")}</p>
+              {loadingCounts && (
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   {t("Loading tools...")}
                 </span>
-              ) : totalTools > 0 ? (
+              )}
+              {!loadingCounts && totalTools > 0 && (
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Wrench className="h-3 w-3" />
-                  {totalTools} {t("tool")}{totalTools !== 1 ? "s" : ""} {t("available")}
+                  {totalTools === 1
+                    ? t("connect.oneToolAvailable")
+                    : t("connect.toolsAvailable", { count: totalTools })}
                 </span>
-              ) : null}
+              )}
             </div>
           )}
         </div>
         <div className="relative w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
-            placeholder={t("Search servers...")}
+            aria-label={t("connect.searchServers")}
+            placeholder={t("connect.searchServers")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9 text-[13px] h-9"
@@ -545,13 +561,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             {t("All")}
           </TabsTrigger>
           <TabsTrigger value="connected" className="rounded-none px-4 py-2 text-[13px]">
-            Connected{connectedCount > 0 ? ` (${connectedCount})` : ""}
+            {connectedCount > 0 ? t("connect.connectedCount", { count: connectedCount }) : t("connect.connected")}
           </TabsTrigger>
         </TabsList>
       </Tabs>
 
-      {loading ? (
-        <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
+      {loadState === "loading" && (
+        <div aria-busy="true" className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {Array.from({ length: 6 }, (_, idx) => (
             <div
               key={idx}
@@ -565,9 +581,27 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
             </div>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">{emptyStateText()}</div>
-      ) : (
+      )}
+      {loadState === "failed" && (
+        <div role="alert" className="rounded-lg border p-6 text-sm">
+          <p>{t("connect.serversLoadFailed")}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            {t("connect.retry")}
+          </Button>
+        </div>
+      )}
+      {(loadState === "unavailable" || (loadState === "ready" && filtered.length === 0)) && (
+        <p role="status" className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          {loadState === "unavailable" ? t("connect.serversUnavailable") : emptyMessage}
+        </p>
+      )}
+      {loadState === "ready" && filtered.length > 0 && (
         <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {
             const name = nameOf(server);

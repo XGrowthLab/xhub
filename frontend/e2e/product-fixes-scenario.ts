@@ -76,6 +76,7 @@ test("browser cache flush restores a billed miss after a free hit", async ({ pag
       await stableGoto(page, "/caching");
       const flushed = page.waitForResponse((response) => new URL(response.url()).pathname === "/flushall" && response.request().method() === "POST");
       await page.getByRole("button", { name: "清空当前进程缓存", exact: true }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "确认清空", exact: true }).click();
       const response = await flushed;
       expect(response.status(), await response.text()).toBe(200);
       await expect(page.getByTestId("cache-result")).toContainText("当前进程的响应缓存已清空");

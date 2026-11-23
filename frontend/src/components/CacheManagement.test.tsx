@@ -1,16 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { CacheManagement } from "./CacheManagement";
 import { translate, type Locale } from "@/i18n/translate";
 
 const state = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), locale: "en" as Locale }));
 vi.mock("@/components/networking", () => ({ apiClient: { get: state.get, post: state.post } }));
 vi.mock("@/i18n", () => ({ useT: () => (key: string) => translate(state.locale, key) }));
+/** 打开已就绪的清理确认框；返回对话框内查询工具，不触发后台写入。 */
+function openConfirmation(locale: Locale = "en") {
+  fireEvent.click(screen.getByRole("button", { name: translate(locale, "cacheAdmin.flush") }));
+  return within(screen.getByRole("alertdialog", { name: translate(locale, "cacheAdmin.flushTitle") }));
+}
+
 const ready = { enabled: true, cache_type: "memory", scope: "process", configurable: false };
 
 /** 缓存视图单元测试：纯mock隔离请求，覆盖双语正常/坏响应/失败恢复；每例清理DOM和mock，不代替真实E2E。 */
 describe("CacheManagement", () => {
-  beforeEach(() => { cleanup(); vi.resetAllMocks(); state.locale = "en"; state.get.mockResolvedValue(ready); state.post.mockResolvedValue({ status: "ok", message: "cache flushed" }); });
+  beforeEach(() => {
+    cleanup();
+    vi.resetAllMocks();
+    state.locale = "en";
+    state.get.mockResolvedValue(ready);
+    state.post.mockResolvedValue({ status: "ok", message: "cache flushed" });
+  });
 
   /** 已就绪状态下确认清理契约并切换语言；无外部资源，beforeEach回收DOM。 */
   it.each(["en", "zh-CN"] as const)("shows actual scope and confirmed flush in %s", async (locale) => {
@@ -20,7 +32,11 @@ describe("CacheManagement", () => {
     expect(await screen.findByText(tr("ready"))).toBeVisible();
     expect(screen.getByText(tr("unsupported"))).toBeVisible();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: tr("flush") }));
+    const confirmation = openConfirmation(locale);
+    expect(confirmation.getByText(tr("flushScope"))).toBeVisible();
+    fireEvent.click(confirmation.getByRole("button", { name: tr("cancel") }));
+    expect(state.post).not.toHaveBeenCalled();
+    fireEvent.click(openConfirmation(locale).getByRole("button", { name: tr("flushConfirm") }));
     expect(await screen.findByText(tr("flushed"))).toBeVisible();
     expect(state.post).toHaveBeenCalledWith("/flushall", { accessToken: "session", body: {} });
     state.locale = locale === "en" ? "zh-CN" : "en";
@@ -46,10 +62,10 @@ describe("CacheManagement", () => {
     else state.post.mockResolvedValueOnce(mode === "null" ? null : { status: "success" });
     render(<CacheManagement accessToken="session" />);
     await screen.findByText(translate("en", "cacheAdmin.ready"));
-    fireEvent.click(screen.getByRole("button", { name: translate("en", "cacheAdmin.flush") }));
+    fireEvent.click(openConfirmation().getByRole("button", { name: translate("en", "cacheAdmin.flushConfirm") }));
     expect(await screen.findByRole("alert")).toHaveTextContent(translate("en", "cacheAdmin.flushFailed"));
     expect(screen.queryByText("private detail")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: translate("en", "cacheAdmin.flush") }));
+    fireEvent.click(openConfirmation().getByRole("button", { name: translate("en", "cacheAdmin.flushConfirm") }));
     expect(await screen.findByText(translate("en", "cacheAdmin.flushed"))).toBeVisible();
   });
 

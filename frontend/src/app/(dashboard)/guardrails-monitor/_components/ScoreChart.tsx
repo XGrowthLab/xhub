@@ -11,9 +11,16 @@ interface ScoreChartProps {
   data?: Array<{ date: string; passed: number; blocked: number }>;
 }
 
+/** 展示监控接口的通过和拦截趋势。接收按日期汇总的计数，返回双语图例、数据或空状态，不修改接口数据。 */
 export function ScoreChart({ data }: ScoreChartProps) {
   const t = useT();
-  const chartData = data && data.length > 0 ? data : [];
+  const passedLabel = t("pages.guardrailsMonitor.passed");
+  const blockedLabel = t("pages.guardrailsMonitor.blocked");
+  const chartData = (data ?? []).map(({ date, passed, blocked }) => ({
+    date,
+    [passedLabel]: passed,
+    [blockedLabel]: blocked,
+  }));
 
   return (
     <Card>
@@ -26,7 +33,7 @@ export function ScoreChart({ data }: ScoreChartProps) {
             <BarChart
               data={chartData}
               index="date"
-              categories={["passed", "blocked"]}
+              categories={[passedLabel, blockedLabel]}
               colors={["green", "red"]}
               valueFormatter={(v) => v.toLocaleString()}
               yAxisWidth={48}

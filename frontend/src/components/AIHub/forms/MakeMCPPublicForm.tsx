@@ -213,7 +213,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
           <p className="text-sm text-warning">
             <strong>{t("Warning:")}</strong> {t("Once you make these MCP servers public, anyone who can go to the")}{" "}
-            <code>/ui/model_hub_table</code> {t("will be able to know they exist on the proxy.")}
+            <code>/model_hub</code> {t("will be able to know they exist on the proxy.")}
           </p>
         </div>
 

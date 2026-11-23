@@ -51,6 +51,153 @@ export function displayRate(rate: DeploymentRate): string {
   );
 }
 
+type PriceLine = {
+  rate: DeploymentRate;
+  tier?: DeploymentTier;
+  dimension: string;
+};
+
+type PriceComparison = { current?: PriceLine; proposed?: PriceLine };
+
+/** 将部署快照中的平价或分档展开为明细行，供只读价格对比使用。
+ * 单位由预览接口按实际计费规则返回；平价和分档各有独立比较维度，来源费率对象保持原样。
+ */
+function priceLines(rates: DeploymentRate[] | null, tiers?: DeploymentTier[]): PriceLine[] {
+  /** 把费率与可选档位映射到展示维度；返回新行，供新旧费率配对，不改变原快照。 */
+  function toLine(rate: DeploymentRate, tier?: DeploymentTier): PriceLine {
+    const dimension = JSON.stringify([rate.side, rate.variant || "", rate.window, tier?.input_range, tier?.output_range]);
+    return { rate, tier, dimension };
+  }
+  return tiers?.length
+    ? tiers.flatMap((tier) => tier.rates.map((rate) => toLine(rate, tier)))
+    : (rates ?? []).map((rate) => toLine(rate));
+}
+
+/** 按档位、计价项、时段与单位把选中的部署价格配对，返回对照行供列表和确认框显示。
+ * 优先匹配同单位，只有同一维度双方各剩一项时才视为单位改变；全部未匹配项保留，避免对照时隐去新增或移除价。
+ */
+function comparePrices(row: DeploymentPrice): PriceComparison[] {
+  const current = priceLines(row.current, row.current_tiers);
+  const remaining = priceLines(row.proposed, row.proposed_tiers);
+  const pairs = current.map((line): PriceComparison => {
+    const index = remaining.findIndex(
+      (candidate) => candidate.dimension === line.dimension && candidate.rate.measure === line.rate.measure,
+    );
+    return { current: line, proposed: index >= 0 ? remaining.splice(index, 1)[0] : undefined };
+  });
+  for (const pair of pairs) {
+    if (pair.proposed || !pair.current) continue;
+    const dimension = pair.current.dimension;
+    if (pairs.filter((item) => !item.proposed && item.current?.dimension === dimension).length !== 1) continue;
+    if (remaining.filter((line) => line.dimension === dimension).length !== 1) continue;
+    const index = remaining.findIndex((line) => line.dimension === dimension);
+    pair.proposed = remaining.splice(index, 1)[0];
+  }
+  return [...pairs, ...remaining.map((proposed) => ({ proposed }))];
+}
+
+/** 返回部署的并排价格表，参数是只读预览快照；由候选列表和确认对话框复用。
+ * 每行展示明确的费率单位、输入和输出范围与变更状态，无候选时保留真实现价和原因，不写入后台。
+ */
+function DeploymentPriceComparisonTable({ row }: { row: DeploymentPrice }) {
+  const t = useT();
+  const comparisons = comparePrices(row);
+
+  /** 根据展示费率的一侧渲染美元金额和计价单位；无费率时保留占位符，供比较行调用。 */
+  function amount(line: PriceLine | undefined) {
+    if (!line) return <span className="text-muted-foreground">—</span>;
+    const { rate } = line;
+    return (
+      <span className="tabular-nums">
+        {displayRate(rate)} / {measures.includes(rate.measure) ? t("marketSync.unit." + rate.measure) : rate.measure}
+      </span>
+    );
+  }
+
+  /** 把费率及可选范围转成可阅读的行标题；返回本地化标签和档位说明，不推断未知维度。 */
+  function itemLabel({ rate, tier }: PriceLine) {
+    const parts =
+      rate.variant === "search" && rate.measure === "query"
+        ? [t("marketSync.variant.search")]
+        : [
+            sides.includes(rate.side) ? t("marketSync.side." + rate.side) : rate.side,
+            rate.variant && (variants.includes(rate.variant) ? t("marketSync.variant." + rate.variant) : rate.variant),
+          ];
+    if (rate.window !== "all")
+      parts.push(windows.includes(rate.window) ? t("marketSync.window." + rate.window) : rate.window);
+    return (
+      <>
+        <span>{parts.filter(Boolean).join(" · ")}</span>
+        {tier && (
+          <div className="mt-1 space-y-0.5 text-xs font-normal text-muted-foreground">
+            <p>
+              {t("marketSync.inputTier", {
+                lower: tier.input_range[0].toLocaleString("en-US"),
+                upper: tier.input_range[1].toLocaleString("en-US"),
+              })}
+            </p>
+            <p>
+              {t("marketSync.outputTier", {
+                lower: tier.output_range[0].toLocaleString("en-US"),
+                upper: tier.output_range[1].toLocaleString("en-US"),
+              })}
+            </p>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {comparisons.length > 0 && (
+        <table className="w-full table-fixed text-left text-sm">
+          <caption className="sr-only">{t("marketSync.compareRates", { name: row.name })}</caption>
+          <thead className="bg-muted/40">
+            <tr>
+              <th scope="col" className="w-2/5 break-words p-2 font-medium">
+                {t("marketSync.priceItem")}
+              </th>
+              <th scope="col" className="w-[30%] break-words p-2 font-medium">
+                {t("marketSync.current")}
+              </th>
+              <th scope="col" className="w-[30%] break-words p-2 font-medium">
+                {t("marketSync.proposed")}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparisons.map(({ current, proposed }, index) => {
+              let change: string | undefined;
+              if (!row.reason) {
+                if (!current) change = t("marketSync.priceAdded");
+                else if (!proposed) change = t("marketSync.priceRemoved");
+                else if (current.rate.measure !== proposed.rate.measure) change = t("marketSync.unitChanged");
+              }
+              return (
+                <tr key={index} className="border-t align-top">
+                  <th scope="row" className="break-words p-2 font-medium">
+                    {itemLabel((current ?? proposed)!)}
+                    {change && (
+                      <span className="mt-1 block text-xs font-medium text-amber-700 dark:text-amber-300">
+                        {change}
+                      </span>
+                    )}
+                  </th>
+                  <td className="break-words p-2">{amount(current)}</td>
+                  <td className="break-words p-2">{amount(proposed)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {!comparisons.length && <p className="text-muted-foreground">{t("marketSync.noPrice")}</p>}
+      {row.reason && <p className="text-muted-foreground">{t("marketSync.reason." + row.reason)}</p>}
+    </div>
+  );
+}
+
 /** 展示部署现价与市场候选并提供单个/批量确认；参数为管理会话，返回完整操作区。
  * 所有价格与权限由后台重查；默认不勾选任何部署，失败保持预览并提示刷新，无自动调价。 */
 export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | null }) {
@@ -103,52 +250,6 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
     }
   }
 
-  /** 按真实费率维度显示可比较的明细，参数为空时明确缺价；返回 JSX，无写操作。 */
-  function rates(items: DeploymentRate[] | null) {
-    if (!items?.length) return <span className="text-muted-foreground">{t("marketSync.noPrice")}</span>;
-    return (
-      <ul className="space-y-1.5">
-        {items.map((rate, index) => (
-          <li key={index} className="flex flex-wrap justify-between gap-x-4 gap-y-1">
-            <span>
-              {sides.includes(rate.side) ? t("marketSync.side." + rate.side) : rate.side}
-              {rate.variant
-                ? ` · ${variants.includes(rate.variant) ? t("marketSync.variant." + rate.variant) : rate.variant}`
-                : ""}
-              {rate.window !== "all"
-                ? ` · ${windows.includes(rate.window) ? t("marketSync.window." + rate.window) : rate.window}`
-                : ""}
-            </span>
-            <span className="tabular-nums">
-              {displayRate(rate)} /{" "}
-              {measures.includes(rate.measure) ? t("marketSync.unit." + rate.measure) : rate.measure}
-            </span>
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  /** 按来源给出的左开右闭输入范围展示各档费率；参数为已确认或候选快照，不修改价格。 */
-  function priceDetails(items: DeploymentRate[] | null, tiers?: DeploymentTier[]) {
-    if (!tiers?.length) return rates(items);
-    return (
-      <ol className="space-y-4">
-        {tiers.map((tier, index) => (
-          <li key={index} className="space-y-2">
-            <p className="font-medium">
-              {t("marketSync.inputTier", {
-                lower: tier.input_range[0].toLocaleString("en-US"),
-                upper: tier.input_range[1].toLocaleString("en-US"),
-              })}
-            </p>
-            {rates(tier.rates)}
-          </li>
-        ))}
-      </ol>
-    );
-  }
-
   return (
     <section aria-label={t("marketSync.prices")} className="space-y-4 rounded-xl border bg-card p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -188,8 +289,8 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
           <caption className="sr-only">{t("marketSync.prices")}</caption>
           <thead className="bg-muted/40">
             <tr>
-              {["deployment", "current", "proposed", "action"].map((key) => (
-                <th className="p-4" key={key}>
+              {["deployment", "comparison", "action"].map((key) => (
+                <th scope="col" className={key === "comparison" ? "w-[65%] p-4" : "p-4"} key={key}>
                   {t("marketSync." + key)}
                 </th>
               ))}
@@ -223,9 +324,8 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
                     </span>
                   </label>
                 </td>
-                <td className="p-4">{priceDetails(row.current, row.current_tiers)}</td>
                 <td className="p-4">
-                  {row.reason ? t("marketSync.reason." + row.reason) : priceDetails(row.proposed, row.proposed_tiers)}
+                  <DeploymentPriceComparisonTable row={row} />
                 </td>
                 <td className="p-4">
                   {row.changed && !row.reason && (
@@ -248,7 +348,7 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
           if (!open && !busy) setConfirm([]);
         }}
       >
-        <DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-2xl">
+        <DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{t("marketSync.confirm", { count: confirm.length })}</DialogTitle>
             <DialogDescription>{t("marketSync.confirmHelp")}</DialogDescription>
@@ -258,15 +358,8 @@ export function DeploymentPriceUpdates({ accessToken }: { accessToken: string | 
               <li key={row.id} className="rounded-lg border p-4">
                 <strong>{row.name}</strong>
                 {row.manual && <p className="mt-1 text-sm">{t("marketSync.manualWarning")}</p>}
-                <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <h3 className="mb-2 text-sm font-medium">{t("marketSync.current")}</h3>
-                    {priceDetails(row.current, row.current_tiers)}
-                  </div>
-                  <div>
-                    <h3 className="mb-2 text-sm font-medium">{t("marketSync.proposed")}</h3>
-                    {priceDetails(row.proposed, row.proposed_tiers)}
-                  </div>
+                <div className="mt-3">
+                  <DeploymentPriceComparisonTable row={row} />
                 </div>
               </li>
             ))}

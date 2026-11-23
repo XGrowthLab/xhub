@@ -1,10 +1,11 @@
 vi.mock("@/lib/http/enterprise", () => ({ listSSO: vi.fn().mockResolvedValue([]) }));
-import { fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, cleanup, within } from "@testing-library/react";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { I18nProvider, translate, useI18n } from "@/i18n";
 import { downloadUserCsv } from "./user_csv";
 import BulkCreateUsersButton from "./bulk_create_users_button";
 import { userCreateCall } from "./networking";
+import { listSSO } from "@/lib/http/enterprise";
 vi.mock("./networking", () => ({ userCreateCall: vi.fn() }));
 afterEach(() => {
   cleanup();
@@ -75,6 +76,45 @@ describe("bulk user import", () => {
     expect(screen.getByText("预算必须是有限的非负数字。")).toBeVisible();
     expect(screen.getByText("Original@example.com")).toBeVisible();
     expect(screen.queryByText("Budget must be a finite non-negative number.")).not.toBeInTheDocument();
+  });
+
+  /** 内存 CSV 包含长标识和跨页错误；核对双语列、团队与 SSO 回显、全文件校验；afterEach 卸载组件，无真实开户。 */
+  it("previews long identities and blocks submission for invalid rows on another page", async () => {
+    const connectionID = "directory-".repeat(12);
+    const identity = "员工编号-" + "1234567890".repeat(10);
+    vi.mocked(listSSO).mockResolvedValueOnce([{ connection_id: connectionID, name: "Employee directory", enabled: true }]);
+    render(
+      <I18nProvider initialLocale="en">
+        <ToggleLocale />
+        <BulkCreateUsersButton accessToken="test" teams={[{ team_id: "team-1", team_alias: "Design team" }]} possibleUIRoles={null} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Bulk create users" }));
+    await waitFor(() => expect(screen.getByLabelText("Upload CSV")).toBeEnabled());
+    const rows = Array.from({ length: 12 }, (_, i) =>
+      `row-${i}@example.com,user,password123,用户 ${i},team-1,${i === 11 ? "bad" : "0"},0,${connectionID},${identity}-${i}`,
+    );
+    upload("user_email,user_role,password,user_alias,team_id,max_budget,budget_reset_day,sso_connection_id,sso_external_id\n" + rows.join("\n"), "Upload CSV");
+    const preview = within(await screen.findByRole("region", { name: "CSV import preview" }));
+    expect(preview.getByRole("columnheader", { name: "Team" })).toBeVisible();
+    expect(preview.getByRole("columnheader", { name: "User alias" })).toBeVisible();
+    const firstRow = within(preview.getByRole("row", { name: /row-0@example.com/ }));
+    expect(firstRow.getByText("Design team")).toBeVisible();
+    expect(firstRow.getByText("用户 0")).toBeVisible();
+    expect(firstRow.getByText(identity + "-0")).toBeVisible();
+    expect(firstRow.getByText("Employee directory")).toBeVisible();
+    expect(firstRow.getByText(connectionID)).toBeVisible();
+    expect(firstRow.getByText(translate("en", "userBudgetReset.none"))).toBeVisible();
+    expect(screen.queryByText("password123")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create 12 users" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: translate("en", "userCsv.next") }));
+    expect(preview.getByText(translate("en", "userCsv.budgetError"))).toBeVisible();
+    fireEvent.click(screen.getByText("Switch test locale"));
+    expect(screen.getByRole("region", { name: "CSV 导入预览" })).toBeVisible();
+    expect(preview.getByRole("columnheader", { name: "团队" })).toBeVisible();
+    expect(preview.getByText(identity + "-11")).toBeVisible();
+    expect(preview.getByText(translate("zh-CN", "userCsv.budgetError"))).toBeVisible();
+    expect(userCreateCall).not.toHaveBeenCalled();
   });
 
   // 下载工具必须创建可用链接并延后释放URL；全部DOM与计时器在finally还原。

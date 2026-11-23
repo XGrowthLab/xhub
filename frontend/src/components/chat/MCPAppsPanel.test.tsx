@@ -6,6 +6,7 @@ import MCPAppsPanel from "./MCPAppsPanel";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import type { MCPServer } from "../mcp_tools/types";
 import { setServerRootPath } from "@/lib/serverRootPath";
+import { ApiError } from "@/lib/http/client";
 
 vi.mock("../networking", () => ({
   fetchMCPServers: vi.fn(),
@@ -298,5 +299,40 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     });
 
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
+  });
+});
+
+describe("MCPAppsPanel availability", () => {
+  /** 前置未配置服务器的成功响应；显示联系管理员的有效指引，不引导至不存在的菜单，无写入。 */
+  it("explains an empty server registry with a usable next step", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue([]);
+    renderPanel();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "No MCP servers are available to your account. Ask your administrator to configure or grant access to a server.",
+    );
+    expect(screen.getByRole("tab", { name: "Connected", exact: true })).toBeVisible();
+  });
+
+  /** 前置退役接口读失败；显示能力不支持提示而非空列表或重试，模拟响应不会写入数据。 */
+  it("reports an unimplemented MCP registry as unavailable", async () => {
+    vi.mocked(fetchMCPServers).mockRejectedValue(new ApiError("Not Found", 404, {}));
+    renderPanel();
+
+    expect(await screen.findByRole("status")).toHaveTextContent("This gateway does not provide MCP connections.");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  /** 前置临时失败再恢复；可重试、读回真实格式资源并保留原服务名，测试不保存服务。 */
+  it("allows retrying a temporary list failure", async () => {
+    vi.mocked(fetchMCPServers)
+      .mockRejectedValueOnce(new Error("Test temporary failure"))
+      .mockResolvedValueOnce(servers);
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the MCP server list.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("local_logo")).toBeVisible();
   });
 });

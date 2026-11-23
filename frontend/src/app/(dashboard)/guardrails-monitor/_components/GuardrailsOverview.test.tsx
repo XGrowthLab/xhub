@@ -5,6 +5,7 @@ import type {
   GuardrailUsageOverview,
   GuardrailUsageOverviewRow,
 } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
+import { I18nProvider } from "@/i18n";
 import { GuardrailsOverview } from "./GuardrailsOverview";
 
 const useGuardrailsUsageOverviewMock = vi.fn();
@@ -97,6 +98,19 @@ describe("GuardrailsOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useGuardrailsUsageOverviewMock.mockReturnValue({ data: overview, isLoading: false, error: null });
+  });
+
+  /** 使用含已计价和异常护栏的监控响应，验证中文标题、表头、状态及费用计算说明；组件自动卸载。 */
+  it("监控指标和计算说明完整使用中文", async () => {
+    const user = userEvent.setup();
+    render(<I18nProvider initialLocale="zh-CN"><GuardrailsOverview startDate="2026-08-01" endDate="2026-08-12" onSelectGuardrail={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByText("评估次数")).toBeVisible();
+    expect(screen.getByText("通过率")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: /失败率/ })).toBeVisible();
+    expect(await screen.findByText("警告")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "如何计算？" }));
+    expect(await screen.findByText("护栏费用 + 护栏费用 + … = 总费用")).toBeVisible();
+    expect(screen.getByText(/有 250 个单位无已知单价，未计入费用/)).toBeVisible();
   });
 
   it("asks for the usage overview of the selected window", () => {

@@ -32,6 +32,8 @@ interface SearchSelectProps {
   className?: string;
   inputId?: string;
   allowClear?: boolean;
+  /** 较长的完整路径需要可读时，允许选项副标题换行。 */
+  wrapSublabel?: boolean;
   "aria-label"?: string;
 }
 
@@ -53,6 +55,7 @@ export function SearchSelect({
   className,
   inputId,
   allowClear = true,
+  wrapSublabel = false,
   "aria-label": ariaLabel,
 }: SearchSelectProps) {
   const t = useT();
@@ -81,7 +84,17 @@ export function SearchSelect({
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
-        {countNoun && <p className="px-3 py-2 text-xs text-muted-foreground" role="status">共 {options.length} 个{countNoun}，当前匹配 {options.filter(option => matchesQuery(option, options.some(item => item.label === query) ? "" : query)).length} 个</p>}
+        {countNoun && (
+          <p className="px-3 py-2 text-xs text-muted-foreground" role="status">
+            共 {options.length} 个{countNoun}，当前匹配{" "}
+            {
+              options.filter((option) =>
+                matchesQuery(option, options.some((item) => item.label === query) ? "" : query),
+              ).length
+            }{" "}
+            个
+          </p>
+        )}
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (
@@ -90,7 +103,11 @@ export function SearchSelect({
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{item.label}</span>
                 {item.sublabel != null && item.sublabel !== "" && (
-                  <span className="truncate text-xs text-muted-foreground">{item.sublabel}</span>
+                  <span
+                    className={`text-xs text-muted-foreground ${wrapSublabel ? "break-all whitespace-normal" : "truncate"}`}
+                  >
+                    {item.sublabel}
+                  </span>
                 )}
               </span>
             </ComboboxItem>

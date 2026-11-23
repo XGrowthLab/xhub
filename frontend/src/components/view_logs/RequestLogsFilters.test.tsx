@@ -65,8 +65,9 @@ describe("RequestLogsFilters", () => {
   /** 前置普通日志；常用模型和账号直接可见，高级筛选折叠且不出现未实现字段；自动卸载。 */
   it("prioritizes common filters and removes unsupported or duplicated inputs", () => {
     renderFilters();
-    expect(screen.getByLabelText("Model")).toBeVisible();
-    expect(screen.getByText(/Suggestions come from all logs you can access/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveAccessibleDescription("Recommendations include active deployments. For historical models, enter the exact name.");
+    expect(screen.getByPlaceholderText("Public model name")).toBeVisible();
+    expect(screen.getByText("Suggestions use accessible logs in the selected time range.")).toBeVisible();
     expect(screen.getByPlaceholderText("Search an internal user")).toBeVisible();
     expect(screen.getByLabelText("Key fingerprint (SHA-256)")).not.toBeVisible();
     expect(screen.queryByText("End User")).not.toBeInTheDocument();
@@ -115,7 +116,7 @@ describe("RequestLogsFilters", () => {
     expect(option).not.toHaveTextContent(hash);
     await user.click(option);
     expect(input).toHaveValue(hash);
-    expect(screen.getByText(/not the secret key/i)).toBeVisible();
+    expect(input).toHaveAccessibleDescription("Enter the full fingerprint.");
   });
 
   /** 各字段选择已授权提示后保留完整原文，允许继续手动编辑；组件和查询由框架清理。 */
@@ -160,10 +161,10 @@ describe("RequestLogsFilters", () => {
   it("translates the fingerprint label and guidance", async () => {
     setActiveLocale("zh-CN");
     renderFilters();
-    expect(screen.getByText(/提示选项来自所选时间内有权查看的全部日志/)).toBeVisible();
+    expect(screen.getByText("建议来自所选时段内可访问的日志。")).toBeVisible();
+    expect(screen.getByPlaceholderText("公开模型名称")).toBeVisible();
     await userEvent.click(screen.getByText("高级筛选"));
-    expect(screen.getByLabelText("密钥指纹（SHA-256）")).toBeVisible();
-    expect(screen.getByText(/并非密钥明文/)).toBeVisible();
+    expect(screen.getByLabelText("密钥指纹（SHA-256）")).toHaveAccessibleDescription("请输入完整指纹。");
   });
 
   /** 前置分页用户选项；选择后发送准确 user_id，文字搜索发送时间范围与查询，不跨权限拉取全目录；mock 清理。 */

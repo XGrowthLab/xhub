@@ -481,7 +481,7 @@ describe("MakeModelPublicForm", () => {
 
     // Should show the warning message
     expect(screen.getByText(/Warning:/)).toBeInTheDocument();
-    expect(screen.getByText(/model_hub_table/)).toBeInTheDocument();
+    expect(screen.getByText("/model_hub", { exact: true })).toBeInTheDocument();
 
     // Should show total count (already verified by checking the presence of the confirmation step)
   });

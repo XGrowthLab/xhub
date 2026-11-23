@@ -575,11 +575,10 @@ func newLookup(rates []Rate) rateLookup {
 		}
 		// A search price is a query count. File it under both spellings so the
 		// call's own quantity decides which one is read.
-		if r.Measure == "second" && r.Variant == searchVariant {
-			asQuery := r
-			asQuery.Measure = "query"
+		asQuery, search := r.WebSearchQuery()
+		legacySearch := search && r.Measure != asQuery.Measure
+		if legacySearch {
 			asQuery.Variant = ""
-			asQuery.SourceKey = r.SourceKey
 			if key := rateKey("query", r.Side, "", r.Window); l.byKey[key].Measure == "" {
 				l.byKey[key] = asQuery
 			}
@@ -594,7 +593,7 @@ func newLookup(rates []Rate) rateLookup {
 		// Only a duration may be billed as a duration. The search qualifier is
 		// excluded here as well as being indexed as a query above, so a model
 		// that quotes searches is not charged for them twice under two measures.
-		if r.Measure == "second" && r.Variant == searchVariant {
+		if legacySearch {
 			continue
 		}
 		side := sideKey(r.Measure, r.Side, r.Window)

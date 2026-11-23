@@ -1,6 +1,18 @@
 "use client";
 
-// Legacy URL stays readable, while the current identity model has no tag CRUD.
-export default function Page() {
-  return <section className="p-6"><h1 className="text-xl font-semibold">标签</h1><p className="mt-4">当前权限模型不支持标签管理。请通过组织、团队和项目管理访问范围。</p></section>;
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useT } from "@/i18n";
+
+/** 保留旧标签管理书签的权限说明；无参数，返回本地化说明，供已登录用户查看，无读写副作用。 */
+export default function TagManagementPage() {
+  const { isAuthorized } = useAuthorized();
+  const t = useT();
+  if (!isAuthorized) return null;
+
+  return (
+    <section className="p-6">
+      <h1 className="text-xl font-semibold">{t("legacyRoutes.tagsTitle")}</h1>
+      <p className="mt-2 text-sm text-muted-foreground">{t("legacyRoutes.tagsBody")}</p>
+    </section>
+  );
 }

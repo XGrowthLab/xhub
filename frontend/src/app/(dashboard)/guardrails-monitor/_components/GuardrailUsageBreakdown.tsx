@@ -87,13 +87,13 @@ const counterColumns: ColumnDef<CounterRow>[] = [
 
 const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] => [
   {
-    header: label,
+    header: () => t(label),
     accessorKey: "id",
     cell: ({ row }) =>
       row.original.id ? (
         <IdCell value={row.original.id} variant="plain" copyable />
       ) : (
-        <span className="text-muted-foreground">{emptyLabel}</span>
+        <span className="text-muted-foreground">{t(emptyLabel)}</span>
       ),
   },
   {
@@ -114,17 +114,19 @@ const groupColumns = (label: string, emptyLabel: string): ColumnDef<GroupRow>[] 
 const teamColumns = groupColumns("Team", "No team");
 const keyColumns = groupColumns("Key", "No key");
 
+/** 展示用量与计价相乘的计算明细；参数为后端分项及总额，不修改账单。 */
 const CostMath = ({ counters, detail }: { counters: CounterRow[]; detail: GuardrailUsageDetail }) => { const t = useT(); return ((
-  <CalcPopover title={t("How this cost is calculated")} formula="priced units × price per unit = cost, per counter">
-    <MathTable rows={counters.map(counterMathRow)} total={formatCost(detail.cost)} />
-    <p className="text-xs text-muted-foreground">{t("Per-unit prices come from the cost map LiteLLM ships with.")}</p>
+  <CalcPopover title={t("How this cost is calculated")} formula={t("pages.guardrailsMonitor.counterCostFormula")}>
+    <MathTable rows={counters.map((counter) => counterMathRow(counter, t))} total={formatCost(detail.cost)} />
+    <p className="text-xs text-muted-foreground">{t("pages.guardrailsMonitor.unitPriceSource")}</p>
     <UnpricedNote unpriced={detail.untracked_usage_units} provider={detail.provider} />
   </CalcPopover>
 )); };
 
+/** 展示各用量计数器及合计；参数为真实计数，按当前语言展示。 */
 const UnitsMath = ({ units }: { units: GuardrailUsageDetail["usage_units"] }) => { const t = useT(); return ((
-  <CalcPopover title={t("How usage units add up")} formula="counter + counter + … = usage units">
-    <MathTable rows={unitsMathRows(units)} total={totalUnits(units).toLocaleString()} />
+  <CalcPopover title={t("How usage units add up")} formula={t("pages.guardrailsMonitor.counterUnitsFormula")}>
+    <MathTable rows={unitsMathRows(units, t)} total={totalUnits(units).toLocaleString()} />
     <p className="text-xs text-muted-foreground">
       {t("Units are the billable counters the provider reported for this guardrail, added up over every call.")}
     </p>
@@ -135,17 +137,18 @@ const TableHeading = ({ title }: { title: string }) => { const t = useT(); retur
   <h6 className="text-sm font-semibold text-foreground">{title}</h6>
 )); };
 
+/** 展示已选护栏的用量与费用分项；接收详情接口响应，空用量时显示空状态，不改动计费记录。 */
 export function GuardrailUsageBreakdown({ detail }: { detail: GuardrailUsageDetail }) {
   const t = useT();
   const counters = counterRows(detail);
-  const unpriced = unpricedSummary(detail.untracked_usage_units);
+  const unpriced = unpricedSummary(detail.untracked_usage_units, t);
 
   return (
     <section className="space-y-4" aria-label={t("Usage and cost")}>
       <div>
         <h5 className="mb-0 text-base font-semibold text-foreground">{t("Usage & Cost")}</h5>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {t("Billable units the provider reported for this guardrail and what LiteLLM priced them at")}
+          {t("pages.guardrailsMonitor.billedUsageDescription")}
         </p>
       </div>
 

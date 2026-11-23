@@ -4,7 +4,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册日志候选的真实浏览器回归；locale 为界面语言。隔离数据库和本地上游创建两用户、模型及密钥；
- * 验证候选、权限隔离、筛选结果和手输路径，finally 删除资源，运行器删除测试 schema。 */
+ * 验证候选、权限隔离、窄屏筛选、键盘看详情和真实日志结果，finally 删除资源，运行器删除测试 schema。 */
 export function registerLogFilterOptionsScenario(locale: "en" | "zh-CN") {
   test("log filter suggestions and isolation " + locale, async ({ page }, info) => {
     test.setTimeout(180_000);
@@ -57,7 +57,40 @@ export function registerLogFilterOptionsScenario(locale: "en" | "zh-CN") {
       await stableGoto(page, "/logs");
       const panel = page.getByRole("tabpanel", { name: /^(日志|Logs)$/ });
       const open = panel.getByRole("button", { name: locale === "en" ? /^Filters(?:\s*\d+)?$/ : /^筛选(?:\s*\d+)?$/ });
-      const dialog = page.getByRole("dialog");
+      // 通过键盘激活真实调用的详情按钮，关闭后回到同一个按钮并保留可用的键盘调宽。
+      const detailsTrigger = panel.getByRole("button", { name: translate(locale, "logsUX.openDetails", { id: calls[0] }), exact: true });
+      await detailsTrigger.focus();
+      await page.keyboard.press("Shift+Tab");
+      await expect(detailsTrigger).not.toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(detailsTrigger).toBeFocused();
+      await page.keyboard.press("Enter");
+      const details = page.getByRole("dialog", { name: translate(locale, "Request {value0} details", { value0: calls[0] }) });
+      await expect(details).toBeVisible();
+      await expect(page).toHaveURL(new RegExp("log_id=" + encodeURIComponent(calls[0])));
+      const widthHandle = details.getByRole("separator", { name: tr("logsUX.resizeDrawer") });
+      await details.getByRole("button", { name: tr("logsUX.expandDrawer") }).click();
+      await expect(widthHandle).toHaveAttribute("aria-valuenow", "100");
+      await widthHandle.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(widthHandle).toHaveAttribute("aria-valuenow", "95");
+      await page.keyboard.press("Escape");
+      await expect(details).not.toBeVisible();
+      await expect(detailsTrigger).toBeFocused();
+      await expect(page).not.toHaveURL(/log_id=/);
+
+      // 真实窄窗的控件可滚动，但底部应用和重置操作必须一直可见。
+      await page.setViewportSize({ width: 420, height: 720 });
+      const dialog = page.getByRole("dialog", { name: tr("Filters"), exact: true });
+      await open.click();
+      await expect(dialog).toHaveAccessibleDescription(tr("logsUX.filterHint"));
+      await expect.poll(async () => (await dialog.boundingBox())?.width).toBe(420);
+      await expect(dialog.getByLabel(tr("Model"), { exact: true })).toHaveAttribute("placeholder", tr("logsUX.modelHint"));
+      await dialog.getByText(tr("logsUX.advanced"), { exact: true }).click();
+      await dialog.getByLabel(tr("requestMetrics.inbound"), { exact: true }).scrollIntoViewIfNeeded();
+      await expect(dialog.getByRole("button", { name: tr("logsUX.apply"), exact: true })).toBeInViewport();
+      await expect(dialog.getByRole("button", { name: tr("Reset"), exact: true })).toBeInViewport();
+      await dialog.getByRole("button", { name: tr("Close"), exact: true }).click();
       const labels = ["Model", "Key Alias", "logsUX.keyFingerprint", "logsUX.supplier", "requestMetrics.inbound"];
       const fields = ["model", "key_alias", "key_hash", "supplier", "inbound_endpoint"];
       const values = [aliases[0], keyAliases[0], fingerprint, UPSTREAM, "/v1/chat/completions"];
@@ -104,7 +137,7 @@ export function registerLogFilterOptionsScenario(locale: "en" | "zh-CN") {
       await dialog.getByRole("button", { name: tr("logsUX.apply"), exact: true }).click();
       expect((await (await missing).json()).total).toBe(0);
       await expect(panel.getByText(tr("No matching requests"), { exact: true })).toBeVisible();
-      await info.attach("log-filter-options-contract", { body: JSON.stringify({ locale, fields, scoped: true }, null, 2), contentType: "application/json" });
+      await info.attach("log-filter-options-contract", { body: JSON.stringify({ locale, fields, scoped: true, narrowWidth: 420, keyboardDetail: true }, null, 2), contentType: "application/json" });
     } finally {
       if (keys.length) expect((await page.request.post(GATEWAY + "/key/delete", { headers: adminHeaders, data: { keys } })).status()).toBe(200);
       for (const team_id of teams) expect((await page.request.post(GATEWAY + "/team/delete", { headers: adminHeaders, data: { team_id } })).status()).toBe(200);

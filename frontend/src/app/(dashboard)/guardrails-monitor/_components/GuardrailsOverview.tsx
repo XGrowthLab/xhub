@@ -56,6 +56,7 @@ const EMPTY_METRICS = {
   untracked: {} as UsageUnits,
 };
 
+/** 显示护栏行的用量汇总和分项提示；参数为真实计数，空数据以占位符呈现。 */
 function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnits"] }) {
   const t = useT();
   const counters = Object.entries(units);
@@ -66,7 +67,7 @@ function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnit
         <ul className="space-y-0.5">
           {counters.map(([counter, n]) => (
             <li key={counter}>
-              {counterLabel(counter)}: {n.toLocaleString()}
+              {counterLabel(counter, t)}: {n.toLocaleString()}
             </li>
           ))}
         </ul>
@@ -87,7 +88,7 @@ function TotalCostMath({
 }) {
   const t = useT();
   return (
-    <CalcPopover title={t("How this cost is calculated")} formula="guardrail + guardrail + … = guardrail cost">
+    <CalcPopover title={t("How this cost is calculated")} formula={t("pages.guardrailsMonitor.costFormula")}>
       <MathTable
         rows={rows
           .filter((row) => row.cost != null)
@@ -102,14 +103,15 @@ function TotalCostMath({
   );
 }
 
+/** 显示护栏行的已计价金额，以及未计价用量的可访问提示；不重新计算账单。 */
 function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
   const t = useT();
-  const unpriced = unpricedSummary(row.untrackedUsageUnits);
+  const unpriced = unpricedSummary(row.untrackedUsageUnits, t);
   return (
     <span className="inline-flex w-full items-center justify-end gap-1">
       {unpriced && (
         <CellTooltip
-          content={`${unpriced}: these units have no known price and are left out of the cost`}
+          content={t("pages.guardrailsMonitor.costExcludedHint")}
           trigger={<TriangleAlert aria-label={unpriced} className="size-3.5 shrink-0 text-warning" />}
         />
       )}
@@ -118,6 +120,7 @@ function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
   );
 }
 
+/** 展示所选时间窗内的护栏统计和性能表。参数包含会话、日期和详情回调；不修改护栏设置。 */
 export function GuardrailsOverview({
   accessToken = null,
   startDate,
@@ -180,7 +183,7 @@ export function GuardrailsOverview({
                   : "bg-destructive"
             }`}
           />
-          <span className="text-xs text-muted-foreground capitalize">{row.original.status}</span>
+          <span className="text-xs text-muted-foreground capitalize">{t(`pages.guardrailsMonitor.status.${row.original.status}`)}</span>
         </span>
       ),
     },
@@ -331,7 +334,7 @@ export function GuardrailsOverview({
           value={formatCost(metrics.totalCost)}
           valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
           icon={<CircleDollarSign className="size-4" />}
-          subtitle={unpricedSummary(metrics.untracked) ?? undefined}
+          subtitle={unpricedSummary(metrics.untracked, t) ?? undefined}
           hint={<TotalCostMath rows={activeData} total={metrics.totalCost} untracked={metrics.untracked} />}
         />
         <MetricCard label={t("Active Guardrails")} value={metrics.count} />
@@ -357,7 +360,7 @@ export function GuardrailsOverview({
           data={sorted}
           getRowId={(row) => row.id}
           isLoading={isLoading}
-          noDataMessage="No data for this period"
+          noDataMessage={t("pages.guardrailsMonitor.emptyPerformance")}
           onRowClick={(row) => onSelectGuardrail(row.id)}
           rowClassName={() => "cursor-pointer"}
           sortingMode="server"

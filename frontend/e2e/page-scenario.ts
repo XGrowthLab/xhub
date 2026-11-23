@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { translate } from "../src/i18n/translate";
 import { GATEWAY, loginAdmin, t, uiPath, watchGateway } from "./helpers";
 import { recordPage } from "./report";
 import { discoverPages } from "./routes";
@@ -98,9 +99,34 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       observed.guardrails = await guardrailsResponse.json();
       await expect.poll(() => observed.guardrails !== undefined, { timeout: 15_000 }).toBe(true);
       const rows = observed.guardrails?.rows ?? [];
-      if (rows.length === 0) await expect(page.getByText("No data for this period").first()).toBeVisible({ timeout: 15_000 });
+      if (rows.length === 0) await expect(page.getByText(t("pages.guardrailsMonitor.emptyPerformance")).first()).toBeVisible({ timeout: 15_000 });
       else await expect(page.getByRole("table")).toBeVisible({ timeout: 15_000 });
       await expect(page.getByText(t("Failed to load data. Try again."))).toHaveCount(0);
+      await expect(page.getByText("评估次数", { exact: true })).toBeVisible();
+      await expect(page.getByText("通过率", { exact: true })).toBeVisible();
+      await expect(page.getByText("请求处理结果趋势", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await expect(page.getByText("Total Evaluations", { exact: true })).toBeVisible();
+      await expect(page.getByText("Request Outcomes Over Time", { exact: true })).toBeVisible();
+    }
+    if (item.route === "/admin-panel") {
+      await expect(page.getByRole("group", { name: t("enterprise.identitySection") }).getByRole("tab", { name: "SCIM" })).toBeVisible();
+      const logs = page.getByRole("group", { name: t("enterprise.storageSection") }).getByRole("tab", { name: t("enterprise.tabs.logs") });
+      await logs.click();
+      await expect(logs).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("link", { name: t("pages.adminPanel.openUsers") }).click();
+      await expect(page).toHaveURL(/\/ui\/users\/?$/);
+    }
+    if (item.route === "/chat") {
+      await expect(page.getByRole("heading", { name: /^(早上好|下午好|晚上好)/ })).toBeVisible();
+      await expect(page.getByText(t("pages.chat.welcome.intro"), { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: t("pages.chat.welcome.code"), exact: true }).click();
+      await expect(page.getByPlaceholder(t("How can I help you today?"))).toHaveValue("Code: ");
+      await page.goto(uiPath("/"));
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await page.goto(uiPath("/chat"));
+      await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: translate("en", "pages.chat.welcome.code"), exact: true })).toBeVisible();
     }
     if (item.route === "/chat/api-keys") {
       await expect(

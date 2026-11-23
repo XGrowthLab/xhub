@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strings"
 
 	"github.com/sunqirui1987/xhub/internal/catalog"
 	llmdialogue "github.com/sunqirui1987/xhub/internal/llm/dialogue"
@@ -61,7 +60,7 @@ func SearchUsage(raw map[string]any) (int, bool, error) {
 }
 
 // budgetSearchRate 从冻结费率选择当前时段的明确搜索单价；rates 为已验证费率，window 为当前计费时段。
-// 返回单价或缺失；同一窗口重复、无效单位及非有限价格均报错，绝不回落为猜测价或免费。
+// 返回已归一化的搜索单价或缺失；同一窗口重复、无效单位及非有限价格均报错，绝不回落为猜测价或免费。
 func budgetSearchRate(rates []catalog.Rate, window string) (*catalog.Rate, error) {
 	for _, selectedWindow := range []string{window, "all"} {
 		var selected *catalog.Rate
@@ -69,7 +68,7 @@ func budgetSearchRate(rates []catalog.Rate, window string) (*catalog.Rate, error
 			if rate.Measure != "query" || rate.Side != "output" || rate.Window != selectedWindow {
 				continue
 			}
-			if rate.Variant != "search" && rate.SourceKey != "search_context_cost_per_query" && !strings.HasPrefix(rate.SourceKey, "web_search_req") {
+			if _, isSearch := rate.WebSearchQuery(); !isSearch {
 				continue
 			}
 			if selected != nil || rate.Fallback || rate.UnitSize <= 0 || math.IsNaN(rate.USD) || math.IsInf(rate.USD, 0) || rate.USD < 0 {

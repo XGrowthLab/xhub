@@ -84,31 +84,39 @@ test("fresh isolated user sees empty chat usage and logs", async ({ page }) => {
   }
 });
 }
-/** 用途：注册独立场景「model hubs require login then allow searching the public price catalog」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
+/** 注册公开模型中心测试；无参数、无返回值。检查历史书签参数、登录和真实模型搜索，不写配置。 */
 export function registerSC007() {
-
-
-test("model hubs require login then allow searching the public price catalog", async ({ page }) => {
-  const guard = watchGateway(page);
-  for (const route of ["/model_hub", "/model_hub_table"]) {
-    await page.goto(uiPath(route));
+  test("model hubs require login then allow searching the public price catalog", async ({ page }) => {
+    const guard = watchGateway(page);
+    const query = "?key=legacy%2Bfixture&label=one&label=two&empty=";
+    for (const alias of ["/model_hub_table", "/ui/model_hub_table", "/model-hub-table", "/ui/model-hub-table", "/ui/model_hub"]) {
+      const redirect = await page.request.get(alias + query, { maxRedirects: 0 });
+      expect(redirect.status(), alias).toBe(307);
+      // Next 在同源响应中可以返回相对 Location；解析后仍需保持同源及原查询。
+      const source = new URL(redirect.url());
+      const target = new URL(redirect.headers()["location"], source);
+      expect(target.origin).toBe(source.origin);
+      expect(target.pathname + target.search).toBe("/model_hub" + query);
+    }
+    await page.goto("/ui/model_hub_table");
     await expect(page).toHaveURL(/\/login/);
     await loginAdmin(page);
-    await page.goto(uiPath(route));
-    await noDashboardError(page, route);
+    await page.goto("/ui/model-hub-table");
+    await expect(page).toHaveURL(/\/model_hub$/);
+    await noDashboardError(page, "/model_hub");
+
     const catalog = await page.request.get(`${GATEWAY}/public/v1/model_hub?page=1&page_size=1`);
     expect(catalog.ok()).toBeTruthy();
     const name = (await catalog.json()).data[0].model_group as string;
-    await page.getByPlaceholder(t("Search model names...")).fill(name);
+    const search = page.getByRole("textbox", { name: t("Search model names"), exact: true });
+    await expect(search).toHaveAttribute("placeholder", t("Search model names..."));
+    await search.fill(name);
     await expect(page.getByRole("row").filter({ hasText: name }).first()).toBeVisible();
-    await page.getByPlaceholder(t("Search model names...")).fill("e2e-model-that-does-not-exist");
+    await search.fill("e2e-model-that-does-not-exist");
     await expect(page.getByText(t("No matching models"))).toBeVisible();
-    await page.context().clearCookies();
-    await page.evaluate(() => sessionStorage.clear());
-    recordPage(route, "pass");
-  }
-  await guard.assertOk();
-});
+    recordPage("/model_hub", "pass");
+    await guard.assertOk();
+  });
 }
 /** 用途：注册独立场景「a created user can sign in with the initial password」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC008() {

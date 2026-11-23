@@ -134,6 +134,15 @@ beforeEach(() => {
 });
 
 describe("PublicModelHub", () => {
+  /** 已加载的模型中心在两种语言下都有可访问搜索名称；后台仅用内存目录夹具，组件统一卸载。 */
+  it.each([["en", "Search model names", "Search model names..."], ["zh-CN", "搜索模型名称", "搜索模型名称…"]] as const)(
+    "uses a localized model search in %s", async (locale, label, placeholder) => {
+      setActiveLocale(locale);
+      renderHub();
+      expect(await screen.findByRole("textbox", { name: label })).toHaveAttribute("placeholder", placeholder);
+    },
+  );
+
   /** 前置公开配置仍返回开发版本；中英文页面保留自定义说明但不显示内部版本，DOM 与查询夹具由框架清理。 */
   it.each(["en", "zh-CN"] as const)("keeps the build version out of the public About section in %s", async (locale) => {
     setActiveLocale(locale);

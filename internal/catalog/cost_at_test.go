@@ -976,3 +976,32 @@ func assertClose(t *testing.T, label string, got, want float64) {
 		t.Fatalf("%s = %v, want %v", label, got, want)
 	}
 }
+
+// TestWebSearchQueryClassification 验证历史搜索、当前搜索语义与真实时长的分类。
+// 输入均为内存费率，检查金额与来源保留；不修改原费率或全局目录。
+func TestWebSearchQueryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, measure, variant, source string
+		search                         bool
+	}{
+		{"legacy", "second", "search", "web_search_req", true},
+		{"canonical", "query", "search", "web_search_req", true},
+		{"flat", "query", "", "search_context_cost_per_query", true},
+		{"tier", "query", "", "web_search_req_peak", true},
+		{"duration", "second", "", "output_cost_per_second", false},
+		{"other query", "query", "", "other_tool", false},
+		{"tokens", "token", "search", "web_search_req", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := Rate{Measure: tc.measure, Variant: tc.variant, SourceKey: tc.source, Side: "output", Window: "all", UnitSize: 1, USD: .02}
+			got, isSearch := original.WebSearchQuery()
+			want := original
+			if tc.search {
+				want.Measure = "query"
+			}
+			if isSearch != tc.search || got != want {
+				t.Fatalf("搜索分类或费率值错误：得到 %+v/%v，预期 %+v/%v", got, isSearch, want, tc.search)
+			}
+		})
+	}
+}

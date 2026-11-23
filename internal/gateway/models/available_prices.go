@@ -25,7 +25,7 @@ type availablePriceTier struct {
 }
 
 // publicRates 复制可公开的价格字段；参数为已解码费率，返回完整安全快照及有效标记。
-// 模型卡片展示调用；非法金额或缺失单位使整组无效，不能把坏数据呈现为免费，无外部副作用。
+// 模型卡片展示调用；搜索单位与调价预览一致，非法金额或缺失单位使整组无效，无外部副作用。
 func publicRates(rates []catalog.Rate) ([]availableRate, bool) {
 	if len(rates) == 0 {
 		return nil, false
@@ -35,6 +35,7 @@ func publicRates(rates []catalog.Rate) ([]availableRate, bool) {
 		if rate.Measure == "" || rate.Side == "" || rate.Window == "" || rate.USD < 0 || math.IsNaN(rate.USD) || math.IsInf(rate.USD, 0) {
 			return nil, false
 		}
+		rate = displayDeploymentRate(rate)
 		result = append(result, availableRate{Measure: rate.Measure, Side: rate.Side, Variant: rate.Variant, Window: rate.Window, USD: rate.USD})
 	}
 	return result, true

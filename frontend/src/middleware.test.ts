@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 
-import { appPageWritePath, brandIconReadPath, dashboardAppPath, documentationAssetRequest, middleware } from "./middleware";
+import { brandIconReadPath, dashboardAppPath, documentationAssetRequest, middleware } from "./middleware";
 
 /** 前置为真实 Next 请求；品牌 SVG 的 GET/HEAD 精确路径交给 Next，/ui 别名保留查询参数，无网络或持久化数据。 */
 it.each(["GET", "HEAD"])("serves exact brand icon %s requests through Next", (method) => {
@@ -40,25 +40,16 @@ it("routes only documentation screenshot reads to public assets", () => {
   expect(documentationAssetRequest("GET", "/v1/models")).toBe(false);
 });
 
-const removed = [
+const retired = [
   "/agents",
   "/workflows",
   "/memory",
-  "/policies",
-  "/search-tools",
-  "/vector-stores",
   "/tool-policies",
   "/budgets",
-  "/caching",
-  "/prompts",
+  "/policies",
+  "/vector-stores",
   "/transform-request",
-  "/tag-management",
   "/ui-theme",
-  "/old-usage",
-  "/api-reference",
-  "/model-hub-table",
-  "/model_hub",
-  "/model_hub_table",
 ];
 
 describe("dashboardAppPath", () => {
@@ -77,10 +68,15 @@ describe("dashboardAppPath", () => {
     }
   });
 
-  it("renders write pages and their /ui copies in Next", () => {
-    for (const path of removed) {
+  /** 下线页面与别名已移出 App Router；前置实际路径解析器，保留正常页面，无数据清理。 */
+  it("lists only the real pages, without retired routes or aliases", () => {
+    for (const path of [...retired, "/model_hub_table", "/model-hub-table", "/api-reference", "/chat/integrations"]) {
+      expect(dashboardAppPath(path), path).toBeNull();
+      expect(dashboardAppPath(`/ui${path}`), path).toBeNull();
+    }
+    for (const path of ["/search-tools", "/caching", "/prompts", "/model_hub", "/tag-management", "/old-usage"]) {
       expect(dashboardAppPath(path), path).toBe(path);
-      expect(dashboardAppPath(`/ui${path}`), `/ui${path}`).toBe(path);
+      expect(dashboardAppPath(`/ui${path}`), path).toBe(path);
     }
   });
 
@@ -93,13 +89,6 @@ describe("dashboardAppPath", () => {
     expect(dashboardAppPath("/ui/mine-models")).toBe("/mine-models");
     expect(dashboardAppPath("/price-data")).toBe("/price-data");
     expect(dashboardAppPath("/ui/price-data")).toBe("/price-data");
-  });
-
-  it("sends guardrail writes on the page path to the gateway and keeps the page GET", () => {
-    expect(appPageWritePath("POST", "/guardrails")).toBe("/guardrails");
-    expect(appPageWritePath("GET", "/guardrails")).toBeNull();
-    expect(appPageWritePath("POST", "/ui/guardrails")).toBeNull();
-    expect(appPageWritePath("POST", "/guardrails/list")).toBeNull();
   });
 
   it("renders the oauth callback in Next", () => {
@@ -121,7 +110,6 @@ it("routes the documentation namespace without swallowing similar API paths", ()
   }
   expect(dashboardAppPath("/docs-api")).toBeNull();
   expect(dashboardAppPath("/v1/models")).toBeNull();
-  expect(appPageWritePath("POST", "/docs")).toBeNull();
 });
 
 /** 前置模型监控页面已注册，验证直达和 /ui 别名均交给页面、统计 API 仍交后台；纯路径检查无需清理。 */
@@ -129,4 +117,55 @@ it("routes model monitor pages separately from monitor API", () => {
   expect(dashboardAppPath("/model-monitor")).toBe("/model-monitor");
   expect(dashboardAppPath("/ui/model-monitor/")).toBe("/model-monitor");
   expect(dashboardAppPath("/models/monitor")).toBeNull();
+});
+
+/** 明确的 /ui 旧书签读请求进入下线页；前置真实 Next 请求，保留查询参数，裸路径继续代理网关，无数据写入。 */
+it.each(["GET", "HEAD"])("rewrites only explicit console %s reads to the retired page", (method) => {
+  const gateway = process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000";
+  for (const path of retired) {
+    const ui = middleware(new NextRequest(`https://console.example/ui${path}?filter=keep`, { method }));
+    expect(ui.headers.get("x-middleware-rewrite")).toBe("https://console.example/retired?filter=keep");
+    const plain = middleware(new NextRequest(`https://console.example${path}?filter=keep`, { method }));
+    expect(plain.headers.get("x-middleware-rewrite")).toBe(new URL(path + "?filter=keep", gateway).href);
+  }
+});
+
+/** 兼容地址统一 307 到正式页面；前置 GET/HEAD，保留多值、空值和编码参数，无数据清理。 */
+it.each(["GET", "HEAD"])("redirects valid %s aliases without dropping query parameters", (method) => {
+  const query = "?key=fixture%2Bkey&label=a&label=b&flag=";
+  for (const [alias, target] of [
+    ["/model_hub_table", "/model_hub"],
+    ["/ui/model_hub_table", "/model_hub"],
+    ["/model-hub-table", "/model_hub"],
+    ["/ui/model-hub-table", "/model_hub"],
+    ["/ui/model_hub", "/model_hub"],
+    ["/api-reference", "/docs/api/models"],
+    ["/ui/api-reference", "/docs/api/models"],
+    ["/chat/integrations", "/ui/connect"],
+    ["/ui/chat/integrations", "/ui/connect"],
+  ]) {
+    const response = middleware(new NextRequest(`https://console.example${alias}${query}`, { method }));
+    expect(response.status, alias).toBe(307);
+    expect(response.headers.get("location"), alias).toBe(`https://console.example${target}${query}`);
+  }
+});
+
+/** 验证同名 API 的方法分流；实际 Next 请求测试写入仍交网关，且 /gw 读取和规则页面正常，无数据清理。 */
+it.each([
+  ["POST", "/policies", "/policies"],
+  ["POST", "/ui/policies", "/policies"],
+  ["PUT", "/ui/policies/id", "/policies/id"],
+  ["POST", "/guardrails", "/guardrails"],
+  ["POST", "/ui/guardrails", "/guardrails"],
+  ["POST", "/ui/api-reference", "/api-reference"],
+  ["GET", "/gw/budgets", "/budgets"],
+  ["GET", "/gw/model_hub", "/model_hub"],
+  ["GET", "/ui/budgets/detail", "/budgets/detail"],
+  ["GET", "/v1/memory", "/v1/memory"],
+])("keeps %s %s on the gateway", (method, pathname, path) => {
+  const response = middleware(new NextRequest(`https://console.example${pathname}?page=2`, { method }));
+  expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("x-middleware-rewrite")).toBe(
+    new URL(path + "?page=2", process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000").href,
+  );
 });

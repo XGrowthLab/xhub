@@ -27,7 +27,7 @@ const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   ...overrides,
 });
 
-const noopDeps = { onSessionClick: vi.fn() };
+const noopDeps = { onSessionClick: vi.fn(), onRowClick: vi.fn() };
 
 /** 前置后台 error 状态而没有旧版 metadata；验证表格显示失败而非成功，自动卸载清理 DOM。 */
 it("labels backend error rows as failure", () => {
@@ -42,6 +42,7 @@ function renderRows(rows: LogEntry[], deps = noopDeps) {
     <DataTable
       data={rows}
       columns={getRequestLogsTableColumns(deps)}
+      onRowClick={deps.onRowClick}
       getRowId={(row) => row.request_id}
       size="compact"
     />,
@@ -268,10 +269,34 @@ describe("Model column", () => {
 });
 
 describe("row action cells", () => {
+  /** 前置不同语言的日志列表；Tab 和 Enter 打开同一条日志且只触发一次，指针仍可点击普通单元格。
+   * 保存并恢复当前语言，组件及回调由测试框架清理。 */
+  it.each(["en", "zh-CN"] as const)("opens the request details button in %s", async (locale) => {
+    const original = getActiveLocale();
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    try {
+      setActiveLocale(locale);
+      renderRows([logEntry({ request_id: "request-enter" })], { ...noopDeps, onRowClick });
+      const button = screen.getByRole("button", { name: t("logsUX.openDetails", { id: "request-enter" }) });
+      button.focus();
+      await user.tab({ shift: true });
+      expect(button).not.toHaveFocus();
+      await user.tab();
+      expect(button).toHaveFocus();
+      await user.keyboard("{Enter}");
+      expect(onRowClick).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ request_id: "request-enter" }));
+      await user.click(screen.getByText(t("Success")));
+      expect(onRowClick).toHaveBeenCalledTimes(2);
+    } finally {
+      setActiveLocale(original);
+    }
+  });
+
   /** 前置正常 Hash 元数据；验证标识仅为文本且点击不调用会话动作，测试框架自动清理 DOM 与 mock。 */
   it("displays the key hash as plain text without a key action", async () => {
     const user = userEvent.setup();
-    const deps = { onSessionClick: vi.fn() };
+    const deps = { ...noopDeps, onSessionClick: vi.fn() };
     renderRows([logEntry({ request_id: "req-key", metadata: { user_api_key: "sk-hash-9" } })], deps);
 
     const cell = screen.getByRole("cell", { name: "sk-hash-9" });
@@ -296,7 +321,7 @@ describe("row action cells", () => {
   /** 前置两行共享会话 ID；验证点击回调仍传递目标日志，测试框架自动清理 DOM 与 mock。 */
   it("reports the clicked row from the session cell, so two rows sharing a session id stay distinguishable", async () => {
     const user = userEvent.setup();
-    const deps = { onSessionClick: vi.fn() };
+    const deps = { ...noopDeps, onSessionClick: vi.fn() };
     renderRows(
       [
         logEntry({ request_id: "req-key-a", session_id: "sess-42", api_key: "key-a" }),

@@ -159,3 +159,37 @@ func TestModelinkDeepSeekSearchAndWindows(t *testing.T) {
 		})
 	}
 }
+
+// TestSoftSearchLegacyMixedQuote 验证 Token 和旧搜索费率混合时按实测次数计费，并拒绝重复搜索报价。
+// 供搜索兼容回归使用；仅操作内存部署，普通每秒价和严格预算的选择路径保持独立，无资源需清理。
+func TestSoftSearchLegacyMixedQuote(t *testing.T) {
+	dep := strictBudgetDeployment()
+	dep.ModelInfo["pricing_source"] = "manual"
+	tokenRates := []catalog.Rate{
+		{Measure: "token", Side: "input", Variant: "uncached", Window: "all", UnitSize: 1, USD: .000001},
+		{Measure: "token", Side: "output", Window: "all", UnitSize: 1, USD: .000002},
+	}
+	legacy := catalog.Rate{Measure: "second", Side: "output", Variant: "search", Window: "all", UnitSize: 1, USD: .01, SourceKey: "web_search_req"}
+	duration := catalog.Rate{Measure: "second", Side: "output", Window: "all", UnitSize: 1, USD: .4, SourceKey: "output_cost_per_second"}
+	rates := append(tokenRates, legacy, duration)
+	dep.LiteLLMParams["rates"] = rates
+	if strict, err := budgetSelectPrices(rates, "peak", ""); err != nil || strict.Search != nil {
+		t.Fatalf("严格预算不应解释旧搜索费率，实际 %+v，错误 %v", strict, err)
+	}
+	plan := NewSoftPricePlan(dep, time.Now())
+	raw := map[string]any{"prompt_tokens": 10, "completion_tokens": 2, "searches": 2, "seconds": 8}
+	charge, err := plan.Charge(raw)
+	if !plan.IncludesSearch() || err != nil || math.Abs(charge.Total-.020014) > 1e-12 {
+		t.Fatalf("旧搜索费率必须按次计入软预算，实际 %+v，错误 %v", charge, err)
+	}
+	canonical := legacy
+	canonical.Measure = "query"
+	dep.LiteLLMParams["rates"] = append(tokenRates, legacy, canonical)
+	if _, err := NewSoftPricePlan(dep, time.Now()).Charge(raw); err == nil {
+		t.Fatal("重复的旧和新搜索费率未标记歧义")
+	}
+	dep.LiteLLMParams["rates"] = append(tokenRates, duration)
+	if NewSoftPricePlan(dep, time.Now()).IncludesSearch() {
+		t.Fatal("普通秒价被标为搜索报价")
+	}
+}

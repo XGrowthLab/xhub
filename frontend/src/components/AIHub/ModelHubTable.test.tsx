@@ -64,10 +64,10 @@ describe("ModelHubTable", () => {
   beforeEach(() => {
     Object.defineProperty(window, "location", {
       value: {
-        href: "http://localhost:3000/model_hub_table",
+        href: "http://localhost:3000/model_hub",
         origin: "http://localhost:3000",
         hostname: "localhost",
-        pathname: "/model_hub_table",
+        pathname: "/model_hub",
         search: "",
         protocol: "http:",
         replace: mockLocationReplace,

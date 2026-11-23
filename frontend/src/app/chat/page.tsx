@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
+import { ChatWelcome } from "@/components/chat/ChatWelcome";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
@@ -19,15 +20,7 @@ import type { MCPEvent } from "@/components/chat/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { useT } from "@/i18n";
 
-const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
-
-function getGreeting(): string {
-  const h = new Date().getHours();
-  if (h >= 5 && h < 12) return "Good morning";
-  if (h >= 12 && h < 17) return "Good afternoon";
-  return "Good evening";
-}
 
 // Extract provider from model name for logo lookup.
 // Handles prefixed models ("groq/llama-3"), and detects well-known providers by keyword.
@@ -340,7 +333,6 @@ export default function ChatConversationPage() {
 
   const showBlankState = !activeConversation || activeConversation.messages.length === 0;
   const displayName = userEmail?.split("@")[0] ?? userId ?? "";
-  const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
 
   // Filtered models: selected one floats to the top, then alphabetical
   const filteredModels = (
@@ -500,31 +492,9 @@ export default function ChatConversationPage() {
 
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-background">
         {showBlankState ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-6 pb-20">
-            <h1 className="m-0 mb-8 text-[28px] font-semibold text-foreground tracking-tight text-center">
-              {greeting}
-            </h1>
-
-            <p className="-mt-4 mb-7 text-sm text-muted-foreground text-center max-w-[520px] leading-relaxed">
-              {t("Chat with 100+ LLMs + MCP tools; authenticate once, use them here.")}
-            </p>
-
-            <div className="w-full max-w-[680px]">{inputBar(false)}</div>
-
-            <div className="flex gap-2 mt-3.5 flex-wrap justify-center">
-              {SUGGESTIONS.map((s) => (
-                <Button
-                  key={s}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setInputText(s + ": ")}
-                  className="rounded-full px-4 text-muted-foreground"
-                >
-                  {s}
-                </Button>
-              ))}
-            </div>
-          </div>
+          <ChatWelcome name={displayName} onSuggestion={setInputText}>
+            {inputBar(false)}
+          </ChatWelcome>
         ) : (
           <div className="flex-1 min-h-0 flex flex-col mx-auto w-full px-6 relative" style={{ maxWidth: 760 }}>
             <div

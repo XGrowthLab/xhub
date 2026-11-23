@@ -78,7 +78,8 @@ test.afterEach(async ({ page }) => {
       "e2e-guardrails-invalid",
     ]);
   });
-test("花园展示创建入口、支持状态和提交护栏空态", async ({ page }) => {
+/** 前置管理员与本地网关，验证花园工作流和未开放的审核入口不再出现；无持久化写入。 */
+  test("花园展示创建入口和支持状态，隐藏未开放的提交审核", async ({ page }) => {
     const guard = watchGateway(page);
     await openTab(page, t("pages.guardrails.garden"));
     await expect(page.getByRole("heading", { name: "选择护栏实现", exact: true })).toBeVisible();
@@ -87,8 +88,7 @@ test("花园展示创建入口、支持状态和提交护栏空态", async ({ pa
     await expect(page.getByText("外部服务目录", { exact: true })).toBeVisible();
     await page.getByLabel("搜索护栏服务", { exact: true }).fill("Aporia");
     await expect(page.getByRole("button", { name: /Aporia/ })).toContainText("尚未移植");
-    await page.getByRole("tab", { name: t("pages.guardrails.submitted"), exact: true }).click();
-    await expect(page.getByText("Cannot read properties of undefined", { exact: false })).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: t("pages.guardrails.submitted"), exact: true })).toHaveCount(0);
     await guard.assertOk();
   });
 }

@@ -396,9 +396,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             <div className="flex items-center space-x-4">
               <p>{t("Model Hub URL:")}</p>
               <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                <p className="mr-2">{consoleHref("/ui/model_hub_table")}</p>
+                <p className="mr-2">{consoleHref("/model_hub")}</p>
                 <button
-                  onClick={() => void copyToClipboard(consoleHref("/ui/model_hub_table"))}
+                  onClick={() => void copyToClipboard(consoleHref("/model_hub"))}
                   className="p-1 hover:bg-accent rounded-sm transition-colors"
                   title={t("Copy URL")}
                 >

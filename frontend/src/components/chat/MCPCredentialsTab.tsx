@@ -2,9 +2,10 @@
 
 import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Trash2, Link } from "lucide-react";
+import { Loader2, Trash2, Link2 } from "lucide-react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
@@ -20,7 +21,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/lib/toast";
 import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
-import { useT, t } from "@/i18n";
+import { useI18n, type Locale, type TFunction } from "@/i18n";
+import { uiHref } from "@/utils/uiHref";
 
 const MCP_CREDENTIALS_QUERY_KEY = "mcp-user-credentials";
 
@@ -28,55 +30,60 @@ interface Props {
   accessToken: string;
 }
 
-function relativeTime(isoString: string | null | undefined): string {
+/** 格式化连接时间；isoString 为服务端时间、locale 为界面语言。凭据表调用，缺失或无效时间由调用方显示占位符。 */
+function relativeTime(isoString: string | null | undefined, locale: Locale): string {
   if (!isoString) return "";
-  try {
-    const date = new Date(isoString);
-    const diffMs = Date.now() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-    if (diffSec < 60) return "just now";
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return `${Math.floor(diffHr / 24)}d ago`;
-  } catch {
-    return "";
-  }
+  const elapsed = Date.now() - Date.parse(isoString);
+  if (!Number.isFinite(elapsed)) return "";
+  const seconds = Math.max(0, Math.floor(elapsed / 1_000));
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  if (seconds < 60) return format.format(0, "second");
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return format.format(-minutes, "minute");
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return format.format(-hours, "hour");
+  return format.format(-Math.floor(hours / 24), "day");
 }
 
-function expiryLabel(isoString: string | null | undefined): {
+/** 本地化凭据有效期；isoString 为 UTC 时间，t 为当前语言翻译函数。凭据表调用，缺少过期时间表示长期有效。 */
+function expiryLabel(
+  isoString: string | null | undefined,
+  t: TFunction,
+): {
   text: string;
   variant: "secondary" | "destructive" | "outline";
 } {
-  if (!isoString) return { text: t("Does not expire"), variant: "secondary" };
-  try {
-    const exp = new Date(isoString);
-    const diffMs = exp.getTime() - Date.now();
-    if (diffMs <= 0) return { text: "Expired", variant: "destructive" };
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHr / 24);
-    if (diffDay > 0) return { text: t("Expires in {diffDay}d", { diffDay }), variant: "outline" };
-    if (diffHr > 0) return { text: t("Expires in {diffHr}h", { diffHr }), variant: "outline" };
-    return { text: t("Expires in {diffMin}m", { diffMin }), variant: "outline" };
-  } catch {
-    return { text: "", variant: "outline" };
-  }
+  if (!isoString) return { text: t("connect.credentialsNoExpiry"), variant: "secondary" };
+  const remaining = Date.parse(isoString) - Date.now();
+  if (!Number.isFinite(remaining)) return { text: t("connect.credentialsExpiryUnknown"), variant: "secondary" };
+  if (remaining <= 0) return { text: t("connect.credentialsExpired"), variant: "destructive" };
+  const minutes = Math.max(1, Math.ceil(remaining / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return { text: t("connect.credentialsExpiresDays", { count: days }), variant: "outline" };
+  if (hours > 0) return { text: t("connect.credentialsExpiresHours", { count: hours }), variant: "outline" };
+  return { text: t("connect.credentialsExpiresMinutes", { count: minutes }), variant: "outline" };
 }
 
+/** 当前用户的 OAuth 凭据列表；accessToken 为会话凭据。供对话凭据页使用，区分加载、失败、空列表和现有连接。 */
 const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
-  const t = useT();
+  const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
 
-  const { data: credentials = [], isLoading: loading } = useQuery({
+  const {
+    data: credentials = [],
+    isLoading: loading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: [MCP_CREDENTIALS_QUERY_KEY, accessToken],
     queryFn: () => listMCPUserCredentials(accessToken),
     enabled: !!accessToken,
+    retry: false,
   });
 
+  /** 吊销一个服务的当前用户凭据；serverId 为服务标识。确认对话框调用，仅在后端成功后更新列表。 */
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));
     try {
@@ -85,7 +92,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
         (prev ?? []).filter((c) => c.server_id !== serverId),
       );
     } catch {
-      toast.error(t("Failed to revoke connection. Please try again."));
+      toast.error(t("connect.credentialsRevokeFailed"));
     } finally {
       setRevoking((prev) => {
         const n = new Set(prev);
@@ -95,16 +102,17 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
     }
   };
 
+  /** 读取凭据展示名；c 为凭据对象。别名缺失时用服务名或原始 ID，不修改值。 */
   const displayName = (c: MCPUserCredentialListItem) => c.alias || c.server_name || c.server_id;
 
   return (
     <div className="w-full">
       <div className="mb-4">
-        <h2 className="text-base font-semibold text-foreground mb-0.5">{t("App Credentials")}</h2>
-        <p className="text-sm text-muted-foreground m-0">{t("Your stored OAuth connections; used automatically in chat")}</p>
+        <h2 className="text-base font-semibold text-foreground mb-0.5">{t("connect.credentialsTitle")}</h2>
+        <p className="text-sm text-muted-foreground m-0">{t("connect.credentialsDescription")}</p>
       </div>
 
-      {loading ? (
+      {loading && (
         <div className="rounded-lg border overflow-hidden">
           <Table>
             <TableHeader>
@@ -113,7 +121,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                   {t("App")}
                 </TableHead>
                 <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {t("Connected")}
+                  {t("connect.credentialsConnectedAt")}
                 </TableHead>
                 <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   {t("Status")}
@@ -143,16 +151,31 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
             </TableBody>
           </Table>
         </div>
-      ) : credentials.length === 0 ? (
-        <div className="text-center text-muted-foreground text-sm py-12 border border-dashed rounded-lg">
-          <Link className="h-6 w-6 mb-3 mx-auto text-muted-foreground/50" />
-          <p className="m-0">{t("No connections yet")}</p>
-          <p className="m-0 mt-1 text-xs">
-            {t("Go to")} <span className="font-medium">{t("Integrations")}</span> {t("and click")}{" "}
-            <span className="font-medium">{t("Connect")}</span> {t("to authorize an MCP server")}
-          </p>
+      )}
+      {!loading && isError && (
+        <div role="alert" className="rounded-lg border p-6 text-sm">
+          <p>{t("connect.credentialsLoadFailed")}</p>
+          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void refetch()}>
+            {t("connect.retry")}
+          </Button>
         </div>
-      ) : (
+      )}
+      {!loading && !isError && !credentials?.length && (
+        <div className="rounded-lg border border-dashed p-6 text-center text-sm">
+          <Link2 aria-hidden className="mx-auto mb-3 size-6 text-muted-foreground" />
+          <p className="font-medium">
+            {t(credentials === null ? "connect.credentialsUnavailable" : "connect.credentialsEmpty")}
+          </p>
+          <p className="mt-1 text-muted-foreground">{t("connect.credentialsEmptyHelp")}</p>
+          <Link
+            href={uiHref("connect")}
+            className={buttonVariants({ variant: "outline", size: "sm", className: "mt-4" })}
+          >
+            {t("connect.openConnections")}
+          </Link>
+        </div>
+      )}
+      {!loading && !isError && !!credentials?.length && (
         <div className="rounded-lg border overflow-hidden">
           <Table>
             <TableHeader>
@@ -161,7 +184,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                   {t("App")}
                 </TableHead>
                 <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {t("Connected")}
+                  {t("connect.credentialsConnectedAt")}
                 </TableHead>
                 <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                   {t("Status")}
@@ -174,12 +197,12 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
             <TableBody>
               {credentials.map((cred) => {
                 const isRevoking = revoking.has(cred.server_id);
-                const exp = expiryLabel(cred.expires_at);
+                const exp = expiryLabel(cred.expires_at, t);
                 return (
                   <TableRow key={cred.server_id}>
                     <TableCell className="text-sm font-medium">{displayName(cred)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {relativeTime(cred.connected_at) || "\u2014"}
+                      {relativeTime(cred.connected_at, locale) || "\u2014"}
                     </TableCell>
                     <TableCell>
                       <Badge variant={exp.variant}>{exp.text}</Badge>
@@ -192,7 +215,8 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                               variant="outline"
                               size="icon-sm"
                               disabled={isRevoking}
-                              title={t("Revoke connection")}
+                              aria-label={t("connect.credentialsRevokeAction")}
+                              title={t("connect.credentialsRevokeAction")}
                               className="text-muted-foreground hover:text-destructive hover:border-destructive/50"
                             >
                               {isRevoking ? (
@@ -205,14 +229,15 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                         />
                         <AlertDialogContent>
                           <AlertDialogHeader>
-                            <AlertDialogTitle>{t("Revoke connection?")}</AlertDialogTitle>
+                            <AlertDialogTitle>{t("connect.credentialsRevokeTitle")}</AlertDialogTitle>
                             <AlertDialogDescription>
-                              {t("This removes the stored OAuth credential for {value0}. You'll need to reconnect to use it in chat again.", { value0: (displayName(cred)) })}</AlertDialogDescription>
+                              {t("connect.credentialsRevokeBody", { server: displayName(cred) })}
+                            </AlertDialogDescription>
                           </AlertDialogHeader>
                           <AlertDialogFooter>
                             <AlertDialogCancel>{t("Cancel")}</AlertDialogCancel>
                             <AlertDialogAction variant="destructive" onClick={() => handleRevoke(cred.server_id)}>
-                              {t("Revoke")}
+                              {t("connect.credentialsRevokeConfirm")}
                             </AlertDialogAction>
                           </AlertDialogFooter>
                         </AlertDialogContent>

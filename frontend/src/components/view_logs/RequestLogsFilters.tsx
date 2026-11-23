@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers";
 import { DataTableFilterField } from "@/components/shared/DataTable";
@@ -79,12 +79,13 @@ function TeamFilterField({
 
 /** 可输入的筛选建议；field/window 限定权限与时间，value/onChange 维护原始草稿。
  * 返回支持键盘选择和自由输入的控件；候选只用于便捷选择，失败、分页或缺少历史值时不改变筛选语义。 */
-function SuggestedFilterField({ field, label, value, onChange, logsWindow, placeholder }: {
+function SuggestedFilterField({ field, label, value, onChange, logsWindow, placeholder, help }: {
   field: LogSuggestionField; label: string; value: string; onChange: (value: string | undefined) => void;
-  logsWindow: LogsWindow; placeholder?: string;
+  logsWindow: LogsWindow; placeholder?: string; help?: string;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const helpId = useId();
   const suggestions = useLogFilterSuggestions(field, logsWindow, value, open);
   // 指纹只缩略展示，但选项对象保留完整值；任何查询都使用原值，绝不使用显示缩略值。
   const items = useMemo<SearchSelectOption[]>(() => (suggestions.data?.data ?? []).map((item) => ({
@@ -107,14 +108,14 @@ function SuggestedFilterField({ field, label, value, onChange, logsWindow, place
         itemToStringLabel={(item: SearchSelectOption) => item.label}
         filter={null}
       >
-        <ComboboxInput aria-label={label} placeholder={placeholder} showClear={value !== ""} className="w-full" />
+        <ComboboxInput aria-label={label} aria-describedby={help ? helpId : undefined} placeholder={placeholder} showClear={value !== ""} className="w-full" />
         <ComboboxContent>
           <ComboboxEmpty>{emptyMessage}</ComboboxEmpty>
           <ComboboxList>{(item: SearchSelectOption) => <ComboboxItem key={item.value} value={item}>{item.label}</ComboboxItem>}</ComboboxList>
           {suggestions.data?.has_more && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("logsUX.suggestionsMore")}</p>}
         </ComboboxContent>
       </Combobox>
-      {field === "key_hash" && <p className="mt-1 text-xs text-muted-foreground">{t("logsUX.keyFingerprintHelp")}</p>}
+      {help && <p id={helpId} className="text-xs leading-relaxed text-muted-foreground">{help}</p>}
     </DataTableFilterField>
   );
 }
@@ -258,9 +259,8 @@ export function RequestLogsFilters({ get, set, teams, logsWindow, errorsOnly = f
 
   return (
     <>
-      <p className="text-sm text-muted-foreground">{t("logsUX.filterHint")}</p>
-      <p className="text-xs text-muted-foreground">{t("logsUX.suggestionsScope")}</p>
-      <SuggestedFilterField field="model" label={t("Model")} value={valueOf(LOG_FILTER_IDS.MODEL_ID)} onChange={setter(LOG_FILTER_IDS.MODEL_ID)} logsWindow={logsWindow} placeholder={t("logsUX.modelHint")} />
+      <p className="text-xs leading-relaxed text-muted-foreground">{t("logsUX.suggestionsScope")}</p>
+      <SuggestedFilterField field="model" label={t("Model")} value={valueOf(LOG_FILTER_IDS.MODEL_ID)} onChange={setter(LOG_FILTER_IDS.MODEL_ID)} logsWindow={logsWindow} placeholder={t("logsUX.modelHint")} help={t("logsUX.modelHelp")} />
       {canChooseScope && (
         <>
           <UserIdFilterField
@@ -308,7 +308,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow, errorsOnly = f
                 onChange={(e) => set(id, emptyToUndefined(e.target.value))}
               />
             </DataTableFilterField>
-          ) : <SuggestedFilterField key={id} field={id as LogSuggestionField} label={t(LOG_FILTER_LABELS[id])} value={valueOf(id)} onChange={setter(id)} logsWindow={logsWindow} />)}
+          ) : <SuggestedFilterField key={id} field={id as LogSuggestionField} label={t(LOG_FILTER_LABELS[id])} value={valueOf(id)} onChange={setter(id)} logsWindow={logsWindow} help={id === LOG_FILTER_IDS.KEY_HASH ? t("logsUX.keyFingerprintHelp") : id === LOG_FILTER_IDS.SUPPLIER ? t("logsUX.supplierHelp") : undefined} />)}
           {!errorsOnly && (
             <DataTableFilterField label={t("logsUX.responseCache")}>
               <Select

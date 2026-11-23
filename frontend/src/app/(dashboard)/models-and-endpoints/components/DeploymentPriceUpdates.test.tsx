@@ -64,7 +64,10 @@ it("requires confirmation and retains failure feedback in Chinese", async () => 
 /** 英文正常成功、来源下架禁用及缺价提示；验证动态计数与未知项不误报为免费，自动卸载。 */
 it("shows English supported and delisted states", async () => {
   vi.mocked(apiClient.get).mockResolvedValue({
-    deployments: [row, { ...row, id: "down", name: "old", changed: false, reason: "delisted", current: null }],
+    deployments: [
+      row,
+      { ...row, id: "down", name: "old", changed: false, reason: "delisted", current: null, proposed: null },
+    ],
   });
   vi.mocked(apiClient.post).mockResolvedValue({ updated: 1 });
   setup("en");
@@ -129,10 +132,62 @@ it.each([
     ],
   });
   setup(locale);
-  expect(await screen.findByText(range)).toBeVisible();
+  expect((await screen.findAllByText(range))[0]).toBeVisible();
   expect(screen.getByText(new RegExp(ttl))).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: review }));
   const dialog = screen.getByRole("dialog", { name: title });
-  expect(within(dialog).getByText(range)).toBeVisible();
+  expect(within(dialog).getAllByText(range)[0]).toBeVisible();
+  expect(within(dialog).getAllByText(/输出 Token：0|Output tokens: 0/)[0]).toBeVisible();
   expect(dialog).toHaveTextContent("$4");
 });
+
+/** 前置搜索、真实秒计价和市场新增价；验证对齐、计费单位和变化状态。取消时不写，夹具由组件测试清理。 */
+it.each([
+  ["zh-CN", "核对并更新", "联网搜索", "次", "秒", "单位变化", "新增", "移除", "低谷"],
+  ["en", "Review and update", "Web search", "request", "second", "Unit changed", "Added", "Removed", "Off-peak"],
+] as const)(
+  "compares observable units and marks new or removed items in %s",
+  async (locale, review, searchLabel, query, second, unitChange, added, removed, offpeak) => {
+    const token = row.current![0];
+    const webSearch = {
+      ...token,
+      measure: "query",
+      side: "output",
+      variant: "search",
+      source_key: "web_search_req",
+      usd: 0.01,
+    };
+    const duration = { ...token, measure: "second", side: "output", usd: 0.04 };
+    const audioInput = { ...duration, side: "input", variant: "audio", usd: 0.03 };
+    const offpeakToken = { ...token, window: "offpeak" };
+    vi.mocked(apiClient.get).mockResolvedValue({
+      deployments: [
+        {
+          ...row,
+          current: [token, webSearch, duration, audioInput, offpeakToken],
+          proposed: [
+            { ...webSearch, usd: 0.02 },
+            { ...token, side: "output", usd: 0.000007 },
+            { ...token, side: "cache_read", usd: 0 },
+            { ...token, usd: 0.000004 },
+          ],
+        },
+      ],
+    });
+    setup(locale);
+    await userEvent.click(await screen.findByRole("button", { name: review }));
+    const dialog = within(screen.getByRole("dialog"));
+    const search = dialog.getByRole("rowheader", { name: searchLabel, exact: true }).closest("tr")!;
+    expect(
+      within(search)
+        .getAllByRole("cell")
+        .map(({ textContent }) => textContent),
+    ).toEqual([`$0.01 / ${query}`, `$0.02 / ${query}`]);
+    expect(search).not.toHaveTextContent(unitChange);
+    expect(dialog.getByText(unitChange, { exact: true }).closest("tr")).toHaveTextContent(`$0.04 / ${second}`);
+    expect(dialog.getByText(added, { exact: true }).closest("tr")).toHaveTextContent("$0 /");
+    expect(dialog.getByRole("rowheader", { name: new RegExp(offpeak) })).toHaveTextContent(removed);
+    expect(dialog.getByRole("rowheader", { name: /audio/ })).toHaveTextContent(removed);
+    expect(apiClient.post).not.toHaveBeenCalled();
+  },
+);

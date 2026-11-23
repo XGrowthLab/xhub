@@ -43,7 +43,7 @@
   },
   {
     "id": "SC-007",
-    "file": "e2e/scenarios/legacy/coverage/sc-007.test.ts",
+    "file": "e2e/scenarios/pages/legacy-routes-model-hub.test.ts",
     "title": "model hubs require login then allow searching the public price catalog",
     "kind": "implemented",
     "environment": "default offline"
@@ -177,7 +177,7 @@
   {
     "id": "SC-026",
     "file": "e2e/scenarios/legacy/guardrails/sc-026.test.ts",
-    "title": "花园展示创建入口、支持状态和提交护栏空态",
+    "title": "花园展示创建入口和支持状态，隐藏未开放的提交审核",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -903,20 +903,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-130",
-    "file": "e2e/scenarios/columns/budgets-create.test.ts",
-    "title": "通用页面 /budgets 创建",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-131",
-    "file": "e2e/scenarios/columns/budgets-update.test.ts",
-    "title": "通用页面 /budgets 更新",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-132",
     "file": "e2e/scenarios/columns/caching-flush.test.ts",
     "title": "cache management reflects runtime en",
@@ -927,13 +913,6 @@
     "id": "SC-133",
     "file": "e2e/scenarios/columns/caching-save.test.ts",
     "title": "cache management reflects runtime zh-CN",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-134",
-    "file": "e2e/scenarios/columns/policies-create.test.ts",
-    "title": "通用页面 /policies 创建",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -997,34 +976,6 @@
     "id": "SC-143",
     "file": "e2e/scenarios/columns/tag-management-unsupported.test.ts",
     "title": "通用页面 /tag-management 不支持",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-144",
-    "file": "e2e/scenarios/columns/transform-request-transform.test.ts",
-    "title": "通用页面 /transform-request 转换",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-145",
-    "file": "e2e/scenarios/columns/ui-theme-save.test.ts",
-    "title": "通用页面 /ui-theme 保存",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-146",
-    "file": "e2e/scenarios/columns/ui-theme-upload.test.ts",
-    "title": "通用页面 /ui-theme 上传",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-147",
-    "file": "e2e/scenarios/columns/vector-stores-create.test.ts",
-    "title": "通用页面 /vector-stores 创建",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1127,23 +1078,9 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-164",
-    "file": "e2e/scenarios/pages/api-reference.test.ts",
-    "title": "页面可用 /api-reference",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-165",
     "file": "e2e/scenarios/pages/audit-logs.test.ts",
     "title": "页面可用 /audit-logs",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-166",
-    "file": "e2e/scenarios/pages/budgets.test.ts",
-    "title": "页面可用 /budgets",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1165,13 +1102,6 @@
     "id": "SC-169",
     "file": "e2e/scenarios/pages/chat-credentials.test.ts",
     "title": "页面可用 /chat/credentials",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-170",
-    "file": "e2e/scenarios/pages/chat-integrations.test.ts",
-    "title": "页面可用 /chat/integrations",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1267,13 +1197,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-184",
-    "file": "e2e/scenarios/pages/model-hub-table.test.ts",
-    "title": "页面可用 /model_hub_table",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-185",
     "file": "e2e/scenarios/pages/model-hub.test.ts",
     "title": "页面可用 /model_hub",
@@ -1337,13 +1260,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-194",
-    "file": "e2e/scenarios/pages/policies.test.ts",
-    "title": "页面可用 /policies",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-195",
     "file": "e2e/scenarios/pages/price-data.test.ts",
     "title": "页面可用 /price-data",
@@ -1400,20 +1316,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-203",
-    "file": "e2e/scenarios/pages/transform-request.test.ts",
-    "title": "页面可用 /transform-request",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-204",
-    "file": "e2e/scenarios/pages/ui-theme.test.ts",
-    "title": "页面可用 /ui-theme",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-205",
     "file": "e2e/scenarios/pages/usage.test.ts",
     "title": "页面可用 /usage",
@@ -1424,13 +1326,6 @@
     "id": "SC-206",
     "file": "e2e/scenarios/pages/users.test.ts",
     "title": "页面可用 /users",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-207",
-    "file": "e2e/scenarios/pages/vector-stores.test.ts",
-    "title": "页面可用 /vector-stores",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3607,6 +3502,27 @@
     "id": "REG-console-layout-zh-CN",
     "file": "e2e/scenarios/regression/console-layout-zh-CN.test.ts",
     "title": "console layout and real user flows zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-zh-CN",
+    "file": "e2e/scenarios/pages/legacy-routes-zh-CN.test.ts",
+    "title": "旧控制台书签和 MCP 连接指引 zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-en",
+    "file": "e2e/scenarios/pages/legacy-routes-en.test.ts",
+    "title": "旧控制台书签和 MCP 连接指引 en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-gateway",
+    "file": "e2e/scenarios/pages/legacy-routes-gateway.test.ts",
+    "title": "旧界面退役后同名网关 API 保持可用",
     "kind": "implemented",
     "environment": "default offline"
   }

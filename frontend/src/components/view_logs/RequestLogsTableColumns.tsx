@@ -17,9 +17,11 @@ import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 import { useT, t } from "@/i18n";
+import { ArrowUpRight } from "lucide-react";
 
 export interface RequestLogsTableColumnsDeps {
   onSessionClick: (log: LogEntry) => void;
+  onRowClick: (log: LogEntry) => void;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -43,11 +45,12 @@ function TruncatedText({ value }: { value: string | undefined }) {
   return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
 }
 
-/** 返回普通与错误日志共用的列定义；参数为会话点击回调，供 RequestLogsTable 渲染。
+/** 返回普通与错误日志共用的列定义；参数为会话和详情点击回调，供 RequestLogsTable 渲染。
  * 密钥 Hash 仅展示日志中的标识，不查询可能已删除或无权查看的密钥；缺失值显示占位符。
  * 费用读取原始调用或会话合计，并与详情共用金额格式；未定价零值保留未知，不重新计费或修改记录。 */
 export const getRequestLogsTableColumns = ({
   onSessionClick,
+  onRowClick,
 }: RequestLogsTableColumnsDeps): ColumnDef<LogEntry>[] => [
   {
     id: "startTime",
@@ -169,15 +172,23 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const log = row.original;
       const batchId = isBatchCallType(log.call_type) ? getBatchIdFromRequestId(log.request_id) : undefined;
-      if (batchId) {
-        return (
-          <div className="flex flex-col">
-            <IdCell value={batchId} variant="plain" copyable tooltip={`Batch ${batchId} (row: ${log.request_id})`} />
-            <span className="text-[10px] text-muted-foreground">{t("batch cost")}</span>
+      return (
+        <div className="flex flex-col items-start">
+          <div className="flex items-center gap-1">
+            <IdCell value={batchId ?? log.request_id} variant="plain" copyable={Boolean(batchId)} copyLabel={t("logsUX.copyBatchId")} />
+            <button
+              type="button"
+              aria-label={t("logsUX.openDetails", { id: log.request_id })}
+              title={t("logsUX.openDetails", { id: log.request_id })}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={() => onRowClick(log)}
+            >
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </button>
           </div>
-        );
-      }
-      return <IdCell value={log.request_id} variant="plain" />;
+          {batchId && <span className="text-[10px] text-muted-foreground">{t("batch cost")}</span>}
+        </div>
+      );
     },
   },
   {
