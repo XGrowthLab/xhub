@@ -37,14 +37,14 @@
   {
     "id": "SC-006",
     "file": "e2e/scenarios/legacy/coverage/sc-006.test.ts",
-    "title": "fresh isolated user sees empty chat usage and logs",
+    "title": "fresh isolated user has empty usage and logs",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "SC-007",
     "file": "e2e/scenarios/pages/legacy-routes-model-hub.test.ts",
-    "title": "model hubs require login then allow searching the public price catalog",
+    "title": "retired model hub pages preserve the public catalog API",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -65,7 +65,7 @@
   {
     "id": "SC-010",
     "file": "e2e/scenarios/legacy/coverage/sc-010.test.ts",
-    "title": "chat shows the fake upstream assistant text",
+    "title": "playground shows the fake upstream assistant text",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -672,13 +672,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-097",
-    "file": "e2e/scenarios/legacy/pages/sc-097.test.ts",
-    "title": "chat shell is not admin sidebar",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-098",
     "file": "e2e/scenarios/legacy/pagination/sc-098.test.ts",
     "title": "日志分页完整流程：会话合并后翻页",
@@ -973,13 +966,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-143",
-    "file": "e2e/scenarios/columns/tag-management-unsupported.test.ts",
-    "title": "通用页面 /tag-management 不支持",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-149",
     "file": "e2e/scenarios/directory/archive-queue.test.ts",
     "title": "归档调度配置驱动真实计费入队并保留停用积压",
@@ -1092,48 +1078,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-168",
-    "file": "e2e/scenarios/pages/chat-api-keys.test.ts",
-    "title": "页面可用 /chat/api-keys",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-169",
-    "file": "e2e/scenarios/pages/chat-credentials.test.ts",
-    "title": "页面可用 /chat/credentials",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-171",
-    "file": "e2e/scenarios/pages/chat-logs.test.ts",
-    "title": "页面可用 /chat/logs",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-172",
-    "file": "e2e/scenarios/pages/chat-usage.test.ts",
-    "title": "页面可用 /chat/usage",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-173",
-    "file": "e2e/scenarios/pages/chat.test.ts",
-    "title": "页面可用 /chat",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-174",
-    "file": "e2e/scenarios/pages/connect.test.ts",
-    "title": "页面可用 /connect",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-175",
     "file": "e2e/scenarios/pages/docs-api-chat-completions.test.ts",
     "title": "页面可用 /docs/api/chat-completions",
@@ -1199,7 +1143,7 @@
   {
     "id": "SC-185",
     "file": "e2e/scenarios/pages/model-hub.test.ts",
-    "title": "页面可用 /model_hub",
+    "title": "model catalog configured links preserve names through gateway aliases",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1235,13 +1179,6 @@
     "id": "SC-190",
     "file": "e2e/scenarios/pages/models-and-endpoints.test.ts",
     "title": "页面可用 /models-and-endpoints",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-191",
-    "file": "e2e/scenarios/pages/old-usage.test.ts",
-    "title": "页面可用 /old-usage",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1298,13 +1235,6 @@
     "id": "SC-200",
     "file": "e2e/scenarios/pages/search-tools.test.ts",
     "title": "页面可用 /search-tools",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-201",
-    "file": "e2e/scenarios/pages/tag-management.test.ts",
-    "title": "页面可用 /tag-management",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3158,14 +3088,14 @@
   {
     "id": "REG-skill-hub-support-en",
     "file": "e2e/scenarios/regression/skill-hub-support-en.test.ts",
-    "title": "skill hub reports unsupported discovery and preserves chat en",
+    "title": "retired skill hub preserves playground inference en",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "REG-skill-hub-support-zh-CN",
     "file": "e2e/scenarios/regression/skill-hub-support-zh-CN.test.ts",
-    "title": "skill hub reports unsupported discovery and preserves chat zh-CN",
+    "title": "retired skill hub preserves playground inference zh-CN",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3508,14 +3438,14 @@
   {
     "id": "LEGACY-ROUTES-zh-CN",
     "file": "e2e/scenarios/pages/legacy-routes-zh-CN.test.ts",
-    "title": "旧控制台书签和 MCP 连接指引 zh-CN",
+    "title": "旧工作区下线并保留文档和用量入口 zh-CN",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "LEGACY-ROUTES-en",
     "file": "e2e/scenarios/pages/legacy-routes-en.test.ts",
-    "title": "旧控制台书签和 MCP 连接指引 en",
+    "title": "旧工作区下线并保留文档和用量入口 en",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3523,6 +3453,13 @@
     "id": "LEGACY-ROUTES-gateway",
     "file": "e2e/scenarios/pages/legacy-routes-gateway.test.ts",
     "title": "旧界面退役后同名网关 API 保持可用",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-guardrails-monitor-ui",
+    "file": "e2e/scenarios/regression/guardrails-monitor-ui.test.ts",
+    "title": "guardrail monitor shows real outcomes on desktop and mobile",
     "kind": "implemented",
     "environment": "default offline"
   }

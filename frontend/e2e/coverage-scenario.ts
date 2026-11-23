@@ -27,11 +27,6 @@ async function sessionBearer(page: Page): Promise<string> {
 }
 
 
-/** 用途：确认页面没有进入统一错误边界；参数为页面与路由标签；返回无；供全路由巡检调用，只读 DOM。 */
-async function noDashboardError(page: Page, route: string) {
-  await expect(page.getByText("This page couldn’t load"), route).toHaveCount(0);
-  await expect(page.getByText(/Dashboard error:/), route).toHaveCount(0);
-}
 /** 用途：注册独立场景「discovers every page.tsx route」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC005() {
 
@@ -40,16 +35,16 @@ test("discovers every page.tsx route", async () => {
   expect(pages.length).toBeGreaterThan(0);
   expect(pages.map((p) => p.route)).toContain("/login");
   expect(pages.map((p) => p.route)).toContain("/api-keys");
-  expect(pages.map((p) => p.route)).toContain("/model_hub");
+  expect(pages.map((p) => p.route)).not.toContain("/model_hub");
   expect(pages.map((p) => p.route)).toContain("/mcp/oauth/callback");
   console.log(`discovered pages=${pages.length}`);
 });
 }
-/** 用途：注册独立场景「fresh isolated user sees empty chat usage and logs」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
+/** 用途：注册独立场景「fresh isolated user has empty usage and logs」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC006() {
 
 
-test("fresh isolated user sees empty chat usage and logs", async ({ page }) => {
+test("fresh isolated user has empty usage and logs", async ({ page }) => {
   const suffix = Date.now().toString();
   const email = `coverage-empty-${suffix}@xhub.local`;
   const password = "coverage-empty-password";
@@ -74,48 +69,43 @@ test("fresh isolated user sees empty chat usage and logs", async ({ page }) => {
     expect(logs.status(), await logs.text()).toBe(200);
     expect((await logs.json()).data ?? []).toHaveLength(0);
 
-    await page.goto(uiPath("/chat/usage"));
-    await expect(page.getByText(t("No usage data for this period"), { exact: true })).toBeVisible({ timeout: 15_000 });
-    await page.goto(uiPath("/chat/logs"));
-    await expect(page.getByText(t("No logs for this period"), { exact: true })).toBeVisible({ timeout: 15_000 });
+    await page.goto(uiPath("/usage"));
+    await expect(page.getByTestId("daily-spend-settled").getByText(t("No data"), { exact: true })).toBeVisible();
+    await page.goto(uiPath("/logs"));
+    await expect(page.getByText(t("logsUX.empty")).first()).toBeVisible();
   } finally {
     const removed = await page.request.post(GATEWAY + "/user/delete", { headers: adminHeaders, data: { user_id: userID } });
     expect(removed.status(), await removed.text()).toBe(200);
   }
 });
 }
-/** 注册公开模型中心测试；无参数、无返回值。检查历史书签参数、登录和真实模型搜索，不写配置。 */
+/** 注册旧模型市场路径与网关 API 的真实契约验证；无参数、无返回值。
+ * 浏览器和 HTTP 客户端共同确认原页面不渲染，公开目录各别名分页一致；不读取客户数据，无持久化写入。 */
 export function registerSC007() {
-  test("model hubs require login then allow searching the public price catalog", async ({ page }) => {
-    const guard = watchGateway(page);
-    const query = "?key=legacy%2Bfixture&label=one&label=two&empty=";
-    for (const alias of ["/model_hub_table", "/ui/model_hub_table", "/model-hub-table", "/ui/model-hub-table", "/ui/model_hub"]) {
-      const redirect = await page.request.get(alias + query, { maxRedirects: 0 });
-      expect(redirect.status(), alias).toBe(307);
-      // Next 在同源响应中可以返回相对 Location；解析后仍需保持同源及原查询。
-      const source = new URL(redirect.url());
-      const target = new URL(redirect.headers()["location"], source);
-      expect(target.origin).toBe(source.origin);
-      expect(target.pathname + target.search).toBe("/model_hub" + query);
+  test("retired model hub pages preserve the public catalog API", async ({ page }) => {
+    const query = "?page=1&page_size=1";
+    for (const path of ["/model_hub_table", "/ui/model_hub_table", "/model-hub-table", "/ui/model-hub-table", "/ui/model_hub"]) {
+      const response = await page.request.get(path + query, { maxRedirects: 0 });
+      expect(response.status(), path).toBe(410);
+      expect(response.headers()["cache-control"], path).toBe("no-store");
+      expect(await response.text(), path).toBe("");
     }
-    await page.goto("/ui/model_hub_table");
-    await expect(page).toHaveURL(/\/login/);
-    await loginAdmin(page);
-    await page.goto("/ui/model-hub-table");
-    await expect(page).toHaveURL(/\/model_hub$/);
-    await noDashboardError(page, "/model_hub");
+    const browser = await page.goto("/ui/model_hub");
+    expect(browser?.status()).toBe(410);
+    const reference = await page.request.get(GATEWAY + "/public/v1/model_hub" + query);
+    expect(reference.ok(), await reference.text()).toBeTruthy();
+    const expected = await reference.json();
+    expect(expected.data).toHaveLength(1);
 
-    const catalog = await page.request.get(`${GATEWAY}/public/v1/model_hub?page=1&page_size=1`);
-    expect(catalog.ok()).toBeTruthy();
-    const name = (await catalog.json()).data[0].model_group as string;
-    const search = page.getByRole("textbox", { name: t("Search model names"), exact: true });
-    await expect(search).toHaveAttribute("placeholder", t("Search model names..."));
-    await search.fill(name);
-    await expect(page.getByRole("row").filter({ hasText: name }).first()).toBeVisible();
-    await search.fill("e2e-model-that-does-not-exist");
-    await expect(page.getByText(t("No matching models"))).toBeVisible();
-    recordPage("/model_hub", "pass");
-    await guard.assertOk();
+    for (const path of ["/model_hub", "/gw/model_hub", "/public/model_hub", "/public/v1/model_hub"]) {
+      const catalog = await page.request.get(path + query, { headers: { Accept: "application/json" } });
+      expect(catalog.status(), await catalog.text()).toBe(200);
+      expect(catalog.headers()["content-type"]).toMatch(/json/);
+      const payload = await catalog.json();
+      expect(payload.data).toEqual(expected.data);
+      expect(payload.meta).toEqual(expected.meta);
+      expect(payload.links.self).toBe(path.replace(/^\/gw(?=\/)/, "") + query);
+    }
   });
 }
 /** 用途：注册独立场景「a created user can sign in with the initial password」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
@@ -191,25 +181,22 @@ test("an administrator resets a password and the account signs in with it", asyn
   await guard.assertOk();
 });
 }
-/** 用途：注册独立场景「chat shows the fake upstream assistant text」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
+/** 用途：注册独立场景「playground shows the fake upstream assistant text」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC010() {
 
 
-test("chat shows the fake upstream assistant text", async ({ page }) => {
+test("playground shows the fake upstream assistant text", async ({ page }) => {
   const guard = watchGateway(page);
   await loginAdmin(page);
-  await page.goto(uiPath("/chat"));
-  const composer = page.getByPlaceholder(t("How can I help you today?")).locator("..");
-  // Scope to the textarea's immediate container: the account menu is also a
-  // popover, and its DOM order changes as the page hydrates.
-  await composer.locator('[data-slot="popover-trigger"]').click();
-  await page.getByRole("dialog").getByRole("button", { name: "gpt-4o-mini", exact: true }).click();
-  await page.getByPlaceholder(t("How can I help you today?")).fill("hello from chat");
-  await page.getByRole("button", { name: t("Send"), exact: true }).click();
+  await page.goto(uiPath("/playground"));
+  await page.getByPlaceholder(t("Select a Model"), { exact: true }).click();
+  await page.getByRole("option", { name: "gpt-4o-mini", exact: true }).click();
+  await page.getByTestId("chat-composer-input").fill("Hello from the playground.");
+  await page.getByTestId("chat-send-button").click();
   await expect(page.getByText("e2e-ok").first()).toBeVisible({ timeout: 20_000 });
   console.log("chat content=e2e-ok");
   recordChain("chat content=e2e-ok");
-  recordPage("/chat", "pass");
+  recordPage("/playground", "pass");
   await guard.assertOk();
 });
 }

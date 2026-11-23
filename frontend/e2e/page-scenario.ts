@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { translate } from "../src/i18n/translate";
 import { GATEWAY, loginAdmin, t, uiPath, watchGateway } from "./helpers";
 import { recordPage } from "./report";
 import { discoverPages } from "./routes";
@@ -39,7 +38,6 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       if (path === "/user/daily/activity") observed.usage = await res.json().catch(() => undefined);
       if (path === "/spend/logs/ui") observed.logs = await res.json().catch(() => undefined);
       if (path === "/guardrails/usage/overview") observed.guardrails = await res.json().catch(() => undefined);
-      if (path === "/user/daily/activity/aggregated") observed.chatUsage = await res.json().catch(() => undefined);
     }
     if (!/\/user\/daily\/activity|\/guardrails\/usage\/overview|\/key\/list/.test(url)) return;
     if (res.status() >= 400) failedReads.push(`${res.status()} ${res.request().method()} ${url}`);
@@ -81,9 +79,6 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
         await expect(settled.getByText(t("No data"))).toHaveCount(0);
       }
     }
-    if (item.route === "/old-usage") {
-      await expect(page.getByTestId("old-usage-body")).toContainText(t("legacyUsage.unavailable"), { timeout: 15_000 });
-    }
     if (item.route === "/logs") {
       const logsResponse = await page.request.get(GATEWAY + "/spend/logs/ui?page=1&page_size=1", { headers: authHeaders });
       expect(logsResponse.status(), await logsResponse.text()).toBe(200);
@@ -116,42 +111,6 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       await expect(logs).toHaveAttribute("aria-selected", "true");
       await page.getByRole("link", { name: t("pages.adminPanel.openUsers") }).click();
       await expect(page).toHaveURL(/\/ui\/users\/?$/);
-    }
-    if (item.route === "/chat") {
-      await expect(page.getByRole("heading", { name: /^(早上好|下午好|晚上好)/ })).toBeVisible();
-      await expect(page.getByText(t("pages.chat.welcome.intro"), { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: t("pages.chat.welcome.code"), exact: true }).click();
-      await expect(page.getByPlaceholder(t("How can I help you today?"))).toHaveValue("Code: ");
-      await page.goto(uiPath("/"));
-      await page.getByRole("button", { name: "English", exact: true }).click();
-      await page.goto(uiPath("/chat"));
-      await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/ })).toBeVisible();
-      await expect(page.getByRole("button", { name: translate("en", "pages.chat.welcome.code"), exact: true })).toBeVisible();
-    }
-    if (item.route === "/chat/api-keys") {
-      await expect(
-        page
-          .getByText(t("No keys found"))
-          .or(page.getByRole("cell", { name: /^\$/ }))
-          .first(),
-      ).toBeVisible({ timeout: 15_000 });
-    }
-    if (item.route === "/chat/logs") {
-      await expect(
-        page.getByText(t("No logs for this period")).or(page.getByRole("table")).first(),
-      ).toBeVisible({ timeout: 15_000 });
-    }
-    if (item.route === "/chat/usage") {
-      const chatUsageResponse = await page.request.get(GATEWAY + "/user/daily/activity/aggregated", { headers: authHeaders });
-      expect(chatUsageResponse.status(), await chatUsageResponse.text()).toBe(200);
-      observed.chatUsage = await chatUsageResponse.json();
-      await expect.poll(() => observed.chatUsage !== undefined, { timeout: 15_000 }).toBe(true);
-      const requests = Number(observed.chatUsage?.metadata?.total_api_requests ?? 0);
-      if (requests === 0) await expect(page.getByText(t("No usage data for this period"))).toBeVisible({ timeout: 15_000 });
-      else {
-        await expect(page.getByText(t("API Requests"), { exact: true })).toBeVisible({ timeout: 15_000 });
-        await expect(page.getByText(t("No usage data for this period"))).toHaveCount(0);
-      }
     }
     requirePageSuccess(response?.status(), businessPath, page.url());
   expect(errors, errors.join("\n")).toEqual([]);

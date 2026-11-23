@@ -108,8 +108,8 @@ describe("translate", () => {
   });
 
   it("interpolates named placeholders", () => {
-    expect(translate("zh-CN", "connect.allowUse", { client: "app", server: "mcp" })).toBe("允许 app 使用 mcp");
-    expect(translate("en", "connect.allowUse", { client: "app", server: "mcp" })).toBe("Allow app to use mcp");
+    expect(translate("zh-CN", "userBudgetReset.day", { day: 15 })).toBe("每月 15 日");
+    expect(translate("en", "userBudgetReset.day", { day: 15 })).toBe("Day 15 of each month");
   });
 
   it("falls back to the key when missing", () => {

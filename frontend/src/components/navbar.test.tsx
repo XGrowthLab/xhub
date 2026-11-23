@@ -138,8 +138,8 @@ describe("Navbar", () => {
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    // 当前导航栏以视图切换器作为已登录入口，通知按钮已从产品中移除。
-    expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
+    // 无插件时，已登录导航显示网关名称和账户入口。
+    expect(screen.getByText("AI Gateway", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("Docs")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
@@ -252,7 +252,7 @@ describe("Navbar", () => {
     renderWithProviders(<Navbar {...publicPageProps} />);
 
     expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /AI Gateway/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Gateway", { exact: true })).not.toBeInTheDocument();
   });
 
   it("should handle hide new feature indicators toggle", async () => {

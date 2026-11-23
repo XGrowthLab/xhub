@@ -6,7 +6,6 @@ const GATEWAY = process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000";
 const APP_PAGES = new Set([
   "/",
   "/login",
-  "/connect",
   "/api-keys",
   "/playground",
   "/models-and-endpoints",
@@ -29,23 +28,13 @@ const APP_PAGES = new Set([
   "/route-templates",
   "/router-settings",
   "/admin-panel",
-  "/chat",
-  "/chat/api-keys",
-  "/chat/credentials",
-
-  "/chat/logs",
-  "/chat/usage",
-  "/model_hub",
   "/search-tools",
   "/caching",
   "/prompts",
-  "/tag-management",
-  "/old-usage",
-  "/retired",
   "/mcp/oauth/callback",
 ]);
 
-// 这些路径只在控制台命名空间内展示下线说明，同名网关资源仍按原契约响应。
+// 仅退役旧控制台地址，裸路径的同名网关 API 仍按原契约响应。
 const RETIRED_UI_PAGES = new Set([
   "/agents",
   "/workflows",
@@ -56,13 +45,22 @@ const RETIRED_UI_PAGES = new Set([
   "/vector-stores",
   "/transform-request",
   "/ui-theme",
+  "/model_hub",
 ]);
 
-const PAGE_REDIRECTS = new Map([
-  ["/api-reference", "/docs/api/models"],
-  ["/chat/integrations", "/ui/connect"],
-  ["/model_hub_table", "/model_hub"],
-  ["/model-hub-table", "/model_hub"],
+// 从前有根地址和 /ui 别名的界面；只拦截这几个精确的读路径。
+const RETIRED_STANDALONE_PAGES = new Set([
+  "/chat",
+  "/chat/api-keys",
+  "/chat/credentials",
+  "/chat/integrations",
+  "/chat/logs",
+  "/chat/usage",
+  "/connect",
+  "/model_hub_table",
+  "/model-hub-table",
+  "/retired",
+  "/tag-management",
 ]);
 
 /** 清理路径末尾斜杠；参数为 URL 路径，返回用于中间件匹配的路径，空路径归一到根目录。 */
@@ -98,7 +96,7 @@ export function brandIconReadPath(method: string, pathname: string): string | nu
 }
 
 /** 分发 Next 请求并保留查询参数和请求正文；返回页面、兼容跳转或网关重写。
- * /gw 与控制台路径的写入优先交给网关，避免页面退役拦截同名 API。 */
+ * 退役页面读请求返回不可缓存的 410；/gw 和写入保持交给网关，避免拦截同名 API。 */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
@@ -124,14 +122,18 @@ export function middleware(req: NextRequest) {
   const path = uiAliasPath(pathname);
   const isUIAlias = pathname === "/ui" || pathname.startsWith("/ui/");
   if (req.method === "GET" || req.method === "HEAD") {
-    const redirectPath = isUIAlias && path === "/model_hub" ? "/model_hub" : PAGE_REDIRECTS.get(path);
-    if (redirectPath) {
+    if (RETIRED_STANDALONE_PAGES.has(path) || (isUIAlias && RETIRED_UI_PAGES.has(path))) {
+      return new NextResponse(null, { status: 410, headers: { "Cache-Control": "no-store" } });
+    }
+
+    // 从历史地址直达当前用量或正式 API 文档，移除中间的说明页。
+    if (path === "/api-reference" || path === "/old-usage") {
       const url = req.nextUrl.clone();
-      url.pathname = redirectPath;
+      url.pathname = path === "/api-reference" ? "/docs/api/models" : "/ui/usage";
       return NextResponse.redirect(url);
     }
 
-    const appPath = isUIAlias && RETIRED_UI_PAGES.has(path) ? "/retired" : dashboardAppPath(pathname);
+    const appPath = dashboardAppPath(pathname);
     if (appPath) {
       if (!isUIAlias) return NextResponse.next();
       const url = req.nextUrl.clone();

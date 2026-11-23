@@ -2,12 +2,12 @@ import { expect, test } from "@playwright/test";
 import { translate, type Locale } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, stableGoto } from "./helpers";
 
-/** 注册真实公共模型页的Skill失败展示及恢复对话流程；locale指定语言，真实网关返回404而不是浏览器拦截。
- * 检查失败不伪装空列表、支持提示、没有安装命令和写请求；随后真实模型请求抵达本地上游。
+/** 注册旧 Skill 目录退役后的双语模型调试流程；locale 指定界面语言，真实网关与控制台返回各自的状态。
+ * 检查旧目录维持明确失败，旧页面无内容；随后真实模型请求抵达本地上游。
  * 不创建Skill配置，运行器负责测试会话和schema清理；不调用生产或外部插件仓库。
  */
 export function registerSkillHubSupport(locale: Locale) {
-  test("skill hub reports unsupported discovery and preserves chat " + locale, async ({ page }) => {
+  test("retired skill hub preserves playground inference " + locale, async ({ page }) => {
     const tr = (key: string) => translate(locale, key);
     await loginAdmin(page);
     await page.getByRole("button", { name: locale === "en" ? "English" : "中文", exact: true }).click();
@@ -17,14 +17,9 @@ export function registerSkillHubSupport(locale: Locale) {
     page.on("request", req => {
       if (req.method() !== "GET" && new URL(req.url()).pathname.includes("claude-code")) writes.push(req.url());
     });
-    const failedRequest = page.waitForResponse(response => new URL(response.url()).pathname.endsWith("/public/skill_hub"));
-    await stableGoto(page, "/model_hub");
-    expect((await failedRequest).status()).toBe(404);
-    await page.getByRole("tab", { name: tr("Skill Hub"), exact: true }).click();
-    await expect(page.getByRole("tabpanel").getByRole("alert")).toHaveText(tr("skillHub.loadError"));
-    await expect(page.getByRole("heading", { name: tr("skillHub.supportTitle") })).toBeVisible();
-    await expect(page.getByText(tr("skillHub.empty"), { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("tabpanel")).not.toContainText("/plugin");
+    const retired = await page.goto("/ui/model_hub");
+    expect(retired?.status()).toBe(410);
+    expect(await retired?.text()).toBe("");
     expect(writes).toEqual([]);
     await stableGoto(page, "/playground");
     await page.getByPlaceholder(tr("Select a Model"), { exact: true }).click();

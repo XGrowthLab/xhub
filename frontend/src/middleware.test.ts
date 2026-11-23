@@ -40,7 +40,7 @@ it("routes only documentation screenshot reads to public assets", () => {
   expect(documentationAssetRequest("GET", "/v1/models")).toBe(false);
 });
 
-const retired = [
+const retiredUI = [
   "/agents",
   "/workflows",
   "/memory",
@@ -50,6 +50,21 @@ const retired = [
   "/vector-stores",
   "/transform-request",
   "/ui-theme",
+  "/model_hub",
+];
+
+const retiredStandalone = [
+  "/chat",
+  "/chat/api-keys",
+  "/chat/credentials",
+  "/chat/integrations",
+  "/chat/logs",
+  "/chat/usage",
+  "/connect",
+  "/model_hub_table",
+  "/model-hub-table",
+  "/retired",
+  "/tag-management",
 ];
 
 describe("dashboardAppPath", () => {
@@ -70,11 +85,11 @@ describe("dashboardAppPath", () => {
 
   /** 下线页面与别名已移出 App Router；前置实际路径解析器，保留正常页面，无数据清理。 */
   it("lists only the real pages, without retired routes or aliases", () => {
-    for (const path of [...retired, "/model_hub_table", "/model-hub-table", "/api-reference", "/chat/integrations"]) {
+    for (const path of [...retiredUI, ...retiredStandalone, "/api-reference", "/old-usage"]) {
       expect(dashboardAppPath(path), path).toBeNull();
       expect(dashboardAppPath(`/ui${path}`), path).toBeNull();
     }
-    for (const path of ["/search-tools", "/caching", "/prompts", "/model_hub", "/tag-management", "/old-usage"]) {
+    for (const path of ["/search-tools", "/caching", "/prompts"]) {
       expect(dashboardAppPath(path), path).toBe(path);
       expect(dashboardAppPath(`/ui${path}`), path).toBe(path);
     }
@@ -119,34 +134,31 @@ it("routes model monitor pages separately from monitor API", () => {
   expect(dashboardAppPath("/models/monitor")).toBeNull();
 });
 
-/** 明确的 /ui 旧书签读请求进入下线页；前置真实 Next 请求，保留查询参数，裸路径继续代理网关，无数据写入。 */
-it.each(["GET", "HEAD"])("rewrites only explicit console %s reads to the retired page", (method) => {
-  const gateway = process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000";
-  for (const path of retired) {
-    const ui = middleware(new NextRequest(`https://console.example/ui${path}?filter=keep`, { method }));
-    expect(ui.headers.get("x-middleware-rewrite")).toBe("https://console.example/retired?filter=keep");
-    const plain = middleware(new NextRequest(`https://console.example${path}?filter=keep`, { method }));
-    expect(plain.headers.get("x-middleware-rewrite")).toBe(new URL(path + "?filter=keep", gateway).href);
+/** 退役浏览入口在 GET/HEAD 时返回不可缓存的空 410；前置真实 Next 请求，无重定向、页面渲染或数据写入。 */
+it.each(["GET", "HEAD"])("retires explicit %s routes without rendering a placeholder", async (method) => {
+  const consolePaths = [...retiredUI, ...retiredStandalone].map((path) => "/ui" + path);
+  for (const path of [...consolePaths, ...retiredStandalone]) {
+    const response = middleware(new NextRequest(`https://console.example${path}/?filter=keep`, { method }));
+    expect(response.status, path).toBe(410);
+    expect(response.headers.get("cache-control"), path).toBe("no-store");
+    expect(response.headers.get("location"), path).toBeNull();
+    expect(response.headers.get("x-middleware-rewrite"), path).toBeNull();
+    expect(await response.text(), path).toBe("");
   }
 });
 
-/** 兼容地址统一 307 到正式页面；前置 GET/HEAD，保留多值、空值和编码参数，无数据清理。 */
-it.each(["GET", "HEAD"])("redirects valid %s aliases without dropping query parameters", (method) => {
-  const query = "?key=fixture%2Bkey&label=a&label=b&flag=";
-  for (const [alias, target] of [
-    ["/model_hub_table", "/model_hub"],
-    ["/ui/model_hub_table", "/model_hub"],
-    ["/model-hub-table", "/model_hub"],
-    ["/ui/model-hub-table", "/model_hub"],
-    ["/ui/model_hub", "/model_hub"],
+/** 旧参考页和用量页的根地址及别名跳转到正式页面；前置 GET/HEAD，保留多值和编码参数，无落盘。 */
+it.each(["GET", "HEAD"])("opens the current pages for legacy %s addresses", (method) => {
+  const query = "?label=a&label=b&search=with%2Bspaces";
+  for (const [path, destination] of [
     ["/api-reference", "/docs/api/models"],
     ["/ui/api-reference", "/docs/api/models"],
-    ["/chat/integrations", "/ui/connect"],
-    ["/ui/chat/integrations", "/ui/connect"],
+    ["/old-usage", "/ui/usage"],
+    ["/ui/old-usage", "/ui/usage"],
   ]) {
-    const response = middleware(new NextRequest(`https://console.example${alias}${query}`, { method }));
-    expect(response.status, alias).toBe(307);
-    expect(response.headers.get("location"), alias).toBe(`https://console.example${target}${query}`);
+    const response = middleware(new NextRequest(`https://console.example${path}${query}`, { method }));
+    expect(response.status, path).toBe(307);
+    expect(response.headers.get("location"), path).toBe(`https://console.example${destination}${query}`);
   }
 });
 
@@ -158,8 +170,20 @@ it.each([
   ["POST", "/guardrails", "/guardrails"],
   ["POST", "/ui/guardrails", "/guardrails"],
   ["POST", "/ui/api-reference", "/api-reference"],
+  ["POST", "/ui/old-usage", "/old-usage"],
+  ["GET", "/tag/list", "/tag/list"],
+  ["GET", "/global/spend/logs", "/global/spend/logs"],
+  ["GET", "/budgets", "/budgets"],
   ["GET", "/gw/budgets", "/budgets"],
+  ["GET", "/model_hub", "/model_hub"],
   ["GET", "/gw/model_hub", "/model_hub"],
+  ["GET", "/model_hub/providers", "/model_hub/providers"],
+  ["GET", "/public/model_hub/info", "/public/model_hub/info"],
+  ["GET", "/public/v1/model_hub", "/public/v1/model_hub"],
+  ["POST", "/ui/model_hub/update_useful_links", "/model_hub/update_useful_links"],
+  ["POST", "/chat/completions", "/chat/completions"],
+  ["POST", "/ui/chat/completions", "/chat/completions"],
+  ["POST", "/gw/v1/chat/completions", "/v1/chat/completions"],
   ["GET", "/ui/budgets/detail", "/budgets/detail"],
   ["GET", "/v1/memory", "/v1/memory"],
 ])("keeps %s %s on the gateway", (method, pathname, path) => {

@@ -131,20 +131,20 @@ export function LogViewer({
             </p>
           </div>
           {logs.length > 0 && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-1">
                 {filters.map((f) => (
                   <Button
                     key={f}
                     variant={activeFilter === f ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={activeFilter === f}
                     onClick={() => setActiveFilter(f)}
                   >
-                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                    {f === "all" ? t("All") : actionConfig[f].label}
                   </Button>
                 ))}
               </div>
-              <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
                 <span className="text-xs text-muted-foreground mr-1">{t("Sample:")}</span>
                 {sampleSizes.map((size) => (
@@ -152,6 +152,7 @@ export function LogViewer({
                     key={size}
                     variant={sampleSize === size ? "default" : "outline"}
                     size="sm"
+                    aria-pressed={sampleSize === size}
                     onClick={() => setSampleSize(size)}
                   >
                     {size}

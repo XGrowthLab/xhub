@@ -1,76 +1,67 @@
 import { expect, test } from "@playwright/test";
 import { translate, type Locale } from "../src/i18n/translate";
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto, watchGateway } from "./helpers";
-import { recordPage } from "./report";
 
-const retiredAliases = [
-  "/agents",
-  "/workflows",
-  "/memory",
-  "/tool-policies",
-  "/budgets",
-  "/policies",
-  "/vector-stores",
-  "/transform-request",
-  "/ui-theme",
+const retiredConsolePaths = [
+  "/ui/agents",
+  "/ui/workflows",
+  "/ui/memory",
+  "/ui/tool-policies",
+  "/ui/budgets",
+  "/ui/policies",
+  "/ui/vector-stores",
+  "/ui/transform-request",
+  "/ui/ui-theme",
+  "/ui/chat",
+  "/ui/chat/api-keys",
+  "/ui/chat/credentials",
+  "/ui/chat/integrations",
+  "/ui/chat/logs",
+  "/ui/chat/usage",
+  "/ui/connect",
+  "/ui/retired",
+  "/ui/tag-management",
 ];
 
-/** 注册旧控制台路由的双语浏览器场景；locale 为界面语言，无返回。
- * 前置隔离网关和管理员，依次检查真实路由、旧书签保护、有效链接及 MCP 不可用状态；浏览器和 schema 由运行器清理。 */
+/** 以两种界面语言验证真实控制台的旧入口退役；locale 为界面语言，无返回。
+ * 前置隔离网关与真实管理员，覆盖未登录直达、已登录的书签和导航、用量与文档。运行器清理上下文和 schema。 */
 export function registerLegacyRoutes(locale: Locale) {
-  test("旧控制台书签和 MCP 连接指引 " + locale, async ({ page }) => {
-    await page.goto("/ui/agents");
-    await expect(page).toHaveURL(/\/ui\/login/);
+  test("旧工作区下线并保留文档和用量入口 " + locale, async ({ page }) => {
+    const retired = await page.goto("/ui/chat");
+    expect(retired?.status()).toBe(410);
+    expect(await retired?.text()).toBe("");
 
     await loginAdmin(page);
     const monitor = watchGateway(page);
-    await page.evaluate((language) => {
-      localStorage.setItem("xhub_locale", language);
-      document.cookie = `xhub_locale=${language}; path=/`;
-    }, locale);
     const label = (key: string) => translate(locale, key);
+    if (locale === "en") await page.getByRole("button", { name: "English", exact: true }).click();
+    await expect(page.getByRole("link", { name: label("nav.playground"), exact: true })).toBeVisible();
+    await expect(page.getByText(label("header.viewGateway"), { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: label("header.viewGateway"), exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: label("Chat"), exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: label("Chat"), exact: true })).toHaveCount(0);
 
-    for (const route of ["/retired", ...retiredAliases]) {
-      await stableGoto(page, route);
-      await expect(page.getByRole("heading", { name: label("legacyRoutes.retiredTitle") })).toBeVisible();
-      expect(new URL(page.url()).pathname).toBe(`/ui${route}`);
-      await expect(page.getByRole("link", { name: label("legacyRoutes.openConsole") })).toHaveAttribute(
-        "href",
-        /^\/ui\/?$/,
-      );
-      // 等完页面发起的可选配置读取，防止下一次文档导航取消还未提取的响应正文。
-      await monitor.assertOk();
+    for (const route of retiredConsolePaths) {
+      const response = await page.request.get(route, { maxRedirects: 0 });
+      expect(response.status(), route).toBe(410);
+      expect(response.headers()["cache-control"], route).toBe("no-store");
+      expect(response.headers()["location"], route).toBeUndefined();
+      expect(await response.text(), route).toBe("");
     }
-    recordPage("/retired", "pass", "/retired");
+    for (const route of ["/chat", "/chat/integrations", "/connect", "/tag-management"]) {
+      const response = await page.request.head(route, { maxRedirects: 0 });
+      expect(response.status(), route).toBe(410);
+    }
 
-    await page.getByRole("link", { name: label("legacyRoutes.openDocs"), exact: true }).click();
-    await expect(page).toHaveURL(/\/docs\/?$/);
     await monitor.assertOk();
-
     await stableGoto(page, "/api-reference?from=legacy");
     await expect(page).toHaveURL(/\/docs\/api\/models\?from=legacy$/);
     await expect(page.getByRole("heading", { name: label("docs.articles.models.title"), exact: true })).toBeVisible();
     await monitor.assertOk();
 
-    await stableGoto(page, "/tag-management");
-    await expect(page.getByRole("heading", { name: label("legacyRoutes.tagsTitle"), exact: true })).toBeVisible();
-    await expect(page.getByText(label("legacyRoutes.tagsBody"))).toBeVisible();
-    await monitor.assertOk();
-
-    await stableGoto(page, "/chat/credentials");
-    await expect(page.getByText(label("connect.credentialsUnavailable"))).toBeVisible();
-    await monitor.assertOk();
-    await page.getByRole("link", { name: label("connect.openConnections"), exact: true }).click();
-    await expect(page).toHaveURL(/\/ui\/connect\/?$/);
-    await expect(page.getByRole("status").filter({ hasText: label("connect.serversUnavailable") })).toBeVisible();
-    await page.getByRole("tab", { name: label("connect.connected"), exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: label("connect.serversUnavailable") })).toBeVisible();
-
-    await monitor.assertOk();
-    await stableGoto(page, "/chat/integrations?from=legacy");
-    await expect(page).toHaveURL(/\/ui\/connect\?from=legacy$/);
-    await expect(page.getByRole("heading", { name: label("connect.mcpServers"), exact: true })).toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: label("connect.serversUnavailable") })).toBeVisible();
+    await stableGoto(page, "/old-usage");
+    await expect(page).toHaveURL(/\/ui\/usage\/?$/);
+    await expect(page.getByRole("tab", { name: label("pages.usage.cost"), exact: true })).toBeVisible();
     await monitor.assertOk();
   });
 }
@@ -78,10 +69,10 @@ export function registerLegacyRoutes(locale: Locale) {
 /** 注册浏览器同源 API 契约；无参数和返回值。用真实登录后的页面访问 API，前置隔离网关。
  * 验证同名接口方法不被迁移重写，真实策略写入可读回；finally 删除策略。 */
 export function registerLegacyRouteGateway() {
-  test("旧界面退役后同名网关 API 保持可用", async ({ page }) => {
+  test("旧界面退役后同名网关 API 保持可用", async ({ page, request }) => {
     await loginAdmin(page);
     const headers = { Authorization: `Bearer ${await sessionBearer(page)}` };
-    for (const path of ["/budgets", "/gw/budgets", "/gw/model_hub?page_size=1"]) {
+    for (const path of ["/budgets", "/gw/budgets"]) {
       const read = await page.request.get(path, { headers });
       expect(read.status(), await read.text()).toBe(200);
       expect(read.headers()["content-type"]).toMatch(/json/);
@@ -101,6 +92,17 @@ export function registerLegacyRouteGateway() {
     } finally {
       const removed = await page.request.delete("/ui/policies/" + id, { headers });
       expect(removed.status(), await removed.text()).toBe(200);
+    }
+
+    for (const endpoint of ["/chat/completions", "/ui/chat/completions", "/gw/v1/chat/completions"]) {
+      const unauthenticated = await request.post(endpoint, {
+        data: {
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: "Verify gateway authentication is still required." }],
+        },
+      });
+      expect(unauthenticated.status(), await unauthenticated.text()).toBe(401);
+      expect((await unauthenticated.json()).error).toBeDefined();
     }
   });
 }

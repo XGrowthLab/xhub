@@ -17,10 +17,6 @@ vi.mock("./ScoreChart", () => ({
   ScoreChart: () => <div>Score chart</div>,
 }));
 
-vi.mock("./EvaluationSettingsModal", () => ({
-  EvaluationSettingsModal: ({ open }: { open: boolean }) => (open ? <div>Evaluation settings modal</div> : null),
-}));
-
 const baseRow: GuardrailUsageOverviewRow = {
   id: "guardrail",
   name: "Guardrail",
@@ -135,7 +131,7 @@ describe("GuardrailsOverview", () => {
     expect(await screen.findByText("Low Failure Guardrail")).toBeInTheDocument();
     expect(screen.getByText("1,200")).toBeInTheDocument();
     expect(screen.getByText("18%")).toBeInTheDocument();
-    expect(screen.getByText("45ms")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "45ms", exact: true })).toBeInTheDocument();
 
     const rows = screen.getAllByRole("row");
     expect(rows[1]).toHaveTextContent("High Failure Guardrail");
@@ -196,13 +192,14 @@ describe("GuardrailsOverview", () => {
     expect(rowNames()[2]).toContain("Low Failure Guardrail");
   });
 
-  it("renders the page header and the export action", async () => {
+  /** 前置完整指标；验证页面介绍和有效控件，测试库卸载 DOM，无额外资源。 */
+  it("renders the page header without an inactive export action", async () => {
     renderOverview();
 
     expect(await screen.findByRole("heading", { name: "Guardrails Monitor", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("Monitor guardrail performance across all requests")).toBeInTheDocument();
+    expect(screen.getByText("Review guardrail decisions, added latency, and costs for the selected period.")).toBeInTheDocument();
     expect(document.querySelector(".lucide-heart-pulse")).not.toBeNull();
-    expect(screen.getByRole("button", { name: /Export Data/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Export Data/i })).not.toBeInTheDocument();
   });
 
   it("renders every summary metric card", async () => {
@@ -214,7 +211,8 @@ describe("GuardrailsOverview", () => {
     expect(screen.getByText("84")).toBeInTheDocument();
     expect(screen.getByText("Pass Rate")).toBeInTheDocument();
     expect(screen.getByText("94.4%")).toBeInTheDocument();
-    expect(screen.getByText("15ms")).toBeInTheDocument();
+    const summary = within(screen.getByRole("region", { name: "Guardrail summary" }));
+    expect(summary.getByRole("group", { name: "Avg. latency added" })).toHaveTextContent("45ms");
     expect(screen.getByText("Active Guardrails")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
@@ -267,22 +265,40 @@ describe("GuardrailsOverview", () => {
     expect(card).not.toHaveTextContent("unpriced");
   });
 
+  /** 前置性能数据，验证标题层级、表格区域和详情说明；测试库自动清理。 */
   it("renders the table toolbar heading and its description", async () => {
     renderOverview();
 
-    expect(await screen.findByRole("heading", { name: "Guardrail Performance", level: 5 })).toBeInTheDocument();
-    expect(screen.getByText("Click a guardrail to view details, logs, and configuration")).toBeInTheDocument();
+    const performance = within(await screen.findByRole("region", { name: "Guardrail Performance" }));
+    expect(performance.getByRole("heading", { name: "Guardrail Performance", level: 2 })).toBeInTheDocument();
+    expect(performance.getByText("Open a guardrail to see its usage and logs.")).toBeInTheDocument();
   });
 
-  it("opens the evaluation settings modal from the toolbar action", async () => {
-    const user = userEvent.setup();
+  /** 前置后台记录 0ms、45ms 与未知值，平均值保留真正的零值并排除未知值；无外部资源。 */
+  it("averages only measured latency, including an observed zero", async () => {
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: { ...overview, rows: [...overview.rows, { ...baseRow, id: "zero-latency", avgLatency: 0 }] },
+      isLoading: false,
+      error: null,
+    });
     renderOverview();
+    const summary = within(await screen.findByRole("region", { name: "Guardrail summary" }));
+    expect(summary.getByRole("group", { name: "Avg. latency added" })).toHaveTextContent("23ms");
+  });
 
-    expect(screen.queryByText("Evaluation settings modal")).not.toBeInTheDocument();
-
-    await user.click(await screen.findByTitle("Evaluation settings"));
-
-    expect(await screen.findByText("Evaluation settings modal")).toBeInTheDocument();
+  /** 模拟没有请求与耗时数据的时段，验证实际零计数与不可计算的指标可区分；无外部资源。 */
+  it("distinguishes zero evaluations from an unobserved rate or latency", async () => {
+    useGuardrailsUsageOverviewMock.mockReturnValue({
+      data: { ...overview, rows: [], totalRequests: 0, totalBlocked: 0, passRate: 0, chart: [] },
+      isLoading: false,
+      error: null,
+    });
+    renderOverview();
+    const summary = within(await screen.findByRole("region", { name: "Guardrail summary" }));
+    expect(summary.getByRole("group", { name: "Total Evaluations" })).toHaveTextContent("0");
+    expect(summary.getByRole("group", { name: "Pass Rate" })).toHaveTextContent("—");
+    expect(summary.getByRole("group", { name: "Avg. latency added" })).toHaveTextContent("—");
+    expect(screen.getByText("No data for this period")).toBeVisible();
   });
 
   it("marks the overview busy while the usage request is in flight", async () => {

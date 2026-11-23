@@ -3,6 +3,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 import { formatDate } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import { useT } from "@/i18n";
 import { GuardrailDetail } from "./GuardrailDetail";
 import { GuardrailsOverview } from "./GuardrailsOverview";
 
@@ -14,7 +15,9 @@ const defaultEnd = new Date();
 const defaultStart = new Date();
 defaultStart.setDate(defaultStart.getDate() - 7);
 
+/** 切换监控总览及指定护栏；参数为会话，详情标识随 URL，两个视图共享同一日期范围。 */
 export default function GuardrailsMonitorView({ accessToken = null }: GuardrailsMonitorViewProps) {
+  const t = useT();
   const [selectedGuardrailId, setSelectedGuardrailId] = useQueryState(
     "guardrail",
     parseAsString.withOptions({ history: "push" }),
@@ -44,11 +47,17 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
   };
 
   const dateRangeControl = (
-    <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
+    <AdvancedDatePicker
+      className="w-full [&>p]:sr-only @md:w-auto @max-md:[&_[data-slot=advanced-date-picker-panel]]:max-w-full"
+      value={dateValue}
+      onValueChange={handleDateChange}
+      label={t("pages.guardrailsMonitor.dateRange")}
+      showTimeRange={false}
+    />
   );
 
   return (
-    <main className="w-full min-w-0 flex-1">
+    <div className="w-full min-w-0 flex-1">
       {!selectedGuardrailId ? (
         <GuardrailsOverview
           accessToken={accessToken}
@@ -59,7 +68,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
         />
       ) : (
         <>
-          <div className="mb-4 flex items-center justify-end">{dateRangeControl}</div>
+          <div className="@container mb-4 flex w-full min-w-0 items-center justify-end">{dateRangeControl}</div>
           <GuardrailDetail
             guardrailId={selectedGuardrailId}
             onBack={handleBack}
@@ -69,6 +78,6 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
           />
         </>
       )}
-    </main>
+    </div>
   );
 }
