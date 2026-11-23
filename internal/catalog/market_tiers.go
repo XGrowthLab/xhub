@@ -15,7 +15,7 @@ type MarketTier struct {
 }
 
 // MarketTiers 将 Modelink 的输入长度分档转换成完整、可验证的价格快照。
-// row 为未修改的市场模型记录，返回有序档位和原因码；仅接受覆盖完整输入窗且输出区间一致的已知 token 报价。
+// row 为未修改的市场模型记录，返回有序档位和原因码；来源 -1 上界按声明容量归一化，仅接受完整输入窗及一致输出区间。
 // 供管理员预览及确认使用；未知条件、缺价、间隙和重叠均拒绝，绝不回退首档或推测免费。
 func MarketTiers(row map[string]any) ([]MarketTier, string) {
 	if row["source"] != MarketURL {
@@ -31,11 +31,11 @@ func MarketTiers(row map[string]any) ([]MarketTier, string) {
 	}
 	tiers := make([]MarketTier, 0, len(rules))
 	for _, rule := range rules {
-		in, ok := marketTierRange(rule["input_range"])
+		in, ok := marketTierRange(rule["input_range"], row["max_input_tokens"])
 		if !ok {
 			return nil, "unsupported_pricing"
 		}
-		out, ok := marketTierRange(rule["output_range"])
+		out, ok := marketTierRange(rule["output_range"], row["max_output_tokens"])
 		if !ok || out[0] != 0 {
 			return nil, "unsupported_pricing"
 		}
@@ -113,9 +113,10 @@ func MarketTiers(row map[string]any) ([]MarketTier, string) {
 	return tiers, ""
 }
 
-// marketTierRange 读取两个非负整数边界；参数为 JSON 区间，返回正宽区间及是否有效。
-// MarketTiers 调用；拒绝小数、非数和溢出，不修改输入。
-func marketTierRange(value any) ([2]int, bool) {
+// marketTierRange 读取来源区间，将上界 -1 收敛到该模型声明的输入或输出容量。
+// value 为 JSON 区间，limit 为对应容量，返回可执行的正宽整数区间及有效标记。
+// MarketTiers 构建冻结快照时调用；有限上界沿用原值，拒绝负下界、未知负数、无效容量和溢出，不修改原报价。
+func marketTierRange(value, limit any) ([2]int, bool) {
 	var out [2]int
 	a, ok := value.([]any)
 	if !ok || len(a) != 2 {
@@ -123,6 +124,11 @@ func marketTierRange(value any) ([2]int, bool) {
 	}
 	for i, value := range a {
 		n, ok := value.(float64)
+		// 来源的开放上界仅在模型实际支持范围内计价。保留原始 -1 规则供后续对价，
+		// 执行快照使用有限容量，让既有区间选择器和严格预算预估共用相同边界。
+		if ok && i == 1 && n == -1 {
+			n, ok = floatField(limit)
+		}
 		if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n != math.Trunc(n) || n > math.MaxInt32 {
 			return out, false
 		}

@@ -14,7 +14,7 @@ import (
 )
 
 // TestModelContractMarketTierPriceRealGateway 验证真实管理路由、隔离 PostgreSQL 与上游计量之间的分档计费。
-// 本地来源提供两档，覆盖边界、快照冻结、管理员确认和伪造拒绝；harness 在测试结束时清理 schema 与服务。
+// 本地来源提供 -1 开放上界的两档，覆盖边界、模型容量上限、快照冻结、管理员确认和伪造拒绝；harness 在测试结束时清理 schema 与服务。
 func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	before := catalog.PriceDocument{Version: 1, Models: catalog.CostMap(), Providers: catalog.Providers(), Source: catalog.PriceSource(), GeneratedAt: catalog.PriceGeneratedAt()}
 	t.Cleanup(func() { _, _ = catalog.ApplyDocument(before) })
@@ -29,8 +29,8 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f := float64(factor.Load())
 		rules := []any{
-			map[string]any{"input_range": []int{0, 11}, "output_range": []int{0, 99999999}, "details_v2": map[string]any{"ncache": unit(f), "output": unit(5 * f), "cache": unit(.05 * f)}},
-			map[string]any{"input_range": []int{11, 99999999}, "output_range": []int{0, 99999999}, "details_v2": map[string]any{"ncache": unit(2 * f), "output": unit(7.5 * f), "cache": unit(.1 * f)}},
+			map[string]any{"input_range": []int{0, 11}, "output_range": []int{0, -1}, "details_v2": map[string]any{"ncache": unit(f), "output": unit(5 * f), "cache": unit(.05 * f)}},
+			map[string]any{"input_range": []int{11, -1}, "output_range": []int{0, -1}, "details_v2": map[string]any{"ncache": unit(2 * f), "output": unit(7.5 * f), "cache": unit(.1 * f)}},
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": true, "data": []any{map[string]any{"id": "fixture-tier-base", "issuer": map[string]any{"name": "OpenAI"}, "model_constraints": map[string]any{"context_length": 100, "max_completion_tokens": 20}, "pricing_rules_v2": rules}}})
 	}))
@@ -45,6 +45,16 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 		t.Fatal("隐式目录来源未固定，或与市场档位冲突的旧平面价格仍然存在")
 	}
 	id := created.json()["model_info"].(map[string]any)["id"].(string)
+	// 原始来源保留 -1，执行快照按模型容量明确上下界，不能退回首档。
+	saved := created.json()["litellm_params"].(map[string]any)
+	rawRules := saved["pricing_rules_v2"].([]any)
+	tiers := saved["market_price_tiers"].([]any)
+	if rawRules[1].(map[string]any)["input_range"].([]any)[1] != float64(-1) ||
+		tiers[1].(map[string]any)["input_range"].([]any)[1] != float64(100) ||
+		tiers[0].(map[string]any)["output_range"].([]any)[1] != float64(20) {
+		t.Fatalf("来源与执行快照的开放上界不正确: %#v", saved)
+	}
+
 	t.Cleanup(func() { h.do("POST", "/model/delete", admin, map[string]any{"id": id}) })
 	// 查询普通用户真正拿到的价格快照；返回该模型卡片，授权失败、秘密泄漏或缺失都直接定位到接口。
 	visibleCard := func() map[string]any {
@@ -102,7 +112,7 @@ func TestModelContractMarketTierPriceRealGateway(t *testing.T) {
 	for _, tc := range []struct {
 		input, cached int
 		want          float64
-	}{{10, 0, .000035}, {11, 0, .000036}, {12, 0, .0000615}, {12, 6, .0000501}} {
+	}{{10, 0, .000035}, {11, 0, .000036}, {12, 0, .0000615}, {12, 6, .0000501}, {100, 0, .0002375}} {
 		if got := call(tc.input, tc.cached); math.Abs(got-tc.want) > 1e-10 {
 			t.Fatalf("实测输入=%d 缓存=%d 的费用错误: got=%g want=%g", tc.input, tc.cached, got, tc.want)
 		}

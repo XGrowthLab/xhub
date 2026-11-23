@@ -266,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
                     # 较长但有效的来源价格规则，用于验证详情跨页时不会一次性返回整个事件。
                     rows[-1]["pricing_rules_v2"][0]["details_v2"]["input"]["e2e_padding"] = "x" * 20000
             if os.environ.get("E2E_MARKET_TIER") == "1":
-                # 分档样例仅在专属浏览器测试启用；价格、用量和模型均为合成数据。
+                # 专属浏览器样例使用来源的 -1 开放上界；价格、用量和模型均为合成数据。
                 def token_rate(price):
                     """生成每百万 Token 的合成美元价，参数为单价；无外部副作用。"""
                     return {"unit_name": "token", "unit_size": 1000000, "unit_price_usd": price}
@@ -274,8 +274,8 @@ class Handler(BaseHTTPRequestHandler):
                     "model_constraints": {"context_length": 128000, "max_tokens": 8192},
                     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
                     "pricing_rules_v2": [
-                        {"input_range": [0, 5], "output_range": [0, 99999999], "details_v2": {"ncache": token_rate(1), "output": token_rate(2)}},
-                        {"input_range": [5, 99999999], "output_range": [0, 99999999], "details_v2": {"ncache": token_rate(2), "output": token_rate(3)}},
+                        {"input_range": [0, 5], "output_range": [0, -1], "details_v2": {"ncache": token_rate(1), "output": token_rate(2)}},
+                        {"input_range": [5, -1], "output_range": [0, -1], "details_v2": {"ncache": token_rate(2), "output": token_rate(3)}},
                     ]})
             self._json({"status": True, "data": rows})
             return
