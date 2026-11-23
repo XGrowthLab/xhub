@@ -1,6 +1,6 @@
 import { chooseKeyTeam } from "./helpers";
 
-import { GATEWAY } from "./helpers";
+import { CONSOLE_HTTP, GATEWAY } from "./helpers";
 
 import { execFileSync } from "child_process";
 
@@ -85,7 +85,7 @@ export function registerSC007() {
   test("retired model hub pages preserve the public catalog API", async ({ page }) => {
     const query = "?page=1&page_size=1";
     for (const path of ["/model_hub_table", "/ui/model_hub_table", "/model-hub-table", "/ui/model-hub-table", "/ui/model_hub"]) {
-      const response = await page.request.get(path + query, { maxRedirects: 0 });
+      const response = await page.request.get(CONSOLE_HTTP + path + query, { maxRedirects: 0 });
       expect(response.status(), path).toBe(410);
       expect(response.headers()["cache-control"], path).toBe("no-store");
       expect(await response.text(), path).toBe("");
@@ -98,7 +98,7 @@ export function registerSC007() {
     expect(expected.data).toHaveLength(1);
 
     for (const path of ["/model_hub", "/gw/model_hub", "/public/model_hub", "/public/v1/model_hub"]) {
-      const catalog = await page.request.get(path + query, { headers: { Accept: "application/json" } });
+      const catalog = await page.request.get(CONSOLE_HTTP + path + query, { headers: { Accept: "application/json" } });
       expect(catalog.status(), await catalog.text()).toBe(200);
       expect(catalog.headers()["content-type"]).toMatch(/json/);
       const payload = await catalog.json();

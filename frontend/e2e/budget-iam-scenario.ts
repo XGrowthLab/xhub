@@ -1,6 +1,5 @@
 import { expect, test as base } from "@playwright/test";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "./helpers";
-import { matchesGatewayResponse } from "./gateway-response.cjs";
+import { GATEWAY, loginAdmin, sessionBearer } from "./helpers";
 import type { Locale } from "../src/i18n/translate";
 
 type Resources = { headers: Record<string, string>; name: string };
@@ -44,30 +43,25 @@ export const test = base.extend<{ budgetResources: Resources }>({
   }, { timeout: 30_000 }],
 });
 
-/** 注册真实预算页面与IAM兼容边界；locale为控制台语言，返回无。
- * 页面创建/编辑/刷新预算，真实组织团队主接口回读，旧操作501且状态不变，模型实际返回e2e-ok。
- * 原预算页面中文控件保持现状，本次不修改UI文案；原始中英文输入不变，独立夹具负责成功/失败清理。
+/** 注册预算页面退役及 IAM 兼容场景；locale 为控制台语言，无返回值。
+ * 前置真实管理员会话、独立数据库和模型夹具。验证旧页 410、真实预算 API 创建和编辑、组织团队数据不变及推理结果。
+ * 验证中英文输入原样保存，独立夹具在成功或失败后清理本场景资源。
  */
 export function registerBudgetIAM(locale: Locale) {
   test("budget configuration and IAM boundary " + locale, async ({ page, budgetResources: resources }) => {
     await loginAdmin(page);
     await page.getByRole("button", { name: locale === "en" ? "English" : "中文", exact: true }).click();
     const headers = resources.headers = { Authorization: "Bearer " + await sessionBearer(page) };
-    await stableGoto(page, "/budgets");
-    await page.getByLabel("名称", { exact: true }).fill(resources.name);
-    const created = page.waitForResponse(r => matchesGatewayResponse(r.url(), r.request().method(), "/budget/new", "POST"));
-    await page.getByRole("button", { name: "创建", exact: true }).click();
-    const response = await created;
+    expect((await page.goto("/ui/budgets"))?.status()).toBe(410);
+    const response = await page.request.post(GATEWAY + "/budget/new", { headers, data: { budget_id: resources.name } });
     expect(response.status(), await response.text()).toBe(200);
     expect(await response.json()).toMatchObject({ budget_id: resources.name, max_budget: null });
-    await expect(page.getByTestId("column-list")).toContainText(resources.name);
-    // 更新沿用页面现有行为，budget_duration只作为配置保存，不意味着真实定时刷新执行。
-    await page.getByLabel("名称", { exact: true }).fill("Original 用户 input");
-    const updated = page.waitForResponse(r => matchesGatewayResponse(r.url(), r.request().method(), "/budget/update", "POST"));
-    await page.getByRole("button", { name: "更新", exact: true }).click();
-    expect((await updated).status()).toBe(200);
-    await page.reload();
-    await expect(page.getByTestId("column-list")).toContainText("Original 用户 input");
+    // 预算兼容接口只保存 budget_duration 配置。这里用混合语言校验原始文本能正确回读。
+    const updated = await page.request.post(GATEWAY + "/budget/update", {
+      headers,
+      data: { budget_id: resources.name, max_budget: 1, budget_duration: "Original 用户 input" },
+    });
+    expect(updated.status(), await updated.text()).toBe(200);
     const saved = await page.request.post(GATEWAY + "/budget/info", { headers, data: { budget_id: resources.name } });
     expect(saved.status()).toBe(200);
     expect(await saved.json()).toMatchObject({ max_budget: 1, budget_duration: "Original 用户 input" });
@@ -104,7 +98,5 @@ export function registerBudgetIAM(locale: Locale) {
     const deleted = await page.request.post(GATEWAY + "/budget/delete", { headers, data: { budget_id: resources.name } });
     expect(deleted.status()).toBe(200);
     expect((await page.request.post(GATEWAY + "/budget/info", { headers, data: { budget_id: resources.name } })).status()).toBe(404);
-    await page.reload();
-    await expect(page.getByTestId("column-list")).not.toContainText(resources.name);
   });
 }

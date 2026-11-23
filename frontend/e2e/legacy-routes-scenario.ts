@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { translate, type Locale } from "../src/i18n/translate";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto, watchGateway } from "./helpers";
+import { CONSOLE_HTTP, GATEWAY, loginAdmin, sessionBearer, stableGoto, watchGateway } from "./helpers";
 
 const retiredConsolePaths = [
   "/ui/agents",
@@ -42,14 +42,14 @@ export function registerLegacyRoutes(locale: Locale) {
     await expect(page.getByRole("button", { name: label("Chat"), exact: true })).toHaveCount(0);
 
     for (const route of retiredConsolePaths) {
-      const response = await page.request.get(route, { maxRedirects: 0 });
+      const response = await page.request.get(CONSOLE_HTTP + route, { maxRedirects: 0 });
       expect(response.status(), route).toBe(410);
       expect(response.headers()["cache-control"], route).toBe("no-store");
       expect(response.headers()["location"], route).toBeUndefined();
       expect(await response.text(), route).toBe("");
     }
     for (const route of ["/chat", "/chat/integrations", "/connect", "/tag-management"]) {
-      const response = await page.request.head(route, { maxRedirects: 0 });
+      const response = await page.request.head(CONSOLE_HTTP + route, { maxRedirects: 0 });
       expect(response.status(), route).toBe(410);
     }
 
@@ -73,14 +73,14 @@ export function registerLegacyRouteGateway() {
     await loginAdmin(page);
     const headers = { Authorization: `Bearer ${await sessionBearer(page)}` };
     for (const path of ["/budgets", "/gw/budgets"]) {
-      const read = await page.request.get(path, { headers });
+      const read = await page.request.get(CONSOLE_HTTP + path, { headers });
       expect(read.status(), await read.text()).toBe(200);
       expect(read.headers()["content-type"]).toMatch(/json/);
       expect((await read.json()).data).toEqual(expect.any(Array));
     }
 
     const id = `console-alias-${Date.now()}`;
-    const created = await page.request.post("/ui/policies", {
+    const created = await page.request.post(CONSOLE_HTTP + "/ui/policies", {
       headers,
       data: { policy_id: id, name: "Console alias test" },
     });
@@ -90,12 +90,12 @@ export function registerLegacyRouteGateway() {
       expect(saved.status(), await saved.text()).toBe(200);
       expect(await saved.json()).toMatchObject({ policy_id: id });
     } finally {
-      const removed = await page.request.delete("/ui/policies/" + id, { headers });
+      const removed = await page.request.delete(CONSOLE_HTTP + "/ui/policies/" + id, { headers });
       expect(removed.status(), await removed.text()).toBe(200);
     }
 
     for (const endpoint of ["/chat/completions", "/ui/chat/completions", "/gw/v1/chat/completions"]) {
-      const unauthenticated = await request.post(endpoint, {
+      const unauthenticated = await request.post(CONSOLE_HTTP + endpoint, {
         data: {
           model: "gpt-4o-mini",
           messages: [{ role: "user", content: "Verify gateway authentication is still required." }],

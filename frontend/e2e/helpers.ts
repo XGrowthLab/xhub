@@ -8,6 +8,9 @@ export const t = (key: string) => translate("zh-CN", key);
 export const GATEWAY = process.env.E2E_GATEWAY || "http://127.0.0.1:4100";
 export const UPSTREAM = process.env.E2E_UPSTREAM || "http://127.0.0.1:4110";
 
+// Playwright 的 Node 请求直连 Next 监听地址。xhub-http.test 仅由 Chromium 的启动参数解析。
+export const CONSOLE_HTTP = "http://127.0.0.1:" + (process.env.E2E_UI_PORT || "3100");
+
 export const MASTER = process.env.E2E_MASTER_KEY || "sk-e2e-master";
 
 /** 观察真实页面响应与异常；可选设置必须满足明确不支持契约，其余5xx均失败。
