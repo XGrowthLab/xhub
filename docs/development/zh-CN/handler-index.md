@@ -306,6 +306,10 @@ x-litellm-call-id 关联调用与日志，x-litellm-response-cost 表示这次�
 | --- | --- | --- |
 | `GET /health/liveliness` | `healthLive` | [health.go](../../../internal/gateway/health/health.go) |
 | `GET /health/liveness` | `healthLive` | [health.go](../../../internal/gateway/health/health.go) |
+| `GET /admin/version-update` | versionupdate.Mount | [handler.go](../../../internal/gateway/versionupdate/handler.go) |
+| `POST /admin/version-update/check` | versionupdate.Mount | [handler.go](../../../internal/gateway/versionupdate/handler.go) |
+| `POST /admin/version-update/apply` | versionupdate.Mount | [handler.go](../../../internal/gateway/versionupdate/handler.go) |
+| `POST /admin/version-update/rollback` | versionupdate.Mount | [handler.go](../../../internal/gateway/versionupdate/handler.go) |
 | `GET /health/readiness` | `healthReady` | [health.go](../../../internal/gateway/health/health.go) |
 | `GET /health/readiness/details` | `healthDetails` | [health.go](../../../internal/gateway/health/health.go) |
 | `GET /health` | `healthReady` | [health.go](../../../internal/gateway/health/health.go) |

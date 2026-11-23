@@ -5509,6 +5509,7 @@
     "identity": 31,
     "ingress": 2,
     "models": 18,
+    "prefs": 4,
     "publichub": 2,
     "session": 8,
     "usage": 2

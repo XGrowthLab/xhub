@@ -3,23 +3,24 @@ package prefs
 
 import (
 	"net/http"
+	"os"
 	"sync"
 
+	"github.com/sunqirui1987/xhub/internal/gateway/versionupdate"
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
 var logTraceOnceMount sync.Once
 
-// Module reads and writes general preferences.
-// 参数 h（Host）：实现这一步所需能力的数据面宿主。聊天、直通和刷写各自只依赖自己的方法。
-// 返回 util.Module（util.Module）：可挂到网关上的模块。
-// 调用：gateway/family/mount.go、gateway/guard/mount.go、gateway/identity/mount.go、gateway/keys/mount.go
-// 测试：无直接单测
+// Module 注册通用设置及管理员版本操作。h 为设置宿主；返回用于启动挂载的模块。
+// 未配置主机 socket 时版本操作保持禁用。
 func Module(h Host) util.Module {
 	logTraceOnceMount.Do(func() { util.Trace("enter prefs.Module") })
 
 	traceModule("prefs")
+	updateSocket := os.Getenv("XHUB_UPDATE_SOCKET")
 	return util.Bind("prefs", func(reg util.Registrar) {
+		versionupdate.Mount(reg, h.RequireManage, updateSocket)
 		reg.Handle("GET /get/config/callbacks", func(w http.ResponseWriter, r *http.Request) { Callbacks(h, w, r) })
 		reg.Handle("GET /config/list", func(w http.ResponseWriter, r *http.Request) { List(h, w, r) })
 		reg.Handle("POST /config/update", func(w http.ResponseWriter, r *http.Request) { Update(h, w, r) })

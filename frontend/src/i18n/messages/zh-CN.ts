@@ -16,6 +16,51 @@ import { routeTemplatesZhCN } from "./routeTemplates.zh-CN";
 import { cacheAdminZhCN } from "./cacheAdmin.zh-CN";
 
 export const zhCN = {
+  versionUpdates: {
+    "title": "版本更新",
+    "description": "查看正式发布、更新网关与控制台，或恢复上一个版本。",
+    "loading": "正在读取当前版本…",
+    "disabled": "此实例尚未启用主机更新执行器。",
+    "current": "当前版本",
+    "channel": "更新渠道",
+    "beta": "测试版渠道",
+    "stable": "正式版渠道",
+    "previous": "上一个版本",
+    "unknown": "未识别",
+    "none": "无",
+    "bootstrap": "请先在主机上安装包含版本更新功能的成套镜像，再使用后台更新。",
+    "currentRelease": "当前渠道没有更新版本。",
+    "target": "目标版本",
+    "available": "可更新到 {version}",
+    "prerelease": "测试版",
+    "notes": "查看发布说明",
+    "incompatible": "数据库兼容标识不同，请按版本说明在主机上执行迁移升级。",
+    "check": "检查更新",
+    "apply": "立即更新",
+    "rollback": "回退版本",
+    "confirmApply": "更新到 {version}",
+    "confirmRollback": "回退到 {version}",
+    "confirmDescription": "网关与控制台将重新启动。单网关实例可能短暂中断，进度可在此页面重新打开后查看。",
+    "confirm": "确认执行",
+    "cancel": "取消",
+    "success": "操作完成，当前版本 {version}",
+    "unavailable": "暂时无法连接更新执行器，正在重新读取状态。",
+    "conflict": "正在执行其他操作，或目标版本已变化。请检查当前状态。",
+    "stage": {
+      "checking": "正在检查发布版本…",
+      "pulling": "正在准备并校验镜像…",
+      "switching": "正在切换服务并检查健康…",
+      "recovering": "正在恢复原版本…"
+    },
+    "errors": {
+      "interrupted": "上次操作中断，原版本已保留或恢复。",
+      "rolled_back": "新版本未通过健康检查，已恢复原版本。",
+      "recovery_required": "原版本恢复失败，请到主机查看部署状态。",
+      "check_failed": "检查更新失败，请检查发布源和运行中的镜像。",
+      "prepare_failed": "准备镜像失败，请检查镜像仓库、磁盘空间和当前部署。",
+      "invalid_target": "版本或当前部署已改变，请重新检查更新。"
+    }
+  },
   searchPricing: {
     usageMissing: "上游未报告搜索次数，本次请求无法完整计价。",
     usageInvalid: "上游报告的搜索次数无效或互相矛盾，本次请求无法完整计价。",

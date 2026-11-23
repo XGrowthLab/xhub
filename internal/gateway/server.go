@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -180,16 +181,27 @@ func New(cfg *config.Config, st *store.Store, db *iam.DB) *Server {
 // 监听失败不启动后台任务；服务退出取消维护，PostgreSQL-only 部署同样维护预算周期。
 // 测试：organization_maintenance_test.go 验证成功监听后的空闲组织维护与退出清理。
 func (s *Server) Run(addr string) error {
+	return s.RunContext(context.Background(), addr)
+}
+
+// RunContext 监听地址并提供完整网关；ctx 取消后停止接收请求，最多等待一分钟收尾。
+// 进程入口调用；等待结束后再停维护和账单刷写任务，监听失败原样返回。
+func (s *Server) RunContext(ctx context.Context, addr string) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	return s.serveListener(ln)
+	return s.serveListenerContext(ctx, ln)
 }
 
 // serveListener 在成功监听后启动维护任务并提供 HTTP 服务；ln 为 Run 或隔离测试创建的监听器。
 // 返回服务退出错误；退出取消预算、归档、SSO 刷新和正文清理任务，IAM 存在时即启动维护，不以 Redis 可用性为条件。
 func (s *Server) serveListener(ln net.Listener) error {
+	return s.serveListenerContext(context.Background(), ln)
+}
+
+// serveListenerContext 负责监听期维护生命周期。shutdown 控制 HTTP 退出；维护在在途请求收尾之后停止。
+func (s *Server) serveListenerContext(shutdown context.Context, ln net.Listener) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	var flush sync.WaitGroup
 	// 先停止并等待刷写，再释放独占目录锁，避免旧实例仍提交时新实例抢先重放。
@@ -211,5 +223,27 @@ func (s *Server) serveListener(ln net.Listener) error {
 	flush.Add(1)
 	go func() { defer flush.Done(); s.protocolProbeLoop(ctx) }()
 	go s.archiveLoop(ctx)
-	return (&http.Server{Handler: s.Handler()}).Serve(ln)
+	return serveHTTPWithShutdown(shutdown, &http.Server{Handler: s.Handler()}, ln, time.Minute)
+}
+
+// serveHTTPWithShutdown 在停机时关闭监听、等待在途 HTTP（包括 SSE）并限制最长等待。
+// listener 一直可用时返回 Serve 的原错误；取消时返回停机结果，超时才关闭剩余连接。
+func serveHTTPWithShutdown(ctx context.Context, server *http.Server, listener net.Listener, grace time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case err := <-served:
+		return err
+	case <-ctx.Done():
+		wait, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		err := server.Shutdown(wait)
+		if err != nil {
+			_ = server.Close()
+		}
+		if serveErr := <-served; !errors.Is(serveErr, http.ErrServerClosed) {
+			return serveErr
+		}
+		return err
+	}
 }

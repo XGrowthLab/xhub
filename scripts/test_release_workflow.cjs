@@ -253,27 +253,59 @@ test('both images preserve tags and standalone layout', () => {
   assert.equal(step('Publish GitHub Release').if, "github.ref_type == 'tag'");
 });
 
-/** 发布 shell 覆盖初次发布、重跑、预发布和上传失败；gh 夹具只记录命令，finally 清理。 */
-test('release reruns are repeatable and upload failures propagate', () => {
+/** 运行真实发布 shell 及清单生成器。覆盖首次发布、测试版、重复运行和不可变冲突；finally 删除临时夹具。 */
+test('release attaches immutable version and image manifests', () => {
   const directory = mkdtempSync(join(tmpdir(), 'xhub-release-publish-'));
   try {
-    writeFileSync(join(directory, 'gh'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS"\ncase "$2" in view) exit "$EXISTS" ;; upload) exit "$UPLOAD_STATUS" ;; esac\n', { mode: 0o755 });
-    for (const [version, exists, uploadStatus] of [['v1.2.3', '1', '0'], ['v1.2.3', '0', '0'], ['v2.0.0-rc.1', '1', '0'], ['v1.2.3', '0', '1']]) {
+    mkdirSync(join(directory, 'deploy'));
+    writeFileSync(join(directory, 'deploy/update_manifest.py'), readFileSync(join(__dirname, '../deploy/update_manifest.py')));
+    writeFileSync(join(directory, 'gh'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS"\ncase "$2" in\nview) exit "$EXISTS";;\ncreate) exit "$CREATE_STATUS";;\ndownload) if [[ "$EXPECTED" == altered ]]; then printf "{}\\n" > existing-release.json; else cp xhub-release.json existing-release.json; fi;;\nesac\n', { mode: 0o755 });
+    for (const [version, exists, createStatus, expected, exit] of [
+      ['v0.1.0', '1', '0', 'same', 0],
+      ['v0.1.0-beta.1', '1', '0', 'same', 0],
+      ['v0.1.0', '1', '5', 'same', 5],
+      ['v0.1.0', '0', '0', 'same', 0],
+      ['v0.1.0', '0', '0', 'altered', 1],
+    ]) {
       const calls = join(directory, 'calls');
       writeFileSync(calls, '');
+      const gateway = 'sha256:' + 'a'.repeat(64);
+      const consoleImage = 'sha256:' + 'b'.repeat(64);
+      const sha = 'c'.repeat(40);
+      const compatibility = 'd'.repeat(64);
       const result = spawnSync('bash', ['-c', step('Publish GitHub Release').run], {
         cwd: directory, encoding: 'utf8', env: { ...process.env, PATH: directory + ':' + process.env.PATH,
-          VERSION: version, REPOSITORY: 'owner/xhub', GATEWAY_DIGEST: 'sha256:gateway', CONSOLE_DIGEST: 'sha256:console',
-          CALLS: calls, EXISTS: exists, UPLOAD_STATUS: uploadStatus },
+          VERSION: version, REPOSITORY: 'owner/xhub', GATEWAY_DIGEST: gateway, CONSOLE_DIGEST: consoleImage,
+          RELEASE_SHA: sha, DATABASE_COMPATIBILITY: compatibility,
+          CALLS: calls, EXISTS: exists, CREATE_STATUS: createStatus, EXPECTED: expected },
       });
-      assert.equal(result.status, Number(uploadStatus), result.stderr);
+      assert.equal(result.status, exit, result.stderr);
       const log = readFileSync(calls, 'utf8');
       assert.equal(log.includes('release create'), exists === '1');
       if (version.includes('-')) assert.match(log, /--prerelease --latest=false/);
-      assert.match(log, /release upload .* docker-images.txt --clobber/);
-      assert.equal(readFileSync(join(directory, 'docker-images.txt'), 'utf8'), 'ghcr.io/owner/xhub-gateway@sha256:gateway\nghcr.io/owner/xhub-console@sha256:console\n');
+      if (exists === '1') assert.match(log, /release create .* docker-images.txt xhub-release.json/);
+      else assert.match(log, /release download .* --pattern xhub-release.json/);
+      assert.doesNotMatch(log, /--clobber/);
+      assert.deepEqual(JSON.parse(readFileSync(join(directory, 'xhub-release.json'), 'utf8')), {
+        schema: 1, version, revision: sha, database_compatibility: compatibility,
+        images: { gateway: 'ghcr.io/owner/xhub-gateway@' + gateway, console: 'ghcr.io/owner/xhub-console@' + consoleImage },
+      });
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+/** 前置真实发布工作流；独立版本升级 E2E 必须在发镜像前运行和保留证据；无写入。 */
+test('verified releases require the real Compose version update flow', () => {
+  const steps = workflow.jobs.verify.steps;
+  const upgrade = steps.find(item => item.name === 'Version update browser regression');
+  assert.match(upgrade.run, /python3 -B e2e\/version_update_fixture.py/);
+  assert.equal(upgrade.env.E2E_FULL_COVERAGE, '0');
+  assert.ok(steps.some(item => item.run?.includes('unittest deploy.test_update_agent')));
+  assert.ok(steps.some(item => item.run?.includes('VersionUpdates.test.tsx')));
+  const upload = steps.find(item => item.uses === 'actions/upload-artifact@v4');
+  assert.ok(upload.with.path.includes('.e2e/release-version-update/junit.xml'));
+  const builds = publish.steps.filter(item => item.uses === 'docker/build-push-action@v6');
+  assert.ok(builds.every(item => item.with.labels.includes('io.xhub.database-compatibility=')));
 });
 
 /** 前置发布工作流；验证 CI 使用无构建地址的普通 HTTP 调试流程并运行对应单元测试；只读无需清理。 */
