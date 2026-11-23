@@ -48,7 +48,7 @@ func TestNativeMessagesToolResultImages(t *testing.T) {
 			body := toolResultImageRequest(block, "user")
 			before, _ := json.Marshal(body)
 			d, err := ParseDialogue("anthropic-messages", body)
-			if err != nil || !strings.Contains(d.BridgeError, "tool_result images") {
+			if err != nil || d.BridgeError == nil || !strings.Contains(d.BridgeError.Error(), "tool_result images") {
 				t.Fatalf("有效工具图片未建立原生边界: %q %v", d.BridgeError, err)
 			}
 			same, err := EncodeDialogue(d, "anthropic-messages", "target")
@@ -134,7 +134,7 @@ func TestNativeMessagesTextToolResultStillBridges(t *testing.T) {
 	for _, content := range []any{"Plain result", []any{}, []any{map[string]any{"type": "text", "text": "Read failed"}}} {
 		block := map[string]any{"type": "tool_result", "tool_use_id": "read_1", "content": content, "is_error": true}
 		d, err := ParseDialogue("anthropic-messages", toolResultImageRequest(block, "user"))
-		if err != nil || d.BridgeError != "" {
+		if err != nil || d.BridgeError != nil {
 			t.Fatalf("纯文本工具结果错误触发图片边界: %v %v", d.BridgeError, err)
 		}
 		for _, protocol := range []string{"openai-chat", "openai-responses"} {

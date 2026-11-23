@@ -135,17 +135,19 @@ func (d routeDiagnosis) Failure(alias string) (int, string, string) {
 		return 400, "invalid_request", "model not found: " + alias
 	}
 	if d.compatible == 0 {
-		// 只有所有启用候选的公开能力错误一致时，才提示调用方调整相应参数。
-		// 其他排除原因可能来自部署配置，仍通过既有路由错误与关联诊断报告。
-		capabilityErr := d.decisions[0].CapabilityError
-		for _, decision := range d.decisions[1:d.matched] {
-			if decision.CapabilityError != capabilityErr {
-				capabilityErr = nil
-				break
+		// 保留原有两个公开错误分类。其他兼容拒绝沿用 model_unavailable，
+		// 由调用方附上 ProtocolProblems，避免依赖原错误类型的客户端行为变化。
+		for _, known := range []error{llmdialogue.ErrWebSearchUnsupported, llmdialogue.ErrMessagesImageDetailUnsupported} {
+			all := true
+			for _, decision := range d.decisions[:d.matched] {
+				if !errors.Is(decision.CapabilityError, known) {
+					all = false
+					break
+				}
 			}
-		}
-		if capabilityErr != nil {
-			return 400, "unsupported_capability", capabilityErr.Error()
+			if all {
+				return 400, "unsupported_capability", known.Error()
+			}
 		}
 		return 400, "model_unavailable", fmt.Sprintf("model %s exists but has no deployment compatible with endpoint %s and this request; check model transport, endpoint configuration and request capabilities", alias, d.endpoint)
 	}
@@ -156,6 +158,39 @@ func (d routeDiagnosis) Failure(alias string) (int, string, string) {
 		return 503, "model_unavailable", "model " + alias + " has all compatible deployments cooling down; retry later"
 	}
 	return 503, "model_unavailable", "model " + alias + " has no available deployment; check cooldowns and route allocations"
+}
+
+// ProtocolProblems 返回启用候选中的公开能力拒绝。pinned 非空时只查看必须续接的部署；
+// 普通请求只在兼容候选为零时返回。多连接的同一错误按协议及字段去重，不公开部署或凭据信息。
+func (d routeDiagnosis) ProtocolProblems(pinned string) []dpdiagnostics.ProtocolProblem {
+	if pinned == "" && d.compatible > 0 {
+		return nil
+	}
+	var problems []dpdiagnostics.ProtocolProblem
+	seen := map[dpdiagnostics.ProtocolProblem]bool{}
+	for _, decision := range d.decisions[:d.matched] {
+		err := decision.CapabilityError
+		if err == nil || (pinned != "" && router.DeploymentID(decision.Deployment) != pinned) {
+			continue
+		}
+		field, detail := "", err.Error()
+		var requestField *llmdialogue.RequestFieldError
+		switch {
+		case errors.As(err, &requestField):
+			field, detail = requestField.Field, requestField.Message
+		case errors.Is(err, llmdialogue.ErrMessagesImageDetailUnsupported):
+			field = "detail"
+		case errors.Is(err, llmdialogue.ErrWebSearchUnsupported):
+			field = "tools"
+		}
+		profile, _ := providerdeployment.Execution(decision.Deployment)
+		problem := dpdiagnostics.NewProtocolProblem(field, profile.Protocol, detail)
+		if !seen[problem] {
+			problems = append(problems, problem)
+			seen[problem] = true
+		}
+	}
+	return problems
 }
 
 // Snapshot 投影路由失败的阶段计数、配置来源与逐部署排除原因，供授权请求日志使用。
@@ -185,7 +220,8 @@ func (d routeDiagnosis) Snapshot(settings router.RouteSettings, pinned string) m
 			pinReason = reason
 		}
 		if i < 100 {
-			candidates = append(candidates, map[string]any{"deployment_id": router.DeploymentID(dep), "transport": providerdeployment.SelectedTransport(dep), "reason": reason, "cooling": cooling})
+			safeReason := dpdiagnostics.NewProtocolProblem("", "", reason).Details
+			candidates = append(candidates, map[string]any{"deployment_id": router.DeploymentID(dep), "transport": providerdeployment.SelectedTransport(dep), "reason": safeReason, "cooling": cooling})
 		}
 	}
 	result := map[string]any{"endpoint": d.endpoint, "matched": d.matched, "disabled": d.disabled, "compatible": d.compatible, "available": d.available, "cooling": d.cooling, "zero_weight": d.zeroWeight, "strategy": settings.Strategy(), "template_id": settings.TemplateID, "template_source": settings.Source, "candidates": candidates, "candidates_truncated": len(d.decisions) > 100}

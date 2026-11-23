@@ -51,7 +51,7 @@ func ParseNativeResponses(body map[string]any) (Dialogue, error) {
 	normalizeLegacyResponsesTextIDs(native)
 	normalizeResponsesMessageMetadata(native)
 	stream, _ := native["stream"].(bool)
-	return Dialogue{Source: "openai-responses", Native: native, Stream: stream, BridgeError: "native Responses requires explicit protocol conversion"}, nil
+	return Dialogue{Source: "openai-responses", Native: native, Stream: stream, BridgeError: &RequestFieldError{Field: "input", Message: "native Responses requires explicit protocol conversion"}}, nil
 }
 
 // ParseNativeResponsesResult 校验原生终态信封并提取计费用量，不要求输出能够投影为 Chat。

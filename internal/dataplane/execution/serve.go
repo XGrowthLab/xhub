@@ -84,6 +84,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "invalid body")
 		return
 	}
+	original := raw
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		util.Error("process path=%s step=body reason=invalid json", r.URL.Path)
@@ -97,7 +98,8 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		return
 	}
 	cachePolicy := clientCachePolicy{read: true, write: true}
-	if dpdialogue.CallerProtocol(op) != "" {
+	callerProtocol := dpdialogue.CallerProtocol(op)
+	if callerProtocol != "" {
 		cachePolicy, err = consumeClientCachePolicy(body)
 		if err != nil {
 			util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", err.Error())
@@ -126,7 +128,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		nativeEligible = nativeEligible && len(plan.MessagesHistory) == 0
 		body, err = dpdialogue.ResponsesRequestBody(body, plan.History, nativeEligible)
 		if err != nil {
-			util.WriteTypedError(w, r.URL.Path, 400, "unsupported_capability", err.Error())
+			writeProtocolValidation(w, r.URL.Path, callerProtocol, err)
 			return
 		}
 	}
@@ -172,17 +174,17 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		tenant = "user:" + p.UserID
 	}
 	var dialogue llmdialogue.Dialogue
-	if dpdialogue.CallerProtocol(op) != "" {
+	if callerProtocol != "" {
 		if nativeEligible {
 			dialogue, err = llmdialogue.ParseNativeResponses(dpdialogue.DialogueRequestBody(body))
 			dialogue.DeferredResponses = true
 		} else if op == "responses" && len(plan.MessagesHistory) > 0 {
 			dialogue, err = llmdialogue.ParseResponsesWithMessagesHistory(dpdialogue.DialogueRequestBody(body), plan.MessagesHistory)
 		} else {
-			dialogue, err = llmdialogue.ParseDialogue(dpdialogue.CallerProtocol(op), dpdialogue.DialogueRequestBody(body))
+			dialogue, err = llmdialogue.ParseDialogue(callerProtocol, dpdialogue.DialogueRequestBody(body))
 		}
 		if err != nil {
-			util.WriteTypedError(w, r.URL.Path, 400, "unsupported_capability", err.Error())
+			writeProtocolValidation(w, r.URL.Path, callerProtocol, err)
 			return
 		}
 	}
@@ -276,7 +278,12 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	}
 	pool, routeCfg = fallbacks.SelectAffinity(&plan, pool, alias, models, state, routeCfg)
 	if plan.Required && len(pool) == 0 {
-		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(routeCfg, plan.Target.DeploymentID)})
+		snapshot := diagnosis.Snapshot(routeCfg, plan.Target.DeploymentID)
+		if problems := diagnosis.ProtocolProblems(plan.Target.DeploymentID); len(problems) > 0 {
+			writeProtocolRejection(w, r.URL.Path, 409, "continuation_unavailable", "request_conversion", callerProtocol, "The original deployment cannot continue this conversation.", problems, snapshot)
+			return
+		}
+		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: snapshot})
 		util.WriteTypedError(w, r.URL.Path, 409, "continuation_unavailable", "original deployment is unavailable")
 		return
 	}
@@ -286,9 +293,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	}
 	util.Debug("process path=%s step=route model=%s deployments=%d stream=%t call_id=%q endpoint=%q resolved_model=%q fallback_visited=%d", r.URL.Path, alias, len(pool), stream, callID, providercapability.EndpointForOp(op), fallbacks.PoolAlias, len(fallbacks.Seen)-1)
 	if len(pool) == 0 {
-		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(routeCfg, "")})
+		snapshot := diagnosis.Snapshot(routeCfg, "")
 		status, kind, message := diagnosis.Failure(alias)
 		util.Error("process path=%s step=route call_id=%q model=%q reason=%q message=%q fallback_visited=%d", r.URL.Path, callID, alias, kind, message, len(fallbacks.Seen)-1)
+		if problems := diagnosis.ProtocolProblems(""); len(problems) > 0 {
+			writeProtocolRejection(w, r.URL.Path, status, kind, "request_conversion", callerProtocol, "", problems, snapshot)
+			return
+		}
+		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: snapshot})
 		util.WriteTypedError(w, r.URL.Path, status, kind, message)
 		return
 	}
@@ -398,7 +410,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 			connection, upstreamModel := dep.MonitorIdentity()
 			h.AnnotateCall(callID, dpcontract.CallNote{Supplier: connection, APIBase: dep.LogAPIBase(), UpstreamModel: upstreamModel, UpstreamSelected: true})
 			if dpdialogue.CallerProtocol(op) != "" {
-				built, err = dpdialogue.BuildDialogue(dep, dialogue)
+				built, err = dpdialogue.BuildDialogue(dep, dialogue, original)
 				if errors.Is(err, dpdialogue.ErrDialogueCredentials) {
 					missingCredential = true
 					util.Debug("skip deployment path=%s provider=%s model=%s reason=missing api key or api base", r.URL.Path, supplier, realModel)

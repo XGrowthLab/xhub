@@ -90,7 +90,7 @@ func ProbeDialogue(ctx context.Context, client *http.Client, dep config.ModelEnt
 	upstream, err := BuildDialogue(dep, llmdialogue.Dialogue{
 		Turns:   []llmdialogue.Turn{{Role: "user", Text: "Reply with OK."}},
 		Options: map[string]any{"max_tokens": 1},
-	})
+	}, nil)
 	if err != nil {
 		return &DialogueProbeError{Kind: DialogueProbeConfiguration}
 	}
@@ -259,11 +259,11 @@ func DialogueRequestBody(body map[string]any) map[string]any {
 }
 
 // BuildDialogue 按部署登记的执行配置编码统一对话上游请求。
-// 参数 dep 为已附加凭据的部署，d 为已解析对话；返回 Upstream 或凭据、能力、编码错误。
+// 参数 dep 为已附加凭据的部署，d 为已解析对话，original 为可选入站字节。返回 Upstream 或凭据、能力、编码错误。
 // Serve 与 ProbeDialogue 调用；只使用登记 create 动作、鉴权头和协议编码器，不从域名或供应商名称猜路径。
 // 地址或密钥缺失返回 ErrDialogueCredentials；Google 流式使用登记 streaming 动作与 alt=sse。
 // 构造 URL、Header、Body，不实际发送 HTTP，不修改调用方对话；执行器负责上下文、重试和资源生命周期。
-func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue) (dptransport.Upstream, error) {
+func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue, original []byte) (dptransport.Upstream, error) {
 	t, ok := providerdeployment.Execution(dep)
 	if !ok {
 		return dptransport.Upstream{}, fmt.Errorf("explicit upstream execution profile required")
@@ -272,7 +272,10 @@ func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue) (dptransport.U
 	if err != nil {
 		return dptransport.Upstream{}, err
 	}
-	raw, err := json.Marshal(payload)
+	if d.Source != t.Protocol {
+		original = nil
+	}
+	raw, err := marshalNativePayload(payload, original)
 	if err != nil {
 		return dptransport.Upstream{}, err
 	}

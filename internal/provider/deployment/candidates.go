@@ -44,7 +44,10 @@ func Candidates(list []config.ModelEntry, endpoint string, dialogue *llmdialogue
 		decision := CandidateDecision{Deployment: dep}
 		if err != nil {
 			decision.Reason = err.Error()
+			var field *llmdialogue.RequestFieldError
 			switch {
+			case errors.As(err, &field):
+				decision.CapabilityError = field
 			case errors.Is(err, llmdialogue.ErrWebSearchUnsupported):
 				decision.CapabilityError = llmdialogue.ErrWebSearchUnsupported
 			case errors.Is(err, llmdialogue.ErrMessagesImageDetailUnsupported):

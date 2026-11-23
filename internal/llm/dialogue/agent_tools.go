@@ -29,27 +29,40 @@ func qualifiedToolName(namespace, name string) string {
 	return fmt.Sprintf("%s_%x", joined[:39], sha256.Sum256([]byte(joined)))[:64]
 }
 
-// projectAgentTools 将 Responses 函数、单层 namespace、custom 及客户端 tool_search 投影为共享函数，返回工具、还原表、不可桥接原因及输入错误。
+// agentToolProjection 保留扁平化工具及原请求位置、还原表和协议转换限制。
+type agentToolProjection struct {
+	tools       []any
+	fields      []string
+	bindings    map[string]ToolBinding
+	bridgeError error
+}
+
+// projectAgentTools 将 Responses 函数、单层 namespace、custom 及客户端 tool_search 投影为共享函数，返回投影或输入错误。
+// paths 仅记录来自历史项的工具原始位置，其他工具位置取自顶层数组。
 // ParseDialogue 调用；未知原生工具保留在 Native，阻止桥接但允许原生路径；重复/碰撞名称明确拒绝，不静默覆盖工具身份。
 // custom 的语法定义仅作为模型提示，不能等价提供原厂 grammar 强约束；本方法不执行工具或修改输入。
-func projectAgentTools(values []any) ([]any, map[string]ToolBinding, string, error) {
-	var projected []any
+func projectAgentTools(values []any, paths map[int]string) (agentToolProjection, error) {
+	var projection agentToolProjection
 	bindings := map[string]ToolBinding{}
 	seen := map[string]string{}
-	bridgeError := ""
-	for _, value := range values {
+	var bridgeError error
+	for i, value := range values {
+		path := paths[i]
+		if path == "" {
+			path = fmt.Sprintf("tools[%d]", i)
+		}
 		tool := dialogueMap(value)
 		if tool == nil {
-			return nil, nil, "", fmt.Errorf("tool must be an object")
+			return agentToolProjection{}, &RequestFieldError{Field: path, Message: "tool must be an object"}
 		}
 		if tool["type"] == "tool_search" && tool["execution"] != nil && tool["execution"] != "client" && tool["execution"] != "server" {
-			return nil, nil, "", fmt.Errorf("tool_search execution must be server or client")
+			return agentToolProjection{}, &RequestFieldError{Field: path + ".execution", Message: "tool_search execution must be server or client"}
 		}
 		clientSearch := tool["type"] == "tool_search" && tool["execution"] == "client"
 		if clientSearch {
 			// LiteLLM 区分客户端与托管搜索；这里将客户端搜索保留为普通函数，而非丢掉工具发现能力。
 			if err := dialogueFields(tool, "type", "execution", "description", "parameters"); err != nil {
-				bridgeError = "client tool_search " + err.Error()
+				bridgeError = atRequestField(path, err)
 			}
 			tool = map[string]any{"type": "function", "name": "tool_search", "description": tool["description"], "parameters": tool["parameters"]}
 		}
@@ -57,28 +70,32 @@ func projectAgentTools(values []any) ([]any, map[string]ToolBinding, string, err
 		members := []any{tool}
 		if tool["type"] == "namespace" {
 			if err := dialogueFields(tool, "type", "name", "description", "tools"); err != nil {
-				bridgeError = "namespace " + err.Error()
+				bridgeError = atRequestField(path, err)
 			}
 			namespace = dialogueString(tool["name"])
 			var ok bool
 			members, ok = tool["tools"].([]any)
 			if namespace == "" || !ok {
-				return nil, nil, "", fmt.Errorf("namespace requires name and tools array")
+				return agentToolProjection{}, &RequestFieldError{Field: path, Message: "namespace requires name and tools array"}
 			}
 		}
-		for _, value := range members {
+		for j, value := range members {
+			memberPath := path
+			if namespace != "" {
+				memberPath = fmt.Sprintf("%s.tools[%d]", path, j)
+			}
 			member := dialogueMap(value)
 			if member == nil {
-				return nil, nil, "", fmt.Errorf("namespace tool must be an object")
+				return agentToolProjection{}, &RequestFieldError{Field: memberPath, Message: "namespace tool must be an object"}
 			}
 			kind := dialogueString(member["type"])
 			if kind != "function" && kind != "custom" {
-				bridgeError = "tool type " + kind
+				bridgeError = &RequestFieldError{Field: memberPath + ".type", Message: fmt.Sprintf("tool type %q has no cross-protocol mapping; use a function tool or a native Responses deployment that supports this tool", kind)}
 				continue
 			}
 			name := dialogueString(member["name"])
 			if name == "" {
-				return nil, nil, "", fmt.Errorf("tool name is required")
+				return agentToolProjection{}, &RequestFieldError{Field: memberPath + ".name", Message: "tool name is required"}
 			}
 			alias := qualifiedToolName(namespace, name)
 			cp, _ := cloneObject(member)
@@ -86,7 +103,7 @@ func projectAgentTools(values []any) ([]any, map[string]ToolBinding, string, err
 			// defer_loading 是发现性能提示；Chat 使用客户端已提供的定义，原生请求仍保留原标记。
 			if flag, exists := cp["defer_loading"]; exists {
 				if _, ok := flag.(bool); !ok {
-					return nil, nil, "", fmt.Errorf("defer_loading must be boolean")
+					return agentToolProjection{}, &RequestFieldError{Field: memberPath + ".defer_loading", Message: "defer_loading must be boolean"}
 				}
 				delete(cp, "defer_loading")
 			}
@@ -94,23 +111,25 @@ func projectAgentTools(values []any) ([]any, map[string]ToolBinding, string, err
 			if kind == "custom" {
 				// custom 会被重建成函数，必须先检查能力边界，避免未知格式或扩展在重建时静默消失；原生正文不受影响。
 				if err := dialogueFields(member, "type", "name", "description", "format", "cache_control", "defer_loading"); err != nil {
-					bridgeError = "custom " + err.Error()
+					bridgeError = atRequestField(memberPath, err)
 				}
 				description := dialogueString(member["description"])
 				if value := member["format"]; value != nil {
 					format := dialogueMap(value)
 					switch format["type"] {
 					case "grammar":
-						if err := dialogueFields(format, "type", "syntax", "definition"); err != nil || dialogueString(format["definition"]) == "" {
-							bridgeError = "unsupported custom grammar format"
+						if err := dialogueFields(format, "type", "syntax", "definition"); err != nil {
+							bridgeError = atRequestField(memberPath+".format", err)
+						} else if dialogueString(format["definition"]) == "" {
+							bridgeError = &RequestFieldError{Field: memberPath + ".format.definition", Message: "custom grammar requires a nonempty definition"}
 						}
 						description += "\n\nInput format:\n" + dialogueString(format["definition"])
 					case "text":
-						if len(format) != 1 {
-							bridgeError = "unsupported custom text format"
+						if err := dialogueFields(format, "type"); err != nil {
+							bridgeError = atRequestField(memberPath+".format", err)
 						}
 					default:
-						bridgeError = "unsupported custom format"
+						bridgeError = &RequestFieldError{Field: memberPath + ".format.type", Message: fmt.Sprintf("unsupported custom format %q; mapped formats are text and grammar", dialogueString(format["type"]))}
 					}
 				}
 				// 与 LiteLLM 一样在 schema 中明确原文包装字段，避免模型将代码二次转义或误用 Responses 的 input 字段。
@@ -122,16 +141,18 @@ func projectAgentTools(values []any) ([]any, map[string]ToolBinding, string, err
 				if previous == string(fingerprint) {
 					continue
 				}
-				bridgeError = "conflicting tool name " + alias
+				bridgeError = &RequestFieldError{Field: memberPath + ".name", Message: "conflicting tool name after protocol mapping"}
 			}
 			seen[alias] = string(fingerprint)
 			if namespace != "" || kind == "custom" || clientSearch {
 				bindings[alias] = ToolBinding{Name: name, Namespace: namespace, Custom: kind == "custom", ClientSearch: clientSearch}
 			}
-			projected = append(projected, cp)
+			projection.tools = append(projection.tools, cp)
+			projection.fields = append(projection.fields, memberPath)
 		}
 	}
-	return projected, bindings, bridgeError, nil
+	projection.bindings, projection.bridgeError = bindings, bridgeError
+	return projection, nil
 }
 
 // projectAgentCall 将带 namespace/custom 的 Responses 历史调用转为共享函数调用；参数为独立副本，返回输入格式错误。

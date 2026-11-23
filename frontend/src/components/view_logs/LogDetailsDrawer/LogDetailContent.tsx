@@ -52,6 +52,7 @@ import { ClassifierAuditView } from "./ClassifierAuditView";
 import { AUTOROUTER_CLASSIFIER_ORIGIN } from "./ClassifyTag";
 import { useT } from "@/i18n";
 import { logPromptCacheTokens } from "./promptCacheMetrics";
+import { ProtocolRejectionDetail } from "./ProtocolRejectionDetail";
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -270,6 +271,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
 
+      <ProtocolRejectionDetail rejection={metadata.upstream_response?.protocol} />
       {(metadata.upstream_response?.failure || metadata.upstream_response?.routing || metadata.upstream_response?.rate_limit) && (
         <section aria-label={t("logDiagnostics.title")} className="mb-6 rounded-lg border p-4">
           <h3 className="font-semibold">{t("logDiagnostics.title")}</h3>
