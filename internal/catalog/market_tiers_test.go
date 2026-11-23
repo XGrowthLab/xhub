@@ -29,7 +29,7 @@ func TestMarketTiersModelinkFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"openai/gpt-6.1-terra", "x-ai/grok-4.5", "x-ai/grok-4.6", "x-ai/grok-4.7"} {
+	for _, id := range []string{"openai/gpt-6.1-terra", "x-ai/grok-4.5", "x-ai/grok-4.6", "x-ai/grok-4.7", "openai/gpt-6.2-sol", "openai/gpt-6.2-astra"} {
 		t.Run(id, func(t *testing.T) {
 			tiers, reason := MarketTiers(doc.Models[id])
 			if reason != "" || len(tiers) != 2 || tiers[0].InputRange[1] != tiers[1].InputRange[0] {
@@ -87,6 +87,56 @@ func TestMarketTiers(t *testing.T) {
 			tc.edit(fixture)
 			if got, reason := MarketTiers(fixture); reason == "" || len(got) != 0 {
 				t.Fatalf("错误市场报价必须拒绝: %+v %q", got, reason)
+			}
+		})
+	}
+}
+
+// TestMarketTiersOpenEnded 验证来源 -1 上界按声明的模型输入/输出上限形成快照。
+// 测试使用独立内存报价，覆盖原文不变、相邻边界、错误负数和无效模型容量，无外部资源需要清理。
+func TestMarketTiersOpenEnded(t *testing.T) {
+	row := tierMarketFixture(t)
+	rules := row["pricing_rules_v2"].([]any)
+	for _, raw := range rules {
+		raw.(map[string]any)["output_range"] = []any{float64(0), float64(-1)}
+	}
+	rules[1].(map[string]any)["input_range"] = []any{float64(272000), float64(-1)}
+	before, _ := json.Marshal(row)
+	tiers, reason := MarketTiers(row)
+	if reason != "" || len(tiers) != 2 || tiers[1].InputRange != [2]int{272000, 1050000} || tiers[0].OutputRange != [2]int{0, 128000} || tiers[1].OutputRange != tiers[0].OutputRange {
+		t.Fatalf("来源开放上界未按模型上限形成连续档位: tiers=%+v reason=%q", tiers, reason)
+	}
+	after, _ := json.Marshal(row)
+	if string(before) != string(after) {
+		t.Fatal("归一化不得改写原始市场报价")
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"negative input lower", func(r map[string]any) {
+			r["pricing_rules_v2"].([]any)[0].(map[string]any)["input_range"] = []any{float64(-1), float64(272000)}
+		}},
+		{"unknown negative upper", func(r map[string]any) {
+			r["pricing_rules_v2"].([]any)[1].(map[string]any)["input_range"] = []any{float64(272000), float64(-2)}
+		}},
+		{"early unbounded overlap", func(r map[string]any) {
+			r["pricing_rules_v2"].([]any)[0].(map[string]any)["input_range"] = []any{float64(0), float64(-1)}
+		}},
+		{"missing context limit", func(r map[string]any) { delete(r, "max_input_tokens") }},
+		{"fractional context limit", func(r map[string]any) { r["max_input_tokens"] = 1050000.5 }},
+		{"overflow context limit", func(r map[string]any) { r["max_input_tokens"] = float64(1 << 31) }},
+		{"context below last lower", func(r map[string]any) { r["max_input_tokens"] = float64(272000) }},
+		{"zero output limit", func(r map[string]any) { r["max_output_tokens"] = float64(0) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var candidate map[string]any
+			if err := json.Unmarshal(before, &candidate); err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(candidate)
+			if got, why := MarketTiers(candidate); why == "" || len(got) != 0 {
+				t.Fatalf("无效开放区间必须拒绝: tiers=%+v reason=%q", got, why)
 			}
 		})
 	}

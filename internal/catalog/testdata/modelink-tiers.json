@@ -540,6 +540,334 @@
       "model_alias": [
         "gpt-6.1-terra"
       ]
+    },
+    {
+      "id": "openai/gpt-6.2-astra",
+      "name": "GPT-6.2-Astra",
+      "issuer": {
+        "name": "OpenAI",
+        "avatar": "",
+        "model_page": "https://developers.openai.com/api/docs/models/gpt-6.2-astra"
+      },
+      "model_constraints": {
+        "context_length": 1050000,
+        "max_completion_tokens": 0,
+        "max_tokens": 128000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            272000
+          ],
+          "output_range": [
+            0,
+            -1
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.276,
+              "unit_price_usd": 0.04,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00276,
+              "unit_price_usd": 0.0004,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.138,
+              "unit_price_usd": 0.02,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0552,
+              "unit_price_usd": 0.008,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        },
+        {
+          "input_range": [
+            272000,
+            -1
+          ],
+          "output_range": [
+            0,
+            -1
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.414,
+              "unit_price_usd": 0.06,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00552,
+              "unit_price_usd": 0.0008,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.138,
+              "unit_price_usd": 0.02,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.138,
+              "unit_price_usd": 0.02,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.276,
+              "unit_price_usd": 0.04,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.1104,
+              "unit_price_usd": 0.016,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-6.2-sol",
+      "name": "GPT-6.2-Sol",
+      "issuer": {
+        "name": "OpenAI",
+        "avatar": "",
+        "model_page": "https://developers.openai.com/api/docs/models/gpt-6.2-sol"
+      },
+      "model_constraints": {
+        "context_length": 1050000,
+        "max_completion_tokens": 0,
+        "max_tokens": 128000,
+        "max_default_completion_tokens": 0,
+        "max_chain_of_thought_length": 0
+      },
+      "pricing_rules_v2": [
+        {
+          "input_range": [
+            0,
+            272000
+          ],
+          "output_range": [
+            0,
+            -1
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00069,
+              "unit_price_usd": 0.0001,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.01725,
+              "unit_price_usd": 0.0025,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.01725,
+              "unit_price_usd": 0.0025,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0345,
+              "unit_price_usd": 0.005,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0138,
+              "unit_price_usd": 0.002,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        },
+        {
+          "input_range": [
+            272000,
+            -1
+          ],
+          "output_range": [
+            0,
+            -1
+          ],
+          "input_item_type": "",
+          "output_item_type": "",
+          "details": {},
+          "details_v2": {
+            "output": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.1035,
+              "unit_price_usd": 0.015,
+              "name": "输出"
+            },
+            "cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.00138,
+              "unit_price_usd": 0.0002,
+              "name": "缓存输入"
+            },
+            "c_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0345,
+              "unit_price_usd": 0.005,
+              "name": "缓存创建"
+            },
+            "c_30m_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0345,
+              "unit_price_usd": 0.005,
+              "name": "30m缓存创建"
+            },
+            "c_12h_cache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "12h缓存创建"
+            },
+            "ncache": {
+              "unit_name": "token",
+              "unit_size": 1000,
+              "unit_price": 0.0276,
+              "unit_price_usd": 0.004,
+              "name": "非缓存输入"
+            },
+            "web_search_req": {
+              "unit_name": "time",
+              "unit_size": 1,
+              "unit_price": 0.069,
+              "unit_price_usd": 0.01,
+              "name": "联网搜索数"
+            }
+          },
+          "item_order": [
+            "output",
+            "cache",
+            "c_cache",
+            "ncache",
+            "web_search_req",
+            "c_30m_cache",
+            "c_12h_cache"
+          ]
+        }
+      ]
     }
   ]
 }

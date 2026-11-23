@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
 
-/** 真实浏览器经过管理界面确认分档，并通过隔离网关调用验证实际账单和中英文展示。
+/** 真实浏览器经过管理界面确认来源 -1 上界的分档，并通过隔离网关调用验证实际账单和中英文展示。
  * 使用独立数据库和本地供应商；finally 删除部署，测试运行器清理专属 schema 和进程。 */
 test("market tier confirmation controls actual billing", async ({ page }) => {
   await loginAdmin(page);
@@ -61,10 +61,10 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     const section = page.getByRole("region", { name: "部署价格更新", exact: true });
     const row = section.getByRole("row").filter({ hasText: "e2e-tier-deployment" });
     await expect(row).toContainText("输入 Token：0 < 数量 ≤ 5");
-    await expect(row).toContainText("输入 Token：5 < 数量 ≤ 99,999,999");
+    await expect(row).toContainText("输入 Token：5 < 数量 ≤ 128,000");
     await row.getByRole("button", { name: "核对并更新" }).click();
     const dialog = page.getByRole("dialog", { name: "确认更新 1 个部署" });
-    await expect(dialog).toContainText("输入 Token：5 < 数量 ≤ 99,999,999");
+    await expect(dialog).toContainText("输入 Token：5 < 数量 ≤ 128,000");
     await dialog.getByRole("button", { name: "取消", exact: true }).click();
     expect(await cost()).toBeCloseTo(before, 10);
     await row.getByRole("button", { name: "核对并更新" }).click();
@@ -87,12 +87,12 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     const detail = page.getByRole("dialog");
     await expect(detail.getByRole("table", { name: "Input tokens: 0 < amount ≤ 5", exact: true })).toBeVisible();
     await expect(
-      detail.getByRole("table", { name: "Input tokens: 5 < amount ≤ 99,999,999", exact: true }),
+      detail.getByRole("table", { name: "Input tokens: 5 < amount ≤ 128,000", exact: true }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "中文", exact: true }).click();
     await card.getByRole("button", { name: "模型详情", exact: true }).click();
-    await expect(detail.getByRole("table", { name: "输入 Token：5 < 数量 ≤ 99,999,999", exact: true })).toBeVisible();
+    await expect(detail.getByRole("table", { name: "输入 Token：5 < 数量 ≤ 128,000", exact: true })).toBeVisible();
     expect(await cost()).toBeCloseTo(0.000022, 10);
   } finally {
     expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);

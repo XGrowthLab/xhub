@@ -96,8 +96,17 @@ func budgetTiers(dep config.ModelEntry, row map[string]any, input, output int, w
 	if json.Unmarshal(encoded, &rules) != nil || len(rules) == 0 || len(rules) > 64 {
 		return fail("strict budget requires one to 64 explicit pricing tiers")
 	}
+	// 开放上界只能使用管理员已确认的 Modelink 有限快照；手工报价和旧记录继续要求明确边界。
+	// 不从当前目录重建，以免来源容量变化影响请求开始时已冻结的计费范围。
+	var market []catalog.MarketTier
+	if dep.ModelInfo["pricing_source"] == "catalog" && dep.LiteLLMParams["market_tier_semantics"] == "modelink_open_closed_v1" && source["market_price_tiers"] != nil {
+		encoded, err := json.Marshal(source["market_price_tiers"])
+		if err != nil || json.Unmarshal(encoded, &market) != nil || len(market) != len(rules) {
+			return fail("confirmed market tier snapshot is invalid")
+		}
+	}
 	tiers := make([]budgetPriceTier, 0, len(rules))
-	for _, rule := range rules {
+	for index, rule := range rules {
 		for key, value := range rule {
 			switch key {
 			case "input_range", "output_range", "details_v2":
@@ -130,11 +139,15 @@ func budgetTiers(dep config.ModelEntry, row map[string]any, input, output int, w
 				}
 			}
 		}
-		in, err := budgetTierRange(rule["input_range"])
+		var inputRange, outputRange *[2]int
+		if len(market) > 0 {
+			inputRange, outputRange = &market[index].InputRange, &market[index].OutputRange
+		}
+		in, err := budgetTierRange(rule["input_range"], inputRange)
 		if err != nil {
 			return nil, true, err
 		}
-		out, err := budgetTierRange(rule["output_range"])
+		out, err := budgetTierRange(rule["output_range"], outputRange)
 		if err != nil {
 			return nil, true, err
 		}
@@ -160,9 +173,9 @@ func budgetTiers(dep config.ModelEntry, row map[string]any, input, output int, w
 	return reachable, true, nil
 }
 
-// budgetTierRange 读取原始整数上下界；参数必须为两个非负有限整数且上界更大，返回闭区间候选或错误。
-// 这里只保留原始边界，不擅自解释来源未声明的开闭语义。
-func budgetTierRange(raw any) ([2]int, error) {
+// budgetTierRange 读取原始整数区间，返回有限区间候选或错误。raw 是来源区间，confirmed 是已确认的 Modelink 快照范围。
+// budgetTiers 调用；上界 -1 仅在快照下界与原文一致且有限上界有效时展开，其他负数、歧义及溢出仍拒绝。
+func budgetTierRange(raw any, confirmed *[2]int) ([2]int, error) {
 	var result [2]int
 	values, ok := raw.([]any)
 	if !ok || len(values) != 2 {
@@ -170,6 +183,9 @@ func budgetTierRange(raw any) ([2]int, error) {
 	}
 	for i, value := range values {
 		n, ok := budgetUsageInteger(value)
+		if i == 1 && value == float64(-1) && confirmed != nil && result[0] == confirmed[0] {
+			n, ok = budgetUsageInteger(confirmed[1])
+		}
 		if !ok {
 			return result, budgetFailure("unsupported_budget", "catalog tier bounds must be finite nonnegative integers")
 		}
