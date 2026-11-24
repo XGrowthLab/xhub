@@ -89,3 +89,44 @@ test("empty native response fails without replay and leaves confirmed billing in
     if (deployment) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: deployment } })).status()).toBe(200);
   }
 });
+
+for (const protocol of [
+  { name: "chat", transport: "bypass_openai_chat", endpoint: "bypass:openai-chat", path: "/bypass/openai/v1/chat/completions", fixture: "disconnect", status: 502, reason: "EOF" },
+  { name: "responses", transport: "bypass_openai_responses", endpoint: "bypass:openai-responses", path: "/bypass/openai/v1/responses", fixture: "incomplete", status: 200, reason: "content_filter" },
+  { name: "gemini", transport: "gemini_generate_content", endpoint: "bypass:gemini", path: "/bypass/gemini/v1beta/models/", fixture: "empty", status: 502, reason: "empty dialogue response" },
+  { name: "vertex", transport: "vertex_generate_content", endpoint: "bypass:vertex", path: "/bypass/vertex/v1/models/", fixture: "invalid-field", status: 400, reason: "generationConfig.temperature" },
+]) {
+  /** 用专用部署和本地供应商重现协议失败，检查浏览器与真实日志 API 的同一记录；finally 删除部署，运行器回收 schema。 */
+  test(`${protocol.name} bypass keeps the actual upstream failure in logs`, async ({ page }) => {
+    await loginAdmin(page);
+    const headers = { Authorization: "Bearer " + await sessionBearer(page) };
+    const name = "native-diagnostic-" + protocol.name + "-" + Date.now();
+    const params = { model: "e2e-native-diagnostics", api_base: UPSTREAM, api_key: "sk-fake", custom_llm_provider: "custom" };
+    const modelInfo = { transport: protocol.transport, endpoint_types: [protocol.endpoint], pricing_source: "manual" };
+    const model = await page.request.post(GATEWAY + "/model/new", { headers, data: { model_name: name, litellm_params: params, model_info: modelInfo } });
+    expect(model.status(), await model.text()).toBe(200);
+    const deployment = (await model.json()).model_info.id;
+    try {
+      const google = protocol.name === "gemini" || protocol.name === "vertex";
+      const path = google ? protocol.path + name + ":generateContent" : protocol.path;
+      let data: Record<string, unknown> = { model: name, messages: [{ role: "user", content: "Audit diagnostic." }] };
+      if (protocol.name === "responses") data = { model: name, input: "Audit diagnostic.", stream: true };
+      if (google) data = { contents: [{ parts: [{ text: "Audit diagnostic." }] }] };
+      const reply = await page.request.post(GATEWAY + path + "?fixture=" + protocol.fixture, { headers, data });
+      expect(reply.status(), await reply.text()).toBe(protocol.status);
+      const id = reply.headers()["x-litellm-call-id"];
+      expect(id).toBeTruthy();
+      await expect.poll(async () => {
+        const detail = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
+        return detail.ok() ? await detail.json() : null;
+      }).toMatchObject({ status: "error", error: expect.stringContaining(protocol.reason) });
+      await stableGoto(page, "/logs?log_id=" + id);
+      const region = page.getByRole("dialog").getByRole("region", { name: "完整错误详情" });
+      await region.getByText("展开完整错误", { exact: true }).click();
+      await expect(region).toContainText(protocol.reason);
+      await expect(region).not.toContainText("private-echo");
+    } finally {
+      expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: deployment } })).status()).toBe(200);
+    }
+  });
+}

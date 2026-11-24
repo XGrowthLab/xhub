@@ -329,7 +329,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
 					return
 				}
-				if emptyBypassDialogue(candidateHit.Transport.EndpointID, countOnly, response) {
+				if emptyBypassDialogue(candidateHit, countOnly, response) {
 					// 上游已受理请求但没有正文，也没有可核实的用量；不能把它记成成功，
 					// 更不能自动重放这次可能已计费的请求，避免同一调用产生重复上游费用。
 					// 连续无效响应仍需计入部署健康状态，以便后续独立请求遵循已有冷却策略。
@@ -449,13 +449,18 @@ forwarded:
 }
 
 // emptyBypassDialogue 判断原生对话创建是否收到没有正文的成功响应。
-// endpoint 为登记入口，countOnly 标识只读计数，response 为已读取的出站结果；返回 true 时调用方须停止重放并报告上游错误。
-// 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，空白正文按空响应处理，无副作用。
-func emptyBypassDialogue(endpoint string, countOnly bool, response dptransport.ForwardResponse) bool {
-	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 || !isBypassDialogueEndpoint(endpoint) {
+// hit 为已匹配的动作，countOnly 标识只读计数，response 为出站结果；返回 true 时调用方须停止重放并报告上游错误。
+// 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，不修改搜索筛选或预算规则。
+func emptyBypassDialogue(hit providercontract.Hit, countOnly bool, response dptransport.ForwardResponse) bool {
+	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 || len(bytes.TrimSpace(response.Body)) != 0 {
 		return false
 	}
-	return len(bytes.TrimSpace(response.Body)) == 0
+	if hit.Transport.Protocol == "gemini" || hit.Transport.Protocol == "vertex" {
+		// Google 在同一传输下登记多个 create 动作，只有生成操作属于对话。
+		path := hit.Action.UpstreamPath
+		return strings.HasSuffix(path, ":generateContent") || strings.HasSuffix(path, ":streamGenerateContent")
+	}
+	return isBypassDialogueEndpoint(hit.Transport.EndpointID)
 }
 
 // isBypassDialogueEndpoint 判断入口是否为本次验证的三种原生对话协议。

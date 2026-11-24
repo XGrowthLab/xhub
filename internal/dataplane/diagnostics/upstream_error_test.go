@@ -128,3 +128,27 @@ func TestUpstreamErrorObservation(t *testing.T) {
 		}
 	}
 }
+
+// TestResponsesIncompleteObservation 验证 Responses 的非输出上限终态保留具体原因和 ID。
+// 参数 t 为测试上下文；分别验证内容过滤、正常输出上限和缺失原因，采用内存 SSE 并关闭读取器。
+func TestResponsesIncompleteObservation(t *testing.T) {
+	for _, reason := range []string{"content_filter", "max_output_tokens", ""} {
+		t.Run(reason, func(t *testing.T) {
+			raw := fmt.Sprintf("data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-audit\",\"incomplete_details\":{\"reason\":%q}}}\n\n", reason)
+			resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(raw))}
+			diag := ObserveUpstream(resp)
+			defer resp.Body.Close()
+			if got, err := io.ReadAll(resp.Body); err != nil || string(got) != raw {
+				t.Fatalf("诊断改变上游字节: %v", err)
+			}
+			if reason == "content_filter" {
+				saved, _ := diag.Error["error"].(map[string]any)
+				if saved["terminal_cause"] != reason || diag.Error["response_id"] != "resp-audit" {
+					t.Fatalf("具体终态原因丢失: %+v", diag)
+				}
+			} else if diag.Error != nil {
+				t.Fatalf("无已知失败却记录错误: %+v", diag)
+			}
+		})
+	}
+}

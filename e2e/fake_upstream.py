@@ -342,6 +342,19 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"id": "msg_recovered", "type": "message", "role": "assistant", "model": "e2e-empty-messages", "content": [{"type": "text", "text": "Recovered"}], "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 2}})
             return
+        # 隔离透传失败夹具只匹配测试专用上游模型。
+        fixture_path = urlsplit(self.path)
+        if req.get("model") == "e2e-native-diagnostics" or "/models/e2e-native-diagnostics:" in fixture_path.path:
+            if fixture_path.query == "fixture=invalid-field":
+                self._response(400, b'{"error":{"code":400,"message":"Invalid request","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","input":"private-echo"}]}]}}', "application/json")
+            elif fixture_path.query == "fixture=incomplete":
+                self._sse([{"type": "response.incomplete", "response": {"id": "resp_e2e_audit", "status": "incomplete", "incomplete_details": {"reason": "content_filter"}}}])
+            elif fixture_path.query == "fixture=disconnect":
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_WR)
+            else:
+                self._response(200, b"", "application/json")
+            return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":
             valid = req.get("model") == "count-upstream" and isinstance(req.get("messages"), list) and self.headers.get("x-api-key") == "sk-fake"

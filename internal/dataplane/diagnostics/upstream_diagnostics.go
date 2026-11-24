@@ -208,6 +208,16 @@ func (o *upstreamObserver) document(raw []byte) {
 	}
 	if failure := ExtractUpstreamError(doc); failure != nil {
 		o.diagnostics.Error = failure.Envelope
+	} else if o.stream && doc["type"] == "response.incomplete" && o.diagnostics.Error == nil {
+		// Responses 可以用 incomplete_details 单独说明终态；仅输出上限是已有的正常停止条件。
+		response, _ := doc["response"].(map[string]any)
+		details, _ := response["incomplete_details"].(map[string]any)
+		if reason, ok := details["reason"].(string); ok && reason != "" && reason != "max_output_tokens" {
+			o.diagnostics.Error = map[string]any{
+				"error":       map[string]any{"type": "response.incomplete", "message": reason, "terminal_cause": reason},
+				"response_id": response["id"],
+			}
+		}
 	}
 	o.usage(doc)
 }
