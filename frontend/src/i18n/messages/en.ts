@@ -176,6 +176,8 @@ export const en = {
     bodyRejected: "Request body rejected",
     denied: "Authentication or access denied",
     clientWriteFailed: "Client response write failed",
+    upstreamTimeout: "Upstream request timed out",
+    upstreamEmptyErrorBody: "Upstream returned HTTP {status} without an error body.",
     serviceFailed: "Service error",
     requestFailed: "Request failed",
     causeUnknown: "The status alone does not identify the cause. Check the recorded diagnostics below.",

@@ -233,7 +233,6 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 			if err != nil {
 				continue
 			}
-			hit = candidateHit
 			base, key := dptransport.BypassAuth(candidate)
 			if base == "" || key == "" {
 				continue
@@ -271,6 +270,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					}
 				}
 				tried = true
+				// 诊断必须对应真实尝试的部署，后续因缺少凭据跳过的候选不能覆盖它。
+				hit = candidateHit
 				ctx, cancel := context.WithTimeout(r.Context(), time.Duration(settings.TimeoutSeconds()*float64(time.Second)))
 				response, err = dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), candidateHit.Action.Method, url, key, payload, r.Header, candidateHit.Transport, w)
 				respBody, status = response.Body, response.StatusCode
@@ -313,7 +314,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, 502, selectedID)
 						return
 					}
-					util.Error("bypass forward path=%s err=%s", r.URL.Path, dpdiagnostics.SafeErr(err))
+					util.Error("bypass forward call_id=%s path=%s err=%s", callID, r.URL.Path, dpdiagnostics.SafeErr(err))
 					h.NoteFailure(router.CooldownID(rawDep), settings)
 					if failure == bypassRetry {
 						continue
@@ -328,7 +329,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
 					return
 				}
-				if emptyBypassDialogue(candidateHit.Transport.EndpointID, countOnly, response) {
+				if emptyBypassDialogue(candidateHit, countOnly, response) {
 					// 上游已受理请求但没有正文，也没有可核实的用量；不能把它记成成功，
 					// 更不能自动重放这次可能已计费的请求，避免同一调用产生重复上游费用。
 					// 连续无效响应仍需计入部署健康状态，以便后续独立请求遵循已有冷却策略。
@@ -363,7 +364,6 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					kind = errorKind
 					goto nextFallbackModel
 				}
-				hit = candidateHit
 				goto forwarded
 			}
 		}
@@ -380,17 +380,32 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	}
 forwarded:
 	// 转发结束后才提交任务事实与交互：HTTP 成功、任务创建、会话偏好和可计费用量是不同事实。
-	if status == 0 {
-		h.RememberExchange(callID, r, raw, []byte("upstream request failed"))
+	if status == 0 || (response.Diagnostics != nil && response.Diagnostics.Failure != nil) {
+		// 重试用尽时记录最后一次实际尝试。收到状态或部分正文也不能把读失败当成成功。
+		detail := "upstream request failed"
+		if response.Diagnostics != nil && response.Diagnostics.Failure != nil && response.Diagnostics.Failure.TransportError != "" {
+			detail = response.Diagnostics.Failure.TransportError
+		}
+		h.RememberExchange(callID, r, raw, []byte(detail))
+		note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
+		applyStreamTiming(&note, response, start)
+		note.Upstream = response.Diagnostics
+		h.AnnotateCall(callID, note)
 		h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
 		util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
 		return
 	}
 	var doc map[string]any
 	_ = json.Unmarshal(respBody, &doc)
+	logStatus := status
+	if status >= 200 && status < 300 && !response.Streamed && response.Diagnostics != nil &&
+		response.Diagnostics.Error != nil && isNativeDialogueGeneration(hit, countOnly) {
+		// 原生响应仍按上游字节透传；明确的错误包络独立记为失败，不能提交续接归属或生成费用。
+		logStatus = http.StatusBadGateway
+	}
 	depID := selectedID
 	taskRequestID := ""
-	if taskID := providercontract.ReadTaskID(doc, hit.Transport.TaskID); taskID != "" && status >= 200 && status < 300 && doc["error"] == nil && doc["detail"] == nil {
+	if taskID := providercontract.ReadTaskID(doc, hit.Transport.TaskID); taskID != "" && logStatus >= 200 && logStatus < 300 && doc["error"] == nil && doc["detail"] == nil {
 		scope := officialTaskScope(principal, hit.Transport.ID, taskID)
 		if billing := hit.Transport.Billing; billing != nil {
 			// 创建请求身份随调用方隔离的任务钉保存，后续查询更新同一日志。
@@ -411,7 +426,7 @@ forwarded:
 		h.PinOfficial(scope, selectedID)
 	}
 	respBody = rewriteQueueURLs(hit, doc, respBody)
-	if !countOnly && status >= 200 && status < 300 {
+	if !countOnly && logStatus >= 200 && logStatus < 300 {
 		responseID, _ := doc["id"].(string)
 		if response.Streamed {
 			responseID = response.ResponseID
@@ -428,25 +443,37 @@ forwarded:
 	note.Upstream = response.Diagnostics
 	h.AnnotateCall(callID, note)
 	var usage map[string]any
-	if !countOnly && status >= 200 && status < 300 && hit.Transport.ResponseUsage != nil {
+	if !countOnly && logStatus >= 200 && logStatus < 300 && hit.Transport.ResponseUsage != nil {
 		usage = hit.Transport.ResponseUsage(doc, body)
 		if response.Streamed {
 			usage = response.Usage
 		}
 	}
-	h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, usage, start, false, status, depID)
+	h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, usage, start, false, logStatus, depID)
 	response.Body = respBody
 	dptransport.WriteThrough(w, response)
 }
 
 // emptyBypassDialogue 判断原生对话创建是否收到没有正文的成功响应。
-// endpoint 为登记入口，countOnly 标识只读计数，response 为已读取的出站结果；返回 true 时调用方须停止重放并报告上游错误。
-// 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，空白正文按空响应处理，无副作用。
-func emptyBypassDialogue(endpoint string, countOnly bool, response dptransport.ForwardResponse) bool {
-	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 || !isBypassDialogueEndpoint(endpoint) {
+// hit 为已匹配的动作，countOnly 标识只读计数，response 为出站结果；返回 true 时调用方须停止重放并报告上游错误。
+// 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，不修改搜索筛选或预算规则。
+func emptyBypassDialogue(hit providercontract.Hit, countOnly bool, response dptransport.ForwardResponse) bool {
+	return !response.Streamed && response.StatusCode >= 200 && response.StatusCode < 300 &&
+		len(bytes.TrimSpace(response.Body)) == 0 && isNativeDialogueGeneration(hit, countOnly)
+}
+
+// isNativeDialogueGeneration 根据已登记动作和计数标志判断是否为原生对话生成。
+// 空正文检查和同步错误日志共用；计数和异步媒体接口返回 false，不改变权限、重试或任务生命周期。
+func isNativeDialogueGeneration(hit providercontract.Hit, countOnly bool) bool {
+	if countOnly {
 		return false
 	}
-	return len(bytes.TrimSpace(response.Body)) == 0
+	if hit.Transport.Protocol == "gemini" || hit.Transport.Protocol == "vertex" {
+		// Google 在同一传输下登记多个 create 动作，只有生成操作属于对话。
+		path := hit.Action.UpstreamPath
+		return strings.HasSuffix(path, ":generateContent") || strings.HasSuffix(path, ":streamGenerateContent")
+	}
+	return isBypassDialogueEndpoint(hit.Transport.EndpointID)
 }
 
 // isBypassDialogueEndpoint 判断入口是否为本次验证的三种原生对话协议。

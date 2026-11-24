@@ -177,6 +177,8 @@ export const zhCN = {
     bodyRejected: "请求正文被拒绝",
     denied: "认证或访问被拒绝",
     clientWriteFailed: "客户端响应写入失败",
+    upstreamTimeout: "上游请求超时",
+    upstreamEmptyErrorBody: "上游返回 HTTP {status}，未附带错误正文。",
     serviceFailed: "服务错误",
     requestFailed: "请求失败",
     causeUnknown: "仅凭状态码无法确定原因，请查看下方已记录的诊断信息。",

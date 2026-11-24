@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	dptransport "github.com/sunqirui1987/xhub/internal/dataplane/transport"
+	providercontract "github.com/sunqirui1987/xhub/internal/provider/contract"
+	providerregistry "github.com/sunqirui1987/xhub/internal/provider/registry"
 )
 
 // TestEmptyBypassDialogue 验证同步对话的空响应判断覆盖成功、失败、流式、计数及无关协议。
@@ -30,20 +32,29 @@ func TestEmptyBypassDialogue(t *testing.T) {
 		{"other operation", "bypass:openai-images", false, dptransport.ForwardResponse{StatusCode: 200}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := emptyBypassDialogue(tc.endpoint, tc.countOnly, tc.response); got != tc.want {
+			hit := providercontract.Hit{Transport: providercontract.Transport{EndpointID: tc.endpoint}}
+			if got := emptyBypassDialogue(hit, tc.countOnly, tc.response); got != tc.want {
 				t.Fatalf("空对话响应判断错误: got=%v want=%v", got, tc.want)
 			}
 		})
 	}
+	for _, operation := range []string{"generateContent", "streamGenerateContent", "countTokens"} {
+		hit := providercontract.Hit{Transport: providercontract.Transport{Protocol: "gemini"}, Action: providercontract.Action{UpstreamPath: "/models/{model}:" + operation}}
+		if got := emptyBypassDialogue(hit, false, dptransport.ForwardResponse{StatusCode: 200}); got != (operation != "countTokens") {
+			t.Fatalf("Google 空响应动作分类错误: %s got=%t", operation, got)
+		}
+	}
 }
 
-// TestNativeBypassEmptyDialogueNeverReplays 验证三种对话透传收到上游空 200 时返回 502，并保留真实上游事实。
+// TestNativeBypassEmptyDialogueNeverReplays 验证五种对话透传收到上游空 200 时返回 502，并保留真实上游事实。
 // 参数 t 为测试上下文；本地上游在第二次调用时可成功以检测误重试，结束时关闭服务器，无真实凭据或持久化资源。
 func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 	for _, spec := range []struct{ transport, path string }{
 		{"bypass_openai_chat", "/bypass/openai/v1/chat/completions"},
 		{"bypass_openai_responses", "/bypass/openai/v1/responses"},
 		{"bypass_anthropic_messages", "/bypass/anthropic/v1/messages"},
+		{"gemini_generate_content", "/bypass/gemini/v1beta/models/public:generateContent"},
+		{"vertex_generate_content", "/bypass/vertex/v1/models/public:generateContent"},
 	} {
 		t.Run(spec.transport, func(t *testing.T) {
 			var calls atomic.Int32
@@ -54,7 +65,10 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 				}
 			}))
 			defer up.Close()
-			h := officialHost(up, Deployment("public", "upstream", "fixture", up.URL, spec.transport, nil))
+			deployment := Deployment("public", "upstream", "fixture", up.URL, spec.transport, nil)
+			hit, _ := providerregistry.Match(http.MethodPost, spec.path)
+			deployment.ModelInfo["endpoint_types"] = []string{hit.Transport.EndpointID}
+			h := officialHost(up, deployment)
 			h.settings = map[string]any{"model_routes": []any{}, "retry_policy": map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3, "cooldown_seconds": 0}}
 			rec := h.call(t, http.MethodPost, spec.path, `{"model":"public","messages":[{"role":"user","content":"Hello"}],"input":"Hello","max_tokens":16}`)
 			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "upstream request failed") || calls.Load() != 1 {
@@ -76,5 +90,21 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 				t.Fatal("日志未保留上游 200 与空响应诊断")
 			}
 		})
+	}
+}
+
+// TestNativeBypassErrorEnvelopeWithHTTP200 验证已收到显式错误正文时，仅日志标明失败，客户端保留供应商状态和字节。
+// 使用内存宿主及测试 HTTP 服务，断言一次出站、一次失败记账且无用量；结束关闭服务。
+func TestNativeBypassErrorEnvelopeWithHTTP200(t *testing.T) {
+	const raw = `{"id":"error-id","error":{"message":"Rejected"},"usage":{"prompt_tokens":5,"completion_tokens":2}}`
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, raw)
+	}))
+	t.Cleanup(up.Close)
+	h := officialHost(up, Deployment("public", "upstream", "fixture", up.URL, "bypass_openai_chat", nil))
+	rec := h.call(t, http.MethodPost, "/bypass/openai/v1/chat/completions", `{"model":"public","messages":[{"role":"user","content":"Hello"}]}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != raw || len(h.spend) != 1 || h.spend[0].status != 502 || h.spend[0].usage != nil {
+		t.Fatalf("供应商原文或失败记账错误: status=%d spend=%+v", rec.Code, h.spend)
 	}
 }

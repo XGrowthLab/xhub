@@ -72,6 +72,13 @@ func safeErrorValue(value any, depth int) any {
 		return shortErrorText(v)
 	case map[string]any:
 		out := make(map[string]any, min(len(v), 32))
+		if v["@type"] == "type.googleapis.com/google.rpc.BadRequest" {
+			// 仅识别 Google 的固定错误详情类型，避免未知扩展对象旁路保存请求内容。
+			out["@type"] = v["@type"]
+			if violations, ok := v["fieldViolations"].([]any); ok {
+				out["fieldViolations"] = googleFieldViolations(violations)
+			}
+		}
 		// 不枚举未知供应商字段，避免 payload、data 等扩展旁路保存用户正文。
 		for _, name := range []string{"error", "code", "type", "message", "param", "request_id", "event_id", "response_id", "upstream_request_id", "status", "status_code", "details", "diagnostics", "upstream_error", "phase", "kind", "retryable", "terminal_cause", "bytes_read", "body_limit", "request_body_omitted"} {
 			if item, ok := v[name]; ok {
@@ -91,6 +98,25 @@ func safeErrorValue(value any, depth int) any {
 	default:
 		return v
 	}
+}
+
+// googleFieldViolations 从已识别的 Google BadRequest 详情投影错误字段，供失败摘要持久化。
+// 输入为原始字段错误数组，返回最多 20 项且只保留脱敏后的字符串诊断；忽略非法元素和请求回显字段，不修改输入。
+func googleFieldViolations(values []any) []map[string]string {
+	violations := make([]map[string]string, 0, min(len(values), 20))
+	for _, value := range values[:min(len(values), 20)] {
+		item, _ := value.(map[string]any)
+		fieldError := map[string]string{}
+		for _, key := range []string{"field", "description", "reason"} {
+			if text, ok := item[key].(string); ok && text != "" {
+				fieldError[key] = shortErrorText(text)
+			}
+		}
+		if len(fieldError) != 0 {
+			violations = append(violations, fieldError)
+		}
+	}
+	return violations
 }
 
 // shortErrorText 限制错误文本大小并掩盖常见密钥格式；供错误摘要生成，不能替代访问控制。

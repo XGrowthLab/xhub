@@ -36,6 +36,29 @@ func TestFailureJSONPreservesTerminalError(t *testing.T) {
 	}
 }
 
+// TestFailureJSONMissingHTTPBody 验证空的上游 HTTP 错误和截断响应仍有摘要；现有错误正文优先。
+// 使用内存诊断和片段，无外部资源；校验缺少上游状态时不制造 HTTP 错误。
+func TestFailureJSONMissingHTTPBody(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		status                int
+		readError, body, want string
+	}{
+		{"empty HTTP failure", 502, "", " \n", `{"error":{"type":"upstream_empty_error_body","status_code":502,"message":"upstream returned HTTP 502 without an error body"}}`},
+		{"complete HTTP failure", 502, "", "vendor details", "vendor details"},
+		{"interrupted HTTP failure", 400, "unexpected EOF", "", "unexpected EOF"},
+		{"interrupted HTTP success", 200, "unexpected EOF", "private model output", "unexpected EOF"},
+		{"no upstream status", 0, "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FailureJSON(&dpdiagnostics.UpstreamDiagnostics{StatusCode: tc.status, ReadError: tc.readError}, tc.body)
+			if got != tc.want {
+				t.Fatalf("失败摘要不符合观测事实: got=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCancellationFailureJSON 保留独立上游错误且没有上游证据时明确为空，不再把部分生成内容当成错误；纯内存无清理。
 func TestCancellationFailureJSON(t *testing.T) {
 	for _, observed := range []bool{false, true} {
@@ -48,6 +71,17 @@ func TestCancellationFailureJSON(t *testing.T) {
 		if json.Unmarshal([]byte(raw), &got) != nil || got["diagnostics"] == nil || (got["upstream_error"] != nil) != observed {
 			t.Fatalf("取消证据丢失: %s", raw)
 		}
+	}
+}
+
+// TestFailureJSONStreamInterruption 验证没有供应商错误帧时仍保留已观察的中断原因，部分生成内容不进入摘要。
+// 使用内存夹具，不需要清理。
+func TestFailureJSONStreamInterruption(t *testing.T) {
+	up := &dpdiagnostics.UpstreamDiagnostics{StatusCode: 200, Failure: &dpdiagnostics.Failure{
+		Phase: "response_transfer", Kind: "unexpected_eof", TransportError: "upstream stream missing terminal event",
+	}}
+	if got := FailureJSON(up, "data: partial generated content"); got != up.Failure.TransportError {
+		t.Fatalf("流中断原因丢失: %q", got)
 	}
 }
 
