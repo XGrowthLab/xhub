@@ -115,7 +115,7 @@ func (h *canceledNativeHost) RecordSpend(_ http.ResponseWriter, _ *auth.Principa
 	h.bills++
 }
 
-// TestNativeClientCancellationClassification 验证原生Chat入口正常取消不重试、不污染供应商健康，真实上游超时仍失败。
+// TestNativeClientCancellationClassification 验证原生 Chat 区分取消与上游超时，并保留最后一次尝试的阶段和出站路径。
 // 参数t为测试上下文；使用内存传输且无供应商调用，cleanup释放独立上下文。
 func TestNativeClientCancellationClassification(t *testing.T) {
 	for _, caller := range []bool{true, false} {
@@ -148,6 +148,18 @@ func TestNativeClientCancellationClassification(t *testing.T) {
 			}
 			if attempts != count || h.status != status || h.bills != 1 || len(h.failures) != failures {
 				t.Fatalf("native classification attempts=%d status=%d bills=%d failures=%d", attempts, h.status, h.bills, len(h.failures))
+			}
+			if len(h.notes) == 0 {
+				t.Fatal("原生失败遗漏了调用诊断")
+			}
+			up := h.notes[len(h.notes)-1].Upstream
+			kind := "timeout"
+			if caller {
+				kind = "request_canceled"
+			}
+			if up == nil || up.Endpoint != "/v1/chat/completions" || up.StatusCode != 0 ||
+				up.Failure == nil || up.Failure.Phase != "upstream_request" || up.Failure.Kind != kind || up.Failure.TransportError == "" {
+				t.Fatalf("原生失败未保存出站诊断: %+v", up)
 			}
 		})
 	}

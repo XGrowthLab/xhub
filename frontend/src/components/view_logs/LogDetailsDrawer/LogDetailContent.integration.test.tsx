@@ -137,7 +137,7 @@ describe("LogDetailContent", () => {
 
     expect(screen.getByText("Request failed")).toBeInTheDocument();
     expect(screen.getByText("rate_limit")).toBeInTheDocument();
-    expect(screen.getByText("Too many requests")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Too many requests");
   });
 
   it("should display tags section when request_tags has entries", () => {

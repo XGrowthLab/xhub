@@ -146,6 +146,24 @@ async function verifyCapturedFailures(page: Page, headers: Record<string, string
     await expect(errorRegion).toContainText(detail.error);
     await expect(errorRegion).not.toContainText(task);
     await page.keyboard.press("Escape");
+
+    const emptyTask = await page.request.post(`${GATEWAY}/api/v3/contents/generations/tasks`, { headers, data: {
+      model: name, content: [{ type: "text", text: "Return an empty polling error." }],
+    } });
+    expect(emptyTask.status()).toBe(200);
+    const emptyTaskID = (await emptyTask.json()).id;
+    const failedPoll = await page.request.get(`${GATEWAY}/api/v3/contents/generations/tasks/${emptyTaskID}`, { headers });
+    expect(failedPoll.status()).toBe(502);
+    expect(await failedPoll.text()).toBe("");
+    const callID = emptyTask.headers()["x-litellm-call-id"];
+    const failedDetail = await waitForLog(page.request, headers, callID);
+    expect(failedDetail).toMatchObject({ status: "failed", response: { id: emptyTaskID } });
+    expect(Number(failedDetail.spend)).toBe(0);
+    await stableGoto(page, "/logs/?log_id=" + callID);
+    await expect(page.getByRole("dialog").getByRole("alert")).toContainText(translate(locale, "logsUX.upstreamEmptyErrorBody", { status: 502 }));
+    await errorRegion.getByText(translate(locale, "logsUX.rawError"), { exact: true }).click();
+    await expect(errorRegion).toContainText("upstream returned HTTP 502 without an error body");
+    await page.keyboard.press("Escape");
   } finally {
     const deleted = await page.request.post(`${GATEWAY}/model/delete`, { headers, data: { id: deploymentID } });
     expect(deleted.status(), await deleted.text()).toBe(200);

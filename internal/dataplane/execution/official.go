@@ -233,7 +233,6 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 			if err != nil {
 				continue
 			}
-			hit = candidateHit
 			base, key := dptransport.BypassAuth(candidate)
 			if base == "" || key == "" {
 				continue
@@ -271,6 +270,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					}
 				}
 				tried = true
+				// 诊断必须对应真实尝试的部署，后续因缺少凭据跳过的候选不能覆盖它。
+				hit = candidateHit
 				ctx, cancel := context.WithTimeout(r.Context(), time.Duration(settings.TimeoutSeconds()*float64(time.Second)))
 				response, err = dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), candidateHit.Action.Method, url, key, payload, r.Header, candidateHit.Transport, w)
 				respBody, status = response.Body, response.StatusCode
@@ -313,7 +314,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, 502, selectedID)
 						return
 					}
-					util.Error("bypass forward path=%s err=%s", r.URL.Path, dpdiagnostics.SafeErr(err))
+					util.Error("bypass forward call_id=%s path=%s err=%s", callID, r.URL.Path, dpdiagnostics.SafeErr(err))
 					h.NoteFailure(router.CooldownID(rawDep), settings)
 					if failure == bypassRetry {
 						continue
@@ -363,7 +364,6 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					kind = errorKind
 					goto nextFallbackModel
 				}
-				hit = candidateHit
 				goto forwarded
 			}
 		}
@@ -380,8 +380,17 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	}
 forwarded:
 	// 转发结束后才提交任务事实与交互：HTTP 成功、任务创建、会话偏好和可计费用量是不同事实。
-	if status == 0 {
-		h.RememberExchange(callID, r, raw, []byte("upstream request failed"))
+	if status == 0 || (response.Diagnostics != nil && response.Diagnostics.Failure != nil) {
+		// 重试用尽时记录最后一次实际尝试。收到状态或部分正文也不能把读失败当成成功。
+		detail := "upstream request failed"
+		if response.Diagnostics != nil && response.Diagnostics.Failure != nil && response.Diagnostics.Failure.TransportError != "" {
+			detail = response.Diagnostics.Failure.TransportError
+		}
+		h.RememberExchange(callID, r, raw, []byte(detail))
+		note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
+		applyStreamTiming(&note, response, start)
+		note.Upstream = response.Diagnostics
+		h.AnnotateCall(callID, note)
 		h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
 		util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
 		return

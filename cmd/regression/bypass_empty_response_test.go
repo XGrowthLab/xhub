@@ -3,6 +3,7 @@ package regression
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,5 +64,82 @@ func TestBypassEmptyResponseAccounting(t *testing.T) {
 	confirmed, err := h.db.GetUsageEvent(t.Context(), iam.UsageQuery{}, success.header("x-litellm-call-id"))
 	if err != nil || confirmed.Status != "success" || confirmed.Cost <= 0 || confirmed.PromptTokens != 8 || confirmed.CompletionTokens != 2 {
 		t.Fatalf("上游确认用量必须正常结算: event=%+v err=%v", confirmed, err)
+	}
+}
+
+// TestBypassFailureDiagnostics 使用真实 Anthropic 透传、两次重试和 PostgreSQL 验证失败详情可查询。
+// 本地上游模拟首包超时、200 正文截断和无正文 502；验证原始状态、终态及脱敏摘要，禁止保存提示词或扣费。
+// 私有 schema 与本地 HTTP 服务由各子测试清理。
+func TestBypassFailureDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, phase, kind, detail string
+		upstreamStatus            int
+	}{
+		{"timeout", "upstream_request", "timeout", "context deadline exceeded", 0},
+		{"truncated", "response_transfer", "unexpected_eof", "unexpected EOF", http.StatusOK},
+		{"empty-502", "", "", "upstream returned HTTP 502 without an error body", http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
+			t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
+			var calls atomic.Int32
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				calls.Add(1)
+				switch tc.name {
+				case "timeout":
+					<-r.Context().Done()
+				case "truncated":
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Content-Length", "1024")
+					_, _ = fmt.Fprint(w, `{"type":"message"`)
+				case "empty-502":
+					w.Header().Set("X-Request-ID", "upstream-empty-502")
+					w.WriteHeader(http.StatusBadGateway)
+				}
+			}))
+			t.Cleanup(up.Close)
+			dep := hardBudgetDeployment("native-" + tc.name)
+			dep.LiteLLMParams["api_base"] = up.URL
+			dep.ModelInfo["transport"] = "bypass_anthropic_messages"
+			dep.ModelInfo["endpoint_types"] = []string{"bypass:anthropic-messages"}
+			h := openHarness(t, false, dep)
+			admin := h.adminSession()
+			owner := h.openScope(t, admin, "diagnostic-"+tc.name)
+			timeout := 5.0
+			if tc.name == "timeout" {
+				timeout = 0.25
+			}
+			template := routeTemplate(t, h, admin, "diagnostic retry", routeTemplateBody([]any{}, 2, timeout, 3, 0))
+			bindTemplate(t, h, admin, "team", owner.teamID, template)
+			body := chatRequest(dep.ModelName, "Private diagnostic regression prompt.")
+			body["max_tokens"] = 32
+			before := h.moneyOf(t, owner)
+			reply := h.do(http.MethodPost, "/bypass/anthropic/v1/messages", owner.key, body)
+			if reply.status != http.StatusBadGateway || calls.Load() != 2 {
+				t.Fatalf("两次尝试后应返回 502: calls=%d reply=%s", calls.Load(), reply.describe())
+			}
+			if tc.name == "empty-502" && (reply.text() != "" || reply.header("X-Request-ID") != "upstream-empty-502") {
+				t.Fatalf("日志摘要不得改变透传响应: %s", reply.describe())
+			}
+			id := reply.header("x-litellm-call-id")
+			detail := logDetail(t, h, admin, id)
+			metadata, _ := detail["metadata"].(map[string]any)
+			diagnostic, _ := metadata["upstream_response"].(map[string]any)
+			failure, _ := diagnostic["failure"].(map[string]any)
+			row, err := h.db.GetRequestLog(t.Context(), id)
+			if err != nil || row.RequestBody != "" || row.ResponseBody != "" || !strings.Contains(row.Error, tc.detail) {
+				t.Fatalf("数据库必须独立保存安全失败摘要: row=%+v err=%v", row, err)
+			}
+			if diagnostic["endpoint"] != "/v1/messages" || firstFloat(diagnostic, "status_code") != float64(tc.upstreamStatus) ||
+				firstFloat(metadata, "http_status") != 502 || detail["status"] != "error" ||
+				!strings.Contains(fmt.Sprint(detail["error"]), tc.detail) || detail["body_capture_status"] != "disabled" ||
+				firstFloat(detail, "spend") != 0 || h.moneyOf(t, owner) != before {
+				t.Fatalf("诊断、状态、正文隐私或账单错误: %v", detail)
+			}
+			if tc.kind != "" && (failure["phase"] != tc.phase || failure["kind"] != tc.kind) {
+				t.Fatalf("失败阶段或类型丢失: %v", diagnostic)
+			}
+		})
 	}
 }

@@ -197,6 +197,9 @@ class Handler(BaseHTTPRequestHandler):
         if req is None and task in self.ark_tasks:
             # 特定生命周期夹具第一次查询保持运行，下一次完成；其他既有调用保持立即完成。
             facts = self.ark_tasks[task]
+            if any(item.get("text") == "Return an empty polling error." for item in facts.get("content", [])):
+                self._response(502, b"", "text/plain")
+                return True
             controlled = any(item.get("text") in ("e2e-task-lifecycle", "e2e-task-failure") for item in facts.get("content", []))
             failed = any(item.get("text") == "e2e-task-failure" for item in facts.get("content", []))
             polls = facts.get("_test_polls", 0)
@@ -325,8 +328,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
         if req.get("model") == "e2e-empty-messages" and self.path.split("?")[0] == "/v1/messages":
-            # 包含触发文本时返回空 200；其他消息返回带用量的合法响应。
-            if any(m.get("content") == "Trigger empty response." for m in req.get("messages", [])):
+            # 区分首包前断连、空错误正文和空成功正文；其他消息返回带用量的合法响应。
+            contents = [m.get("content") for m in req.get("messages", [])]
+            if "Disconnect before response." in contents:
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_WR)
+            elif "Return an empty 502." in contents:
+                self._response(502, b"", "text/plain")
+            elif "End the stream early." in contents:
+                self._response(200, b'event: ping\ndata: {"type":"ping"}\n\n', "text/event-stream")
+            elif "Trigger empty response." in contents:
                 self._response(200, b"", "application/json")
             else:
                 self._json({"id": "msg_recovered", "type": "message", "role": "assistant", "model": "e2e-empty-messages", "content": [{"type": "text", "text": "Recovered"}], "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 2}})

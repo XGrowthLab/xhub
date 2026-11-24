@@ -9,18 +9,29 @@ import (
 	"time"
 )
 
-// TestUserContractPersonalCaptureAsyncFailure 通过真实创建/查询接口验证 HTTP 200 和 502 两类失败任务。
+// TestUserContractPersonalCaptureAsyncFailure 经真实创建/查询验证 HTTP 200 失败状态以及有无正文的 502。
 // 私有数据库保留初始响应，详情 error 必须来自最终失败，且只保留一条零费用记录；harness 与本地上游自动清理。
 func TestUserContractPersonalCaptureAsyncFailure(t *testing.T) {
-	for _, status := range []int{200, 502} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		empty  bool
+		want   string
+	}{
+		{"task-state", 200, false, "render_failed"},
+		{"http-error", 502, false, "render_failed"},
+		{"empty-http-error", 502, true, "upstream returned HTTP 502 without an error body"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodPost {
 					writeJSON(w, map[string]any{"id": "capture-task", "status": "queued"})
 					return
 				}
-				w.WriteHeader(status)
-				writeJSON(w, map[string]any{"status": "failed", "error": map[string]any{"code": "render_failed", "message": "Synthetic render failure."}})
+				w.WriteHeader(tc.status)
+				if !tc.empty {
+					writeJSON(w, map[string]any{"status": "failed", "error": map[string]any{"code": "render_failed", "message": "Synthetic render failure."}})
+				}
 			}))
 			t.Cleanup(up.Close)
 			model := "volcengine/capture-task-model"
@@ -32,11 +43,11 @@ func TestUserContractPersonalCaptureAsyncFailure(t *testing.T) {
 			created := h.ok(http.MethodPost, "/api/v3/contents/generations/tasks", admin, map[string]any{"model": model, "content": []any{map[string]any{"type": "text", "text": "Synthetic task."}}})
 			id := created.header("x-litellm-call-id")
 			poll := h.do(http.MethodGet, "/api/v3/contents/generations/tasks/capture-task", admin, nil)
-			if poll.status != status {
+			if poll.status != tc.status || (tc.empty && poll.text() != "") {
 				t.Fatalf("任务轮询状态错误: %s", poll.describe())
 			}
 			detail := logDetail(t, h, admin, id)
-			if detail["status"] != "failed" || detail["body_capture_status"] != "saved" || !strings.Contains(fmt.Sprint(detail["response"]), "queued") || !strings.Contains(fmt.Sprint(detail["error"]), "render_failed") {
+			if detail["status"] != "failed" || detail["body_capture_status"] != "saved" || !strings.Contains(fmt.Sprint(detail["response"]), "queued") || !strings.Contains(fmt.Sprint(detail["error"]), tc.want) {
 				t.Fatalf("任务最终错误被初始响应覆盖: %v", detail)
 			}
 			if rows := h.spendLogs(t, admin); len(rows) != 1 || numberOrZero(rows[0]["spend"]) != 0 {

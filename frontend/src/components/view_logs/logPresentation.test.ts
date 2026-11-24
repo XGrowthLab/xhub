@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { logColumnVisibility, logOutcomeKey, logErrorSummary } from "./logPresentation";
 
+/** 有传输证据时显示实际摘要，保留明确上游错误和旧日志的中性分类。使用内存，不需要清理。 */
+it("优先展示可核对的传输诊断", () => {
+  const metadata = { http_status: 502, upstream_response: { failure: {
+    kind: "timeout", phase: "upstream_request", transport_error: "context deadline exceeded",
+  } } };
+  expect(logErrorSummary({ error: "upstream request failed", metadata })).toBe("context deadline exceeded");
+  expect(logErrorSummary({ error: "vendor said overloaded", metadata })).toBe("vendor said overloaded");
+  expect(logErrorSummary({ response: {}, metadata: { upstream_response: { read_error: "unexpected EOF" } } })).toBe("unexpected EOF");
+  expect(logOutcomeKey({ metadata })).toBe("logsUX.upstreamTimeout");
+  expect(logOutcomeKey({ metadata: { http_status: 502 } })).toBe("logsUX.serviceFailed");
+  expect(logOutcomeKey({ metadata: { ...metadata, http_status: 499 } })).toBe("logsUX.interrupted");
+  expect(logErrorSummary({
+    error: JSON.stringify({ error: { type: "upstream_empty_error_body", status_code: 503, message: "original fallback" } }),
+  }, (status) => `missing body for ${status}`)).toBe("missing body for 503");
+});
+
 describe("日志展示摘要", () => {
   /** 前置不同 HTTP 状态，包括缺失和异常输入；只描述现象不推断责任方，纯函数无需清理。 */
   it.each([

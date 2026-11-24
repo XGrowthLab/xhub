@@ -95,3 +95,35 @@ func TestUpstreamStreamErrorContract(t *testing.T) {
 		}
 	}
 }
+
+// TestGatewayStreamInterruptionDiagnostics 验证有输出、无结束帧的兼容 Responses 流仍保留具体中断原因。
+// 本地供应商发送部分输出后关闭；通过真实 HTTP 和 PostgreSQL 查同一调用，验证状态、零费用和关闭正文后的隐私。
+// 测试负责回收本地服务器与私有 schema，无生产依赖。
+func TestGatewayStreamInterruptionDiagnostics(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Unfinished private output\"}\n\n")
+	}))
+	t.Cleanup(upstream.Close)
+	dep := chatDeployment("stream-interruption")
+	dep.LiteLLMParams["api_base"] = upstream.URL + "/v1"
+	dep.ModelInfo["transport"] = "bypass_openai_responses"
+	dep.ModelInfo["endpoint_types"] = []string{"responses"}
+	h := openHarness(t, false, dep)
+	admin := h.adminSession()
+	reply := h.do(http.MethodPost, "/responses", admin, map[string]any{
+		"model": dep.ModelName, "input": "Test incomplete stream.", "stream": true,
+	})
+	if reply.status != http.StatusOK || !strings.Contains(reply.text(), "Unfinished private output") {
+		t.Fatalf("本例需先收到已开始的 SSE: %s", reply.describe())
+	}
+	detail := logDetail(t, h, admin, reply.header("x-litellm-call-id"))
+	metadata, _ := detail["metadata"].(map[string]any)
+	up, _ := metadata["upstream_response"].(map[string]any)
+	errorText := firstString(detail, "error")
+	if firstFloat(metadata, "http_status") != 502 || firstFloat(up, "status_code") != 200 ||
+		detail["status"] != "error" || detail["body_capture_status"] != "disabled" || firstFloat(detail, "spend") != 0 ||
+		!strings.Contains(errorText, "upstream stream ended without completion") || strings.Contains(errorText, "Unfinished private output") {
+		t.Fatalf("流中断未保留实际原因，或部分生成内容泄露: %v", detail)
+	}
+}
