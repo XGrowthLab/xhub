@@ -75,7 +75,7 @@ func TestProtocolRejectionDetails(t *testing.T) {
 	}
 }
 
-// TestSameProtocolCanonicalExtension 使用真实 Chat 网关和本地上游验证脱敏结果与精确数字同时生效；
+// TestSameProtocolCanonicalExtension 使用真实 Chat 网关和本地上游验证长正文完整到达、脱敏结果与精确数字同时生效；
 // 参数 t 为测试上下文，独立 PG 和 HTTP 服务由 cleanup 回收。
 func TestSameProtocolCanonicalExtension(t *testing.T) {
 	seen := make(chan map[string]json.RawMessage, 1)
@@ -94,19 +94,20 @@ func TestSameProtocolCanonicalExtension(t *testing.T) {
 	dep.LiteLLMParams["model"] = "actual-upstream-model"
 	h := newHarness(t, dep)
 	admin := h.adminSession()
+	longText := strings.Repeat("original text ", 60000)
 	h.putGuardrail(t, "redact-extension", guardrailRow("redact-extension", kindRedact, []string{"Placeholder"}, "redact"))
 	h.ok("POST", "/v1/chat/completions", admin, json.RawMessage(`{
-	  "model":"native-extension","messages":[{"role":"user","content":[{"type":"text","text":"Placeholder","vendor_extra":{"number":9007199254740995}}]}],
+	  "model":"native-extension","messages":[{"role":"user","content":[{"type":"text","text":"Placeholder `+longText+`","vendor_extra":{"number":9007199254740995}}]}],
 	  "vendor_extra":{"number":9007199254740993},"disable_fallbacks":true
 	}`))
 	select {
 	case body := <-seen:
 		if string(body["vendor_extra"]) != `{"number":9007199254740993}` ||
 			!strings.Contains(string(body["messages"]), `"number":9007199254740995`) ||
-			!strings.Contains(string(body["messages"]), "[REDACTED]") ||
+			!strings.Contains(string(body["messages"]), "[REDACTED] "+longText) ||
 			strings.Contains(string(body["messages"]), "Placeholder") ||
 			string(body["model"]) != `"actual-upstream-model"` || body["disable_fallbacks"] != nil {
-			t.Fatalf("出站丢失精确扩展或脱敏结果: %s", body["messages"])
+			t.Fatalf("出站长文本、模型或精确扩展不符，messages 长度 %d", len(body["messages"]))
 		}
 	default:
 		t.Fatal("同协议没有实际到达本地上游")

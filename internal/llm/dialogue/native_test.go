@@ -2,6 +2,7 @@ package dialogue
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +28,82 @@ func TestCloneObjectKeepsDecodedNumberType(t *testing.T) {
 	}
 	if _, err := cloneObject(map[string]any{"invalid": json.Number("not a number")}); err == nil {
 		t.Fatal("深拷贝接受了不可序列化的数字")
+	}
+}
+
+// TestCloneObjectJSONCompatibility 用标准 JSON 编解码作为旧行为的对照，验证 HTTP 输入和内部构造值的独立副本。
+// 参数 t 驱动普通、深层、非 UTF-8、精确数字、特殊类型和失败用例。只在内存中构造数据，无清理副作用。
+func TestCloneObjectJSONCompatibility(t *testing.T) {
+	deep := map[string]any{"exact": json.Number("9007199254740995")}
+	for range 100 {
+		deep = map[string]any{"child": []any{deep}}
+	}
+	cycle := map[string]any{}
+	cycle["loop"] = cycle
+	badUTF8 := string([]byte{'a', 0xff})
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"ordinary", map[string]any{"items": []any{nil, true, false, "", "汉字", float64(3.5), json.Number("-0"), json.Number("5.7e-13")}}},
+		{"empty and nil collections", map[string]any{"m": map[string]any(nil), "a": []any(nil), "empty_m": map[string]any{}, "empty_a": []any{}}},
+		{"Go values normalized by JSON", map[string]any{"ids": []int{21}, "int": 5, "binary": []byte{0, 255}, "raw": json.RawMessage(`{"v":true}`), "exact": json.Number("9007199254740993")}},
+		{"invalid UTF-8 key repaired", map[string]any{badUTF8: "value"}},
+		{"invalid UTF-8 value repaired", map[string]any{"text": badUTF8}},
+		{"deep object", deep},
+		{"empty number", map[string]any{"v": json.Number("")}},
+		{"invalid number", map[string]any{"v": json.Number("01")}},
+		{"overflow", map[string]any{"v": json.Number("1e400")}},
+		{"non-finite", map[string]any{"v": math.NaN()}},
+		{"unsupported", map[string]any{"a": []any{make(chan int)}}},
+		{"cyclic", cycle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, wantErr := json.Marshal(tc.body)
+			var want map[string]any
+			if wantErr == nil {
+				wantErr = json.Unmarshal(raw, &want)
+				if wantErr == nil {
+					copyExactNumbers(want, tc.body)
+				}
+			}
+			got, err := cloneObject(tc.body)
+			if (err == nil) != (wantErr == nil) || err == nil && !reflect.DeepEqual(got, want) {
+				t.Fatalf("复制结果与 JSON 契约不同，实际错误 %v，原契约错误 %v", err, wantErr)
+			}
+		})
+	}
+	if _, err := cloneObject(nil); err == nil {
+		t.Fatal("缺失根对象应返回错误")
+	}
+}
+
+// TestCloneObjectIsolatesLargeTurns 验证共享的输入节点在两个候选副本中可以单独改名和修改数组。
+// t 提供测试断言；前置为含长文本、数组和扩展字段的已解码 Chat 正文，所有数据仅存于本次测试。
+func TestCloneObjectIsolatesLargeTurns(t *testing.T) {
+	text := strings.Repeat("conversation ", 66000)
+	turn := map[string]any{"role": "user", "content": text}
+	body := map[string]any{"messages": []any{turn, turn}}
+	a, err := cloneObject(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := cloneObject(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := a["messages"].([]any)
+	messages[0].(map[string]any)["content"] = "changed"
+	if messages[1].(map[string]any)["content"] != text {
+		t.Fatal("两个消息项共享可变对象")
+	}
+	messages[1] = nil
+	for _, other := range []map[string]any{b, body} {
+		for _, m := range other["messages"].([]any) {
+			if m.(map[string]any)["content"] != text {
+				t.Fatal("修改候选副本影响其他候选或原始长输入")
+			}
+		}
 	}
 }
 
@@ -222,5 +299,26 @@ func TestNativeRefusalAndLifecycleBoundaries(t *testing.T) {
 		if _, err := ParseDialogue("openai-responses", body); err == nil {
 			t.Fatalf("不支持的生命周期或多候选被放行: %v", body)
 		}
+	}
+}
+
+// BenchmarkCloneObjectChatBody 测量协议适配器复制单条长消息的开销，单位同时包含字节吞吐与分配次数。
+// b 控制迭代；输入沿用 HTTP 对话入口的精确数值和 792 KB 文本。逐次检查结果可独立写入，内存随基准释放。
+func BenchmarkCloneObjectChatBody(b *testing.B) {
+	content := strings.Repeat("The application gathers selected examples and compares the response from the previous conversation. ", 7920)
+	body := map[string]any{"model": "alias", "stream": true, "max_tokens": json.Number("2000"),
+		"messages":       []any{map[string]any{"role": "user", "content": content}},
+		"stream_options": map[string]any{"include_usage": true}}
+	b.SetBytes(int64(len(content)))
+	b.ReportAllocs()
+	for b.Loop() {
+		out, err := cloneObject(body)
+		if err != nil {
+			b.Fatal(err)
+		}
+		out["model"] = "upstream"
+	}
+	if body["model"] != "alias" {
+		b.Fatal("复制后的正文更改了原模型名")
 	}
 }
