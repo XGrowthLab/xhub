@@ -44,7 +44,7 @@ func prepareMessagesReasoning(m config.ModelEntry, d llmdialogue.Dialogue) (llmd
 	}
 	effort, ok := value.(string)
 	if !ok || (effort != "low" && effort != "medium" && effort != "high" && effort != "max") {
-		return d, "", fmt.Errorf("reasoning effort is not supported by the adaptive Messages bridge")
+		return d, "", &llmdialogue.RequestFieldError{Field: "reasoning.effort", Message: "reasoning effort is not supported by the adaptive Messages bridge; use low, medium, high, max or none"}
 	}
 	native := make(map[string]any, len(d.Native))
 	for k, v := range d.Native {

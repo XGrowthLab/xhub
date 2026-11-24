@@ -15,6 +15,8 @@ var ErrMessagesImageDetailUnsupported = errors.New("image detail cannot be expre
 // 解析器生成、编码器读取；不下载图片，不保存文件，也不把图片字节伪装成文本或推断模型视觉能力。
 type ContentPart struct {
 	Type, Text, URL, FileID, Detail, Filename string
+	// detailField 仅用于本次转换错误，不写入会话历史或对外正文。
+	detailField string
 }
 
 // imageDetail 校验 OpenAI 图片精度；参数为可省略字段，返回原值或明确类型/枚举错误，供图片解析器调用。
@@ -170,32 +172,38 @@ func messageContent(value any, protocol, role string) (string, []ContentPart, er
 	var text strings.Builder
 	var content []ContentPart
 	hasMedia := false
-	for _, value := range parts {
+	for index, value := range parts {
 		block := dialogueMap(value)
 		switch block["type"] {
 		case "text", "input_text", "output_text":
 			value, ok := block["text"].(string)
 			if !ok {
-				return "", nil, fmt.Errorf("content text must be string")
+				return "", nil, &RequestFieldError{Field: fmt.Sprintf("[%d].text", index), Message: "content text must be string"}
 			}
 			text.WriteString(value)
 			content = append(content, ContentPart{Type: "text", Text: value})
 		case "image_url", "input_image", "image":
 			image, err := parseImagePart(block, protocol, role)
 			if err != nil {
-				return "", nil, err
+				return "", nil, atRequestField(fmt.Sprintf("[%d]", index), err)
 			}
 			hasMedia = true
+			if image.Detail != "" && image.Detail != "auto" {
+				image.detailField = fmt.Sprintf("[%d].detail", index)
+				if protocol == "openai-chat" {
+					image.detailField = fmt.Sprintf("[%d].image_url.detail", index)
+				}
+			}
 			content = append(content, image)
 		case "file", "input_file", "document":
 			file, err := parsePDFPart(block, protocol, role)
 			if err != nil {
-				return "", nil, err
+				return "", nil, atRequestField(fmt.Sprintf("[%d]", index), err)
 			}
 			hasMedia = true
 			content = append(content, file)
 		default:
-			return "", nil, fmt.Errorf("unsupported content capability %v", block["type"])
+			return "", nil, &RequestFieldError{Field: fmt.Sprintf("[%d].type", index), Message: "unsupported content capability " + dialogueString(block["type"])}
 		}
 	}
 	if !hasMedia {
@@ -254,6 +262,9 @@ func encodeImageContent(content []ContentPart, protocol string) ([]any, error) {
 			out = append(out, image)
 		case "anthropic-messages":
 			if part.Detail != "" && part.Detail != "auto" {
+				if part.detailField != "" {
+					return nil, &RequestFieldError{Field: part.detailField, Message: ErrMessagesImageDetailUnsupported.Error(), cause: ErrMessagesImageDetailUnsupported}
+				}
 				return nil, ErrMessagesImageDetailUnsupported
 			}
 			source := map[string]any{"type": "url", "url": part.URL}

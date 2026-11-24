@@ -176,3 +176,18 @@ Absent, `null`, or empty text-block `citations` no longer block Messages convers
 Standard Messages accepts boolean `defer_loading` on ordinary function tools and preserves it on native requests. `false` can bridge as a regular function; `true` requires native Messages and is not silently changed to eager loading. This covers definition metadata only, not server tool search, `tool_reference`, or a cross-protocol discovery lifecycle.
 
 Native Claude Messages, OpenAI Responses and Chat bypass endpoints accept complete client-supplied signed/encrypted history without requiring old model/deployment ownership, forwarding original fields for provider validation. Renamed models still require the currently authorized name. Parent response IDs and task lookups retain ownership checks; XHub history references and bridge signatures must use their original unified endpoint. Provider signature compatibility is not guaranteed across accounts or models. Key authentication, model access and budget checks remain enforced.
+
+## Troubleshooting protocol field rejections
+
+When XHub rejects a conversation during validation or conversion, the HTTP message identifies the rejection as occurring before contacting the provider. It includes the field path, caller protocol and target protocol when available. Examples include `thinking.display`, `tools[0].format.type`, and `input[0].content[1].detail`. An OpenAI-shaped error fills `error.param` when there is one identified field. Messages and Gemini keep their error envelopes and include the field in `error.message`.
+
+The `X-XHub-Error-Stage` header distinguishes `request_validation` from `request_conversion`. Use `x-litellm-call-id` to find the same details in the log drawer under **Protocol compatibility**. Actual provider failures use the existing upstream status and error diagnostics. If the provider does not identify a field, use the request ID and actual outbound protocol to investigate.
+
+| Tool or field | Conversion support |
+| --- | --- |
+| Function tools | Definitions and call IDs can be mapped across Chat, Responses, and Messages. Conversion to Messages rejects `strict: true` schema enforcement. |
+| Responses `custom` | The bridge accepts `text` and `grammar`. It carries the grammar as a prompt when encoding function parameters. Strict grammar enforcement requires a supporting native endpoint. |
+| Responses `tool_search` | `execution: client` can map to client tool discovery. Hosted search requires the corresponding native capability. |
+| Hosted web search and other provider tools | Support depends on the target deployment. Required web search must be honored. Optional search can be downgraded when explicitly configured, with the downgrade recorded in the request log. Tools with no equivalent mapping return a field-specific error. |
+
+Same-protocol execution re-encodes the parsed body after guardrails, routing, history restoration, and protocol normalization. Extensions and precise JSON numbers still present in that body are preserved. Request metadata uses the existing numeric representation shared with custom guardrail scripts. The OpenAI error parameter identifies a field only when XHub can determine its exact path. Use the matching explicit passthrough endpoint to check provider-native extensions.

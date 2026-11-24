@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// parseUnifiedDialogue 将已投影的用户 OpenAI、Anthropic、Gemini/Vertex 对话解码成共享表示（图片仅三种文本协议）。参数为协议及正文；返回对话或字段错误。
+// parseUnifiedDialogue 将已投影的用户对话解码成共享表示。positions 记录投影前的索引，保证错误仍能定位原结构。
+// 参数为协议、正文及可选位置，返回对话或字段错误；图片仅三种文本协议支持。
 // 调用：ParseDialogue 的共享投影或 Google 解析分支；不支持的能力明确拒绝，无外部副作用。
-func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error) {
+func parseUnifiedDialogue(protocol string, body map[string]any, positions projectedFieldPositions) (Dialogue, error) {
 	if protocol == "gemini" || protocol == "vertex" {
 		return parseGoogleDialogue(body)
 	}
@@ -21,7 +22,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 		var ok bool
 		d.Stream, ok = v.(bool)
 		if !ok {
-			return d, fmt.Errorf("stream must be boolean")
+			return d, &RequestFieldError{Field: "stream", Message: "expected a boolean"}
 		}
 	}
 	allowed := map[string]bool{}
@@ -38,15 +39,15 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 	}
 	if value, exists := body["stream_options"]; exists {
 		if err := dialogueFields(dialogueMap(value), "include_usage"); err != nil {
-			return d, err
+			return d, atRequestField("stream_options", err)
 		}
 		if _, ok := dialogueMap(value)["include_usage"].(bool); !ok {
-			return d, fmt.Errorf("stream_options.include_usage must be boolean")
+			return d, &RequestFieldError{Field: "stream_options.include_usage", Message: "expected a boolean"}
 		}
 	}
 	for k, v := range body {
 		if !allowed[k] && v != nil {
-			return d, fmt.Errorf("unsupported unified capability %s; submit full history or use a compatible native endpoint", k)
+			return d, &RequestFieldError{Field: k, Message: "unsupported unified capability; use a compatible native endpoint"}
 		}
 	}
 	for _, k := range []string{"temperature", "top_p"} {
@@ -87,21 +88,27 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 			d.Turns = append(d.Turns, Turn{Role: "system", Text: s})
 		}
 	}
-	raw := body["messages"]
+	messageField := "messages"
 	if protocol == "openai-responses" {
-		raw = body["input"]
+		messageField = "input"
+	}
+	raw := body[messageField]
+	if protocol == "openai-responses" {
 		if s, ok := raw.(string); ok {
 			raw = []any{map[string]any{"role": "user", "content": s}}
 		}
 	}
 	list, ok := raw.([]any)
 	if !ok || len(list) == 0 {
-		return d, fmt.Errorf("nonempty conversation is required")
+		return d, &RequestFieldError{Field: messageField, Message: "nonempty conversation is required"}
 	}
-	for _, item := range list {
+	for index, item := range list {
+		if index < len(positions.turns) {
+			index = positions.turns[index]
+		}
 		m := dialogueMap(item)
 		if m == nil {
-			return d, fmt.Errorf("conversation item must be an object")
+			return d, &RequestFieldError{Field: fmt.Sprintf("%s[%d]", messageField, index), Message: "conversation item must be an object"}
 		}
 		fields := []string{"role", "content"}
 		if protocol == "openai-chat" {
@@ -111,12 +118,12 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 			fields = append(fields, "type", "call_id", "name", "arguments", "output", "id", "status", "summary")
 		}
 		if err := dialogueFields(m, fields...); err != nil {
-			return d, err
+			return d, atRequestField(fmt.Sprintf("%s[%d]", messageField, index), err)
 		}
 		role := dialogueString(m["role"])
 		kind := dialogueString(m["type"])
 		if protocol == "openai-responses" && kind != "" && kind != "message" && kind != "function_call" && kind != "function_call_output" && kind != "reasoning" {
-			return d, fmt.Errorf("unsupported input item %s", kind)
+			return d, &RequestFieldError{Field: fmt.Sprintf("input[%d].type", index), Message: "unsupported input item " + kind}
 		}
 		if protocol == "openai-responses" && kind == "reasoning" {
 			var text string
@@ -188,7 +195,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 						hasMedia = true
 					}
 				}
-				for _, p := range parts {
+				for partIndex, p := range parts {
 					b := dialogueMap(p)
 					fields := []string{"type", "text", "id", "name", "input", "tool_use_id", "content", "is_error"}
 					if b["type"] == "thinking" {
@@ -201,7 +208,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 						fields = []string{"type", "data"}
 					}
 					if err := dialogueFields(b, fields...); err != nil {
-						return d, err
+						return d, atRequestField(fmt.Sprintf("messages[%d].content[%d]", index, partIndex), err)
 					}
 					switch dialogueString(b["type"]) {
 					case "thinking", "redacted_thinking":
@@ -255,7 +262,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 						}
 						d.Turns = append(d.Turns, Turn{Role: "tool", ID: dialogueString(b["tool_use_id"]), Text: s})
 					default:
-						return d, fmt.Errorf("unsupported content capability %v", b["type"])
+						return d, &RequestFieldError{Field: fmt.Sprintf("messages[%d].content[%d].type", index, partIndex), Message: "unsupported content type " + dialogueString(b["type"])}
 					}
 				}
 			} else {
@@ -268,7 +275,12 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 		} else {
 			s, content, e := messageContent(m["content"], protocol, role)
 			if e != nil {
-				return d, e
+				return d, atRequestField(fmt.Sprintf("%s[%d].content", messageField, index), e)
+			}
+			for part := range content {
+				if content[part].detailField != "" {
+					content[part].detailField = fmt.Sprintf("%s[%d].content%s", messageField, index, content[part].detailField)
+				}
 			}
 			turn.Text, turn.Content = s, content
 			if value, exists := m["tool_calls"]; exists {
@@ -276,17 +288,17 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 					return d, fmt.Errorf("tool_calls must be an array")
 				}
 			}
-			for _, rawCall := range dialogueList(m["tool_calls"]) {
+			for callIndex, rawCall := range dialogueList(m["tool_calls"]) {
 				c := dialogueMap(rawCall)
 				if c["type"] != "function" {
-					return d, fmt.Errorf("only function tools are supported")
+					return d, &RequestFieldError{Field: fmt.Sprintf("%s[%d].tool_calls[%d].type", messageField, index, callIndex), Message: "only function tools are supported"}
 				}
 				if err := dialogueFields(c, "id", "type", "function"); err != nil {
-					return d, err
+					return d, atRequestField(fmt.Sprintf("%s[%d].tool_calls[%d]", messageField, index, callIndex), err)
 				}
 				f := dialogueMap(c["function"])
 				if err := dialogueFields(f, "name", "arguments"); err != nil {
-					return d, err
+					return d, atRequestField(fmt.Sprintf("%s[%d].tool_calls[%d].function", messageField, index, callIndex), err)
 				}
 				turn.Calls = append(turn.Calls, Turn{ID: dialogueString(c["id"]), Name: dialogueString(f["name"]), Arguments: dialogueString(f["arguments"])})
 			}
@@ -297,41 +309,50 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 	}
 	if value, exists := body["tools"]; exists {
 		if _, ok := value.([]any); !ok {
-			return d, fmt.Errorf("tools must be an array")
+			return d, &RequestFieldError{Field: "tools", Message: "tools must be an array"}
 		}
 	}
-	for _, rawTool := range dialogueList(body["tools"]) {
+	for index, rawTool := range dialogueList(body["tools"]) {
 		tool := dialogueMap(rawTool)
 		f := tool
+		field := fmt.Sprintf("tools[%d]", index)
+		if index < len(positions.tools) {
+			field = positions.tools[index]
+		}
 		if protocol == "openai-chat" {
 			if tool["type"] != "function" {
-				return d, fmt.Errorf("only function tools are supported")
+				return d, &RequestFieldError{Field: field + ".type", Message: "only function tools are supported by the standard Chat entry; use a function tool or a matching native endpoint"}
 			}
 			if err := dialogueFields(tool, "type", "function"); err != nil {
-				return d, err
+				return d, atRequestField(field, err)
 			}
 			f = dialogueMap(tool["function"])
+			field += ".function"
 		}
 		if protocol == "openai-responses" && tool["type"] != "function" {
-			return d, fmt.Errorf("only function tools are supported")
+			return d, &RequestFieldError{Field: field + ".type", Message: "only function tools are supported by this conversion"}
 		}
 		if err := dialogueFields(f, "type", "name", "parameters", "input_schema", "description", "strict"); err != nil {
-			return d, err
+			return d, atRequestField(field, err)
 		}
 		parameters := f["parameters"]
 		if protocol == "anthropic-messages" {
 			parameters = f["input_schema"]
 		}
 		if _, ok := parameters.(map[string]any); !ok {
-			return d, fmt.Errorf("tool schema must be an object")
+			schemaField := "parameters"
+			if protocol == "anthropic-messages" {
+				schemaField = "input_schema"
+			}
+			return d, &RequestFieldError{Field: field + "." + schemaField, Message: "tool schema must be an object"}
 		}
 		if v, exists := f["strict"]; exists {
 			if _, ok := v.(bool); !ok {
-				return d, fmt.Errorf("tool strict must be boolean")
+				return d, &RequestFieldError{Field: field + ".strict", Message: "tool strict must be boolean"}
 			}
 		}
 		if dialogueString(f["name"]) == "" {
-			return d, fmt.Errorf("tool name is required")
+			return d, &RequestFieldError{Field: field + ".name", Message: "tool name is required"}
 		}
 		normalized := map[string]any{"name": f["name"], "parameters": parameters}
 		if v, ok := f["description"]; ok {
@@ -341,6 +362,7 @@ func parseUnifiedDialogue(protocol string, body map[string]any) (Dialogue, error
 			normalized["strict"] = v
 		}
 		d.Tools = append(d.Tools, normalized)
+		d.ToolFields = append(d.ToolFields, field)
 	}
 	for _, t := range d.Turns {
 		if t.Role == "tool" && t.ID == "" {
@@ -387,8 +409,8 @@ func EncodeDialogue(d Dialogue, protocol, model string) (map[string]any, error) 
 			}
 			return out, nil
 		}
-		if d.BridgeError != "" {
-			return nil, fmt.Errorf("unsupported protocol bridge: %s", d.BridgeError)
+		if d.BridgeError != nil {
+			return nil, fmt.Errorf("unsupported protocol bridge: %w", d.BridgeError)
 		}
 		base := d
 		base.Source, base.Native = "", nil
@@ -547,7 +569,7 @@ func EncodeDialogue(d Dialogue, protocol, model string) (map[string]any, error) 
 	}
 	if len(d.Tools) > 0 {
 		var tools []any
-		for _, f := range d.Tools {
+		for index, f := range d.Tools {
 			cp := map[string]any{}
 			for k, v := range f {
 				cp[k] = v
@@ -561,7 +583,11 @@ func EncodeDialogue(d Dialogue, protocol, model string) (map[string]any, error) 
 			case "anthropic-messages":
 				// strict=false 明确关闭约束，等价于 Messages 的普通工具；strict=true 仍需独立的能力验证。
 				if strict, exists := cp["strict"]; exists && strict != false {
-					return nil, fmt.Errorf("strict tools cannot be expressed by Messages")
+					field := fmt.Sprintf("tools[%d]", index)
+					if index < len(d.ToolFields) {
+						field = d.ToolFields[index]
+					}
+					return nil, &RequestFieldError{Field: field + ".strict", Message: "strict tools cannot be expressed by Messages; set strict=false if strict schema enforcement is optional"}
 				}
 				delete(cp, "strict")
 				cp["input_schema"] = cp["parameters"]
@@ -608,7 +634,7 @@ func EncodeDialogue(d Dialogue, protocol, model string) (map[string]any, error) 
 				out["tool_choice"] = s
 			}
 		} else {
-			return nil, fmt.Errorf("unsupported tool_choice")
+			return nil, &RequestFieldError{Field: "tool_choice", Message: "unsupported tool_choice; use auto, required, none, or a named function"}
 		}
 	}
 	if pendingReasoning != "" {

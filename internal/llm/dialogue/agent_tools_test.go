@@ -71,7 +71,7 @@ func TestAgentToolBoundaries(t *testing.T) {
 	} {
 		var values []any
 		_ = json.Unmarshal([]byte(raw), &values)
-		if _, _, _, err := projectAgentTools(values); err == nil {
+		if _, err := projectAgentTools(values, nil); err == nil {
 			t.Fatalf("非法工具定义被接受: %s", raw)
 		}
 	}

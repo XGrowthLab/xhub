@@ -60,6 +60,7 @@ func EncodeDialogue(m config.ModelEntry, d llmdialogue.Dialogue) (map[string]any
 	}
 	payload, err := llmdialogue.EncodeDialogue(prepared, t.Protocol, m.ParamString("model", ""))
 	if err != nil {
+		// 公开能力错误需由协议层显式标记。其他编码错误仅供内部路由诊断使用。
 		return nil, nil, err
 	}
 	if effort != "" {

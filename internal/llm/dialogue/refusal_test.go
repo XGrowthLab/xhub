@@ -146,7 +146,7 @@ func TestMixedRefusalHistoryKeepsNative(t *testing.T) {
 			}
 			body := map[string]any{"model": "public", key: []any{item, map[string]any{"role": "user", "content": "New question"}}}
 			d, err := ParseDialogue(tc.protocol, body)
-			if err != nil || d.BridgeError == "" {
+			if err != nil || d.BridgeError == nil {
 				t.Fatalf("合法原生拒绝被拒绝或丢失桥接边界: %v %+v", err, d)
 			}
 			native, err := EncodeDialogue(d, tc.protocol, "public")

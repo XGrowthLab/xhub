@@ -16,6 +16,8 @@ import (
 // Headers/Trailers 是原始多值头，并未在此结构里脱敏；写日志或向客户端输出时由消费方另行过滤。
 // 正文读取过程中原地更新共享对象，消费方应在读取完成后使用；原始 Usage 与 BillingUsage 分开，避免估算覆盖原厂统计。
 type UpstreamDiagnostics struct {
+	// Protocol 保存外发前的字段或能力拒绝。与上游错误独立，避免把 XHub 校验写成供应商拒绝。
+	Protocol *ProtocolRejection `json:"protocol,omitempty"`
 	// 准入失败时的只读配置与路由快照，不包含凭据、不影响调度或限流判定。
 	Routing   map[string]any `json:"routing,omitempty"`
 	RateLimit map[string]any `json:"rate_limit,omitempty"`

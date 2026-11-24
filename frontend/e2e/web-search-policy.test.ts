@@ -20,7 +20,7 @@ for (const locale of ["zh-CN", "en"] as const) {
     /** 从真实浏览器经同源代理调用 Responses，返回状态、正文及降级/账单头；参数 stream/choice 指定协议模式与工具选择，无其他副作用。 */
     const call = async (stream: boolean, choice: unknown = "auto") => page.evaluate(async ({ bearer, name, stream, choice }) => {
       const response = await fetch("/gw/v1/responses", { method: "POST", headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json" }, body: JSON.stringify({ model: name, input: "Keep my original input. 保留我的输入。", tools: [{ type: "web_search" }], tool_choice: choice, stream }) });
-      return { status: response.status, raw: await response.text(), dropped: response.headers.get("x-xhub-dropped-capabilities"), callID: response.headers.get("x-litellm-call-id") };
+      return { status: response.status, raw: await response.text(), dropped: response.headers.get("x-xhub-dropped-capabilities"), callID: response.headers.get("x-litellm-call-id"), stage: response.headers.get("x-xhub-error-stage") };
     }, { bearer, name, stream, choice });
     try {
       const created = await page.request.post(GATEWAY + "/model/new", { headers, data: { model_name: name, litellm_params: { model: "fake-model", custom_llm_provider: "openai", litellm_credential_name: credential, input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 }, model_info: { transport: "bypass_openai_chat", endpoint_types: ["responses"], pricing_source: "manual", base_model: "deepseek/deepseek-v4.1-flash", supports_vision: false } } });
@@ -30,6 +30,8 @@ for (const locale of ["zh-CN", "en"] as const) {
       const rejected = await call(false);
       expect(rejected.status, rejected.raw).toBe(400);
       expect(rejected.raw).toContain("web_search");
+      expect(rejected.stage).toBe("request_conversion");
+      expect(JSON.parse(rejected.raw).error.param).toBeNull();
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
       await page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true }).click();
       await expect(page.getByLabel(tr("providerGuideUI.searchSupport"))).toHaveValue("inherit");
@@ -120,6 +122,16 @@ for (const locale of ["zh-CN", "en"] as const) {
       await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(lastCall);
       await page.getByRole("row").filter({ hasText: lastCall }).click();
       await expect(page.getByRole("dialog").getByRole("status")).toHaveText(tr("providerGuideUI.searchDropped").replace("{capabilities}", "web_search"));
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).not.toBeVisible();
+      await page.getByRole("tab", { name: tr("Error Logs"), exact: true }).click();
+      await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).filter({ visible: true }).fill(rejected.callID!);
+      const rejectedRow = page.getByRole("row").filter({ hasText: rejected.callID! });
+      await expect(rejectedRow).toBeVisible();
+      await rejectedRow.click();
+      const diagnostic = page.getByRole("region", { name: tr("logDiagnostics.protocolTitle"), exact: true });
+      await expect(diagnostic).toContainText("web_search");
+      await expect(diagnostic).not.toContainText(tr("logDiagnostics.rejectedField"));
     } finally {
       for (const extraID of extraIDs) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: extraID } })).status()).toBe(200);
       if (id) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);

@@ -3,6 +3,7 @@
 package execution
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,7 +37,7 @@ func (h *diagnosticHost) RouteState() router.State { return h.state }
 // 参数 t 为 Go 测试上下文；返回值无，断言失败时终止当前测试。
 // 测试只操作内存配置或本地假上游，HTTP 服务及正文由本例关闭，不创建外部付费任务或持久化数据。
 func TestServeRouteDiagnosisLogs(t *testing.T) {
-	for _, mode := range []string{"zero", "invalid", "capability", "fallback"} {
+	for _, mode := range []string{"zero", "invalid", "capability", "mixed", "fallback"} {
 		t.Run(mode, func(t *testing.T) {
 			dep := diagnosticDeployment("gpt-5.6-sol", "live", "bypass_openai_chat", false)
 			s := router.BuiltinSettings()
@@ -46,7 +47,7 @@ func TestServeRouteDiagnosisLogs(t *testing.T) {
 			} else if mode == "invalid" {
 				dep.ModelInfo["transport"] = "missing-transport"
 				wantStatus, wantReason = 400, "model_info.transport must select a registered transport"
-			} else if mode == "capability" {
+			} else if mode == "capability" || mode == "mixed" {
 				dep.ModelInfo["transport"] = "bypass_anthropic_messages"
 				wantStatus, wantReason = 400, "strict"
 			} else {
@@ -55,16 +56,31 @@ func TestServeRouteDiagnosisLogs(t *testing.T) {
 				dep.ModelInfo["transport"] = "missing-transport"
 				wantStatus, wantReason = 400, "fallback_visited=1"
 			}
-			h := &diagnosticHost{logHost: newLogHost(&config.Config{ModelList: []config.ModelEntry{dep}}, nil), settings: s}
+			models := []config.ModelEntry{dep}
+			if mode == "mixed" {
+				models = append(models, diagnosticDeployment(dep.ModelName, "invalid", "missing-transport", false))
+			}
+			h := &diagnosticHost{logHost: newLogHost(&config.Config{ModelList: models}, nil), settings: s}
 			buf := captureLog(t)
 			req := chatRequest(t, "gpt-5.6-sol", false)
-			if mode == "capability" {
+			if mode == "capability" || mode == "mixed" {
 				req = httptest.NewRequest(http.MethodPost, "/chat/completions", strings.NewReader(`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","strict":true,"parameters":{"type":"object"}}}]}`))
 			}
 			w := httptest.NewRecorder()
 			Serve(h, w, req, "chat")
 			if w.Code != wantStatus {
 				t.Fatalf("%s 分类错误: %d %s", mode, w.Code, w.Body.String())
+			}
+			if mode == "mixed" {
+				var reply struct {
+					Error struct{ Type, Message, Param string } `json:"error"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil ||
+					reply.Error.Type != "model_unavailable" || reply.Error.Param != "tools[0].function.strict" ||
+					!strings.Contains(reply.Error.Message, "check model transport, endpoint configuration and request capabilities") ||
+					strings.Contains(reply.Error.Message, "missing-transport") {
+					t.Fatalf("混合失败应保留安全的总体路由说明及准确字段: %s (%v)", w.Body.String(), err)
+				}
 			}
 			for _, fragment := range []string{"step=route_diagnosis", "call_id=\"" + w.Header().Get("x-litellm-call-id") + "\"", wantReason, "source=\"builtin\""} {
 				if !strings.Contains(buf.String(), fragment) {
@@ -77,6 +93,29 @@ func TestServeRouteDiagnosisLogs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestServePinnedProtocolRejection 在内存会话中固定既有 Messages 部署，验证不兼容续接保留 409 和准确字段路径。
+// 参数 t 为测试上下文；不发送上游请求，不创建需要清理的持久数据。
+func TestServePinnedProtocolRejection(t *testing.T) {
+	dep := diagnosticDeployment("a", "required-messages", "bypass_anthropic_messages", false)
+	h := &fallbackServeHost{
+		logHost:  newLogHost(&config.Config{ModelList: []config.ModelEntry{dep}}, nil),
+		settings: router.BuiltinSettings(),
+		required: true,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"a","input":[{"role":"user","content":[{"type":"input_text","text":"Describe the image."},{"type":"input_image","image_url":"data:image/png;base64,AQID","detail":"original"}]}]}`))
+	w := httptest.NewRecorder()
+	Serve(h, w, req, "responses")
+	var reply struct {
+		Error struct{ Type, Message, Param string } `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil || w.Code != http.StatusConflict ||
+		w.Header().Get("X-XHub-Error-Stage") != "request_conversion" || reply.Error.Type != "continuation_unavailable" ||
+		reply.Error.Param != "input[0].content[1].detail" ||
+		!strings.Contains(reply.Error.Message, "The original deployment cannot continue this conversation.") {
+		t.Fatalf("续接拒绝缺少固定部署和字段解释: %d %s (%v)", w.Code, w.Body.String(), err)
 	}
 }
 

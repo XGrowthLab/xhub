@@ -52,7 +52,7 @@ func dialogueFields(m map[string]any, fields ...string) error {
 	}
 	for key := range m {
 		if !allowed[key] {
-			return fmt.Errorf("unsupported unified capability %s", key)
+			return &RequestFieldError{Field: key, Message: "unsupported unified capability"}
 		}
 	}
 	return nil

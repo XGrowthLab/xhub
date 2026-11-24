@@ -22,13 +22,15 @@ type Dialogue struct {
 	NativeResponses bool
 	Turns           []Turn
 	Tools           []map[string]any
-	Options         map[string]any
-	Stream          bool
+	// ToolFields 保存工具在入站请求中的字段路径，供目标协议无法编码时定位来源。
+	ToolFields []string
+	Options    map[string]any
+	Stream     bool
 	// Source/Native 是护栏处理后的原协议正文；只在同协议编码时使用。
 	Source string
 	Native map[string]any
 	// BridgeError 只阻止无法无损表示的跨协议候选，不阻止兼容的原协议候选。
-	BridgeError string
+	BridgeError error
 	// ToolBindings 保存本轮 namespace/custom 到 Chat 函数名的映射，回复时恢复客户端工具身份。
 	ToolBindings map[string]ToolBinding
 }

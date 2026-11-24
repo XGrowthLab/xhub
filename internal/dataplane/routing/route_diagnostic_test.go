@@ -4,6 +4,7 @@ package routing
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,6 +14,33 @@ import (
 	providerdeployment "github.com/sunqirui1987/xhub/internal/provider/deployment"
 	"github.com/sunqirui1987/xhub/internal/router"
 )
+
+// TestProtocolProblemsOnlyKnownErrors 使用内存候选检查公开错误的白名单、准确路径以及续接选中项；不创建外部数据。
+// 参数 t 为测试上下文。已知但缺少路径的错误保留原因，未知编码错误留在内部。
+func TestProtocolProblemsOnlyKnownErrors(t *testing.T) {
+	dep := DiagnosticDeployment("fixture", "fixture-id", "bypass_openai_chat", false)
+	for _, tc := range []struct {
+		name, field string
+		err         error
+		want        int
+	}{
+		{"known search without exact path", "", llmdialogue.ErrWebSearchUnsupported, 1},
+		{"known image without exact path", "", llmdialogue.ErrMessagesImageDetailUnsupported, 1},
+		{"explicit field", "tools[1].type", &llmdialogue.RequestFieldError{Field: "tools[1].type", Message: "unsupported tool"}, 1},
+		{"unknown implementation error", "", errors.New("internal encoding failure"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := routeDiagnosis{matched: 1, decisions: []providerdeployment.CandidateDecision{{Deployment: dep, CapabilityError: tc.err}}}
+			problems := d.ProtocolProblems(router.DeploymentID(dep))
+			if len(problems) != tc.want || (len(problems) > 0 && (problems[0].Field != tc.field || problems[0].Details == "")) {
+				t.Fatalf("公开错误边界或字段路径错误: %+v", problems)
+			}
+			if other := d.ProtocolProblems("different-deployment"); len(other) != 0 {
+				t.Fatalf("续接错误只能说明当前必须使用的部署: %+v", other)
+			}
+		})
+	}
+}
 
 // DiagnosticDeployment 构造路由诊断测试的隔离部署。
 // 参数 name/id/transport/disabled 为公开别名、稳定 ID、协议及停用标志；返回新配置。

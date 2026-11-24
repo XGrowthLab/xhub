@@ -50,6 +50,12 @@ func WriteError(w http.ResponseWriter, status int, typ, msg string) {
 // 调用：dataplane/official.go、dataplane/serve.go、gateway/limits.go、gateway/models/available.go
 // 测试：无直接单测
 func WriteTypedError(w http.ResponseWriter, path string, status int, typ, msg string) {
+	WriteTypedFieldError(w, path, status, typ, msg, "")
+}
+
+// WriteTypedFieldError 写入现有协议错误包络。field 是已脱敏的请求字段路径，Chat/Responses 同时填入 error.param。
+// 兼容拒绝时调用，其他协议由 msg 说明字段；空字段保持原来的响应形状。它只写响应，不保存请求。
+func WriteTypedFieldError(w http.ResponseWriter, path string, status int, typ, msg, field string) {
 	if w.Header().Get("x-litellm-call-id") == "" {
 		SetCallID(w, CallID())
 	}
@@ -80,11 +86,15 @@ func WriteTypedError(w http.ResponseWriter, path string, status int, typ, msg st
 			},
 		})
 	default:
+		var param any
+		if field != "" {
+			param = field
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"error": map[string]any{
 				"message": msg,
 				"type":    typ,
-				"param":   nil,
+				"param":   param,
 				"code":    strconv.Itoa(status),
 			},
 		})

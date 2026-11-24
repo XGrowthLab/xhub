@@ -167,3 +167,18 @@ Messages 文本块的 `citations` 缺省、`null` 或空数组不阻止协议转
 标准 Messages 接受普通函数工具上的布尔 `defer_loading`，同协议保留原值。`false` 可按普通函数桥接；`true` 只允许原生 Messages，不能静默转换为立即加载。这仅覆盖工具定义元数据，不代表已支持服务器工具搜索、`tool_reference` 或跨协议发现生命周期。
 
 原生 Claude Messages、OpenAI Responses 和 Chat 透传入口接受客户端完整提供的签名/密文历史，不要求旧模型或部署归属，原始字段交由供应商验证。修改公开名后仍须使用当前授权名称。`previous_response_id` 及任务查询继续验证原身份和连接；XHub随机历史引用或桥接签名不能直接交给原生透传入口。此行为不保证供应商接受其他账户或模型生成的签名，且不改变Key鉴权、模型授权和预算。
+
+## 排查协议字段拒绝
+
+对话请求在 XHub 解析或转换时被拒绝，HTTP 错误会说明请求尚未发送给供应商，并报告可定位的字段、入站协议和已知的目标协议。例如 `thinking.display`、`tools[0].format.type` 或 `input[0].content[1].detail`。OpenAI 形状的错误在定位到唯一字段时填入 `error.param`。Messages 和 Gemini 保留各自的错误包络，字段写在 `error.message` 内。
+
+响应头 `X-XHub-Error-Stage` 区分 `request_validation` 和 `request_conversion`。用 `x-litellm-call-id` 打开对应调用日志，「协议兼容诊断」展示同一结论。真实上游失败沿用原始错误与响应状态的诊断。若供应商未提供字段细节，需结合调用 ID 和实际出站协议排查。
+
+| 工具或字段 | 当前转换边界 |
+| --- | --- |
+| 函数工具 | 可以在 Chat、Responses、Messages 间映射工具定义及调用关联 ID。带强制 schema 的 `strict: true` 转 Messages 时明确拒绝。 |
+| Responses 的 `custom` | 目前转换支持 `text` 与 `grammar`。转换为函数参数时，语法说明作为提示保留，严格语法约束由支持该格式的原生端点执行。 |
+| Responses 的 `tool_search` | `execution: client` 可映射为客户端工具发现。托管搜索依赖对应原生能力。 |
+| 托管联网与其他供应商工具 | 由目标部署能力决定。强制联网不可跳过，只有显式配置允许的可选联网才降级，调用日志记录该降级。其他无法等价转换的工具返回具体字段。 |
+
+同协议对护栏、路由、历史恢复与协议规范化后的已解析正文重新编码，保留其中的扩展字段和精确 JSON 数字。请求元数据沿用自定义护栏脚本可读取的数值表示。可以确定准确路径时，OpenAI 错误包络才标明具体字段。匹配的显式透传入口适合验证供应商原生扩展。

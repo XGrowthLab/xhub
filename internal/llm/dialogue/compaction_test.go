@@ -14,7 +14,7 @@ func TestCompactionNativeOnly(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || d.BridgeError == "" {
+		if err != nil || d.BridgeError == nil {
 			t.Fatalf("压缩历史未限制为原生协议: %v", err)
 		}
 		if d.Native["input"].([]any)[0].(map[string]any)["encrypted_content"] != value {

@@ -5,11 +5,13 @@ package dialogue
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
 // cloneObject 复制 JSON 对象供协议投影与模型改名使用；参数为原始正文，返回独立对象或编码错误。
-// 请求/响应适配器调用；不共享嵌套引用，不允许非 JSON 值，无外部副作用。
+// 请求/响应适配器调用；不共享嵌套引用，不允许非 JSON 值。保留请求解码后已有的精确数字，无外部副作用。
 func cloneObject(body map[string]any) (map[string]any, error) {
 	if body == nil {
 		return nil, fmt.Errorf("JSON object required")
@@ -19,8 +21,39 @@ func cloneObject(body map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	var out map[string]any
-	err = json.Unmarshal(raw, &out)
-	return out, err
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	copyExactNumbers(out, body)
+	return out, nil
+}
+
+// copyExactNumbers 把 source 中已解析的精确数字移入 target 中对应的 JSON 对象或数组。
+// cloneObject 在完成普通深拷贝后调用。函数返回应保留的值，只改写 target，保留其他数字的既有 Go 类型。
+func copyExactNumbers(target, source any) any {
+	switch source := source.(type) {
+	case json.Number:
+		return source
+	case map[string]any:
+		if object, ok := target.(map[string]any); ok {
+			for key, value := range object {
+				object[key] = copyExactNumbers(value, source[key])
+			}
+		}
+	case []any:
+		if items, ok := target.([]any); ok {
+			for i := range min(len(items), len(source)) {
+				items[i] = copyExactNumbers(items[i], source[i])
+			}
+		}
+	}
+	return target
+}
+
+// projectedFieldPositions 保存投影前的消息位置和工具路径，只用于当前请求的诊断。
+type projectedFieldPositions struct {
+	turns []int
+	tools []string
 }
 
 // ParseDialogue 同时保存原协议正文和可桥接的文本、用户图片和函数投影，参数为入口协议与护栏后的正文。
@@ -29,7 +62,7 @@ func cloneObject(body map[string]any) (map[string]any, error) {
 // Responses 规范已识别的完整公开历史：旧桥接 ID 和 Grok 公开摘要元数据；其他原生项、密文和引用保留身份。
 func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 	if protocol != "openai-responses" && protocol != "openai-chat" && protocol != "anthropic-messages" {
-		return parseUnifiedDialogue(protocol, body)
+		return parseUnifiedDialogue(protocol, body, projectedFieldPositions{})
 	}
 	native, err := cloneObject(body)
 	if err != nil {
@@ -74,7 +107,7 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 		value = []any{map[string]any{"role": "user", "content": text}}
 	}
 	if value == nil {
-		return parseUnifiedDialogue(protocol, projected)
+		return parseUnifiedDialogue(protocol, projected, projectedFieldPositions{})
 	}
 	if protocol == "openai-chat" && (native["input"] != nil || native["previous_response_id"] != nil) {
 		return Dialogue{}, fmt.Errorf("unsupported unified capability: Responses fields on Chat")
@@ -83,16 +116,22 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 	if !ok || len(items) == 0 {
 		return Dialogue{}, fmt.Errorf("nonempty conversation is required")
 	}
-	var bridgeError string
+	var bridgeError error
 	if protocol == "openai-responses" {
-		bridgeError, err = projectResponsesStreamOptions(native, projected)
+		var boundary string
+		boundary, err = projectResponsesStreamOptions(native, projected)
 		if err != nil {
-			return Dialogue{}, err
+			return Dialogue{}, atRequestField("stream_options", err)
+		}
+		if boundary != "" {
+			bridgeError = &RequestFieldError{Field: "stream_options", Message: boundary}
 		}
 	}
 	var turns []any
+	var positions projectedFieldPositions
 	responseTools := append([]any(nil), dialogueList(native["tools"])...)
-	for _, item := range items {
+	toolPaths := map[int]string{}
+	for i, item := range items {
 		m := dialogueMap(item)
 		if m == nil {
 			return Dialogue{}, fmt.Errorf("conversation item must be an object")
@@ -107,16 +146,16 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			}
 		}
 		if protocol == "anthropic-messages" {
-			for _, value := range dialogueList(cp["content"]) {
+			for j, value := range dialogueList(cp["content"]) {
 				citationBoundary, err := projectMessagesCitations(dialogueMap(value))
 				if err != nil {
-					return Dialogue{}, err
+					return Dialogue{}, atRequestField(fmt.Sprintf("messages[%d].content[%d]", i, j), err)
 				}
 				if citationBoundary != "" {
-					bridgeError = citationBoundary
+					bridgeError = &RequestFieldError{Field: fmt.Sprintf("messages[%d].content[%d].citations", i, j), Message: citationBoundary}
 				}
 				if err := projectMessagesCaller(dialogueMap(value)); err != nil {
-					return Dialogue{}, err
+					return Dialogue{}, atRequestField(fmt.Sprintf("messages[%d].content[%d].caller", i, j), err)
 				}
 			}
 		}
@@ -126,33 +165,39 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 				// Codex 会把延迟工具声明放在输入项里；它们是工具定义，不是用户消息，必须与顶层工具一同双向映射。
 				definitions, ok := cp["tools"].([]any)
 				if !ok {
-					return Dialogue{}, fmt.Errorf("additional_tools requires tools array")
+					return Dialogue{}, &RequestFieldError{Field: fmt.Sprintf("input[%d].tools", i), Message: "additional_tools requires tools array"}
+				}
+				for j := range definitions {
+					toolPaths[len(responseTools)+j] = fmt.Sprintf("input[%d].tools[%d]", i, j)
 				}
 				responseTools = append(responseTools, definitions...)
 				continue
 			case "web_search_call":
 				if !ValidWebSearchHistory(cp) {
-					return Dialogue{}, fmt.Errorf("invalid web search history item")
+					return Dialogue{}, &RequestFieldError{Field: fmt.Sprintf("input[%d]", i), Message: "invalid web search history item"}
 				}
 				// 搜索执行事实只能由原生 Responses 保留；跨协议不伪造工具结果，也不重复执行历史搜索。
-				bridgeError = "web search history requires native Responses"
+				bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].type", i), Message: "web search history requires native Responses"}
 				continue
 			case "tool_search_call", "tool_search_output":
 				// 客户端执行工具发现等价于一次工具往返；结果中的定义必须在下一次 Chat 请求中真正可调用。
 				definitions, err := projectClientSearchHistory(cp)
 				if err != nil {
 					// 托管搜索历史没有通用 Chat 等价物；保留原生正文，桥接明确拒绝，不假装已经执行搜索。
-					bridgeError = err.Error()
+					bridgeError = atRequestField(fmt.Sprintf("input[%d]", i), err)
 					continue
+				}
+				for j := range definitions {
+					toolPaths[len(responseTools)+j] = fmt.Sprintf("input[%d].tools[%d]", i, j)
 				}
 				responseTools = append(responseTools, definitions...)
 			case "", "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
 				if err := projectAgentCall(cp); err != nil {
-					return Dialogue{}, err
+					return Dialogue{}, atRequestField(fmt.Sprintf("input[%d]", i), err)
 				}
 			case "reasoning":
 				if cp["encrypted_content"] != nil {
-					bridgeError = "encrypted reasoning history"
+					bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].encrypted_content", i), Message: "encrypted reasoning history requires native Responses"}
 					continue
 				}
 				// 官方客户端会为公开推理补 encrypted_content:null；共享投影移除空占位，原生正文仍保留原值。
@@ -160,15 +205,15 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			case "compaction":
 				// 压缩历史承载不可重建的上下文，必须保留完整密文且只交原生 Responses 校验。
 				if cipher, ok := cp["encrypted_content"].(string); !ok || strings.TrimSpace(cipher) == "" {
-					return Dialogue{}, fmt.Errorf("compaction requires nonempty encrypted_content")
+					return Dialogue{}, &RequestFieldError{Field: fmt.Sprintf("input[%d].encrypted_content", i), Message: "compaction requires nonempty encrypted_content"}
 				}
-				bridgeError = "input item compaction"
+				bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].type", i), Message: "input item compaction requires native Responses"}
 				continue
 			case "item_reference":
-				bridgeError = "input item " + dialogueString(cp["type"])
+				bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].type", i), Message: "input item item_reference requires native Responses"}
 				continue
 			default:
-				return Dialogue{}, fmt.Errorf("unsupported input item %s", dialogueString(cp["type"]))
+				return Dialogue{}, &RequestFieldError{Field: fmt.Sprintf("input[%d].type", i), Message: "unsupported input item " + dialogueString(cp["type"])}
 
 			}
 		}
@@ -178,13 +223,13 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 				return Dialogue{}, err
 			}
 			if boundary != "" {
-				bridgeError = boundary
+				bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].output", i), Message: boundary}
 			}
 		}
-		for _, key := range []string{"phase", "namespace"} {
-			if cp[key] != nil {
-				bridgeError = "input " + key
-				delete(cp, key)
+		for _, field := range []string{"phase", "namespace"} {
+			if cp[field] != nil {
+				bridgeError = &RequestFieldError{Field: fmt.Sprintf("%s[%d].%s", key, i, field), Message: "requires native " + protocol}
+				delete(cp, field)
 			}
 		}
 		refusalBridgeError, err := projectRefusalHistory(protocol, cp)
@@ -192,27 +237,27 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			return Dialogue{}, err
 		}
 		if refusalBridgeError != "" {
-			bridgeError = refusalBridgeError
+			bridgeError = &RequestFieldError{Field: fmt.Sprintf("%s[%d].content", key, i), Message: refusalBridgeError}
 		}
 		cp["content"] = stripCacheHints(cp["content"])
 		if protocol == "anthropic-messages" {
 			// cache_control 是缓存性能提示，桥接不能保证命中；保留原文、工具结果及其错误文本。
-			for _, part := range dialogueList(cp["content"]) {
+			for j, part := range dialogueList(cp["content"]) {
 				block := dialogueMap(part)
 				// 工具发现引用只能原协议重放；共享文本投影不能因此阻断原生请求，也不能丢引用后跨协议发送。
 				referenceBoundary, e := projectMessagesToolReferences(block, dialogueString(cp["role"]))
 				if e != nil {
-					return Dialogue{}, e
+					return Dialogue{}, atRequestField(fmt.Sprintf("messages[%d].content[%d]", i, j), e)
 				}
 				if referenceBoundary != "" {
-					bridgeError = referenceBoundary
+					bridgeError = &RequestFieldError{Field: fmt.Sprintf("messages[%d].content[%d]", i, j), Message: referenceBoundary}
 				}
 				imageBoundary, e := projectMessagesToolResultImages(block, dialogueString(cp["role"]))
 				if e != nil {
-					return Dialogue{}, e
+					return Dialogue{}, atRequestField(fmt.Sprintf("messages[%d].content[%d]", i, j), e)
 				}
 				if imageBoundary != "" {
-					bridgeError = imageBoundary
+					bridgeError = &RequestFieldError{Field: fmt.Sprintf("messages[%d].content[%d].content", i, j), Message: imageBoundary}
 				}
 				if block["is_error"] == true && block["tool_use_id"] != nil {
 					text, e := textContent(block["content"])
@@ -225,18 +270,19 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			}
 		}
 		turns = append(turns, cp)
+		positions.turns = append(positions.turns, i)
 	}
 	projected[key] = turns
 	var tools []any
 	var bindings map[string]ToolBinding
 	if protocol == "openai-responses" {
-		var unsupported string
-		tools, bindings, unsupported, err = projectAgentTools(responseTools)
+		projection, err := projectAgentTools(responseTools, toolPaths)
 		if err != nil {
 			return Dialogue{}, err
 		}
-		if unsupported != "" {
-			bridgeError = unsupported
+		tools, bindings, positions.tools = projection.tools, projection.bindings, projection.fields
+		if projection.bridgeError != nil {
+			bridgeError = projection.bridgeError
 		}
 		// 指定的 namespace/custom 工具选择也必须使用相同的 Chat 函数名，避免选择一个未注册名称。
 		if choice := dialogueMap(native["tool_choice"]); choice != nil {
@@ -247,7 +293,7 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			}
 		}
 	}
-	for _, value := range dialogueList(native["tools"]) {
+	for i, value := range dialogueList(native["tools"]) {
 		if protocol == "openai-responses" {
 			break
 		}
@@ -263,10 +309,10 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			if value, exists := cp["defer_loading"]; exists {
 				flag, ok := value.(bool)
 				if !ok {
-					return Dialogue{}, fmt.Errorf("defer_loading must be boolean")
+					return Dialogue{}, &RequestFieldError{Field: fmt.Sprintf("tools[%d].defer_loading", i), Message: "defer_loading must be boolean"}
 				}
 				if flag {
-					bridgeError = "deferred Messages tools require native Messages"
+					bridgeError = &RequestFieldError{Field: fmt.Sprintf("tools[%d].defer_loading", i), Message: "deferred Messages tools require native Messages"}
 				}
 				delete(cp, "defer_loading")
 			}
@@ -282,7 +328,7 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 		projected["tools"] = tools
 	}
 	// 这里只校验共享结构。无法投影的不透明项仍保留在原正文，不能伪造为用户文本。
-	d, err := parseUnifiedDialogue(protocol, projected)
+	d, err := parseUnifiedDialogue(protocol, projected, positions)
 	if err != nil {
 		return Dialogue{}, err
 	}
@@ -343,7 +389,8 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 	for _, k := range []string{"model", "stream", "stream_options", "tools", "tool_choice", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "messages", "input", "instructions", "system"} {
 		core[k] = true
 	}
-	for key, value := range d.Native {
+	for _, key := range slices.Sorted(maps.Keys(d.Native)) {
+		value := d.Native[key]
 		if core[key] || value == nil {
 			continue
 		}
@@ -352,47 +399,47 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 			// false 后台开关和单候选已在解析时验证，跨协议不产生异步任务或多候选语义。
 		case "store":
 			if value != false {
-				return nil, fmt.Errorf("store requires native protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires native protocol"}
 			}
 		case "reasoning":
 			r := dialogueMap(value)
 			for k, v := range r {
 				if k == "context" {
 					if target != "openai-chat" && v != nil {
-						return nil, fmt.Errorf("reasoning.context requires native Responses or Chat")
+						return nil, &RequestFieldError{Field: "reasoning.context", Message: "requires native Responses or Chat"}
 					}
 					// Chat 的公开推理已在 EncodeDialogue 按 active/all turns 范围投影，不能将该 Responses 字段直接发给上游。
 					continue
 				}
 				if k == "summary" && v != nil {
 					if !validReasoningSummary(v) {
-						return nil, fmt.Errorf("invalid reasoning summary")
+						return nil, &RequestFieldError{Field: "reasoning.summary", Message: "invalid reasoning summary"}
 					}
 					// LiteLLM 同样拆分 effort 与摘要提示；Chat 保留公开推理，但没有原生摘要粒度参数。
 					continue
 				}
 				if k != "effort" && v != nil {
-					return nil, fmt.Errorf("reasoning.%s requires native Responses", k)
+					return nil, &RequestFieldError{Field: "reasoning." + k, Message: "requires native Responses"}
 				}
 			}
 			if target == "anthropic-messages" {
 				if err := bridgeMessagesReasoning(r["effort"], out); err != nil {
-					return nil, err
+					return nil, atRequestField("reasoning.effort", err)
 				}
 			} else if target == "openai-chat" {
 				out["reasoning_effort"] = r["effort"]
 			} else {
-				return nil, fmt.Errorf("reasoning requires native Responses or Chat")
+				return nil, &RequestFieldError{Field: key, Message: "requires native Responses or Chat"}
 			}
 		case "reasoning_effort":
 			if target == "anthropic-messages" {
 				if err := bridgeMessagesReasoning(value, out); err != nil {
-					return nil, err
+					return nil, atRequestField(key, err)
 				}
 				continue
 			}
 			if target != "openai-responses" {
-				return nil, fmt.Errorf("reasoning_effort requires OpenAI protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			out["reasoning"] = map[string]any{"effort": value}
 		case "text":
@@ -400,29 +447,29 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				// 纯文本是 Messages 的默认输出；结构化格式和 verbosity 没有已认证的等价映射。
 				t := dialogueMap(value)
 				if err := dialogueFields(t, "format"); err != nil {
-					return nil, err
+					return nil, atRequestField("text", err)
 				}
 				if format, exists := t["format"]; exists {
 					f := dialogueMap(format)
 					if len(f) != 1 || f["type"] != "text" {
-						return nil, fmt.Errorf("text.format requires native Responses or Chat")
+						return nil, &RequestFieldError{Field: "text.format", Message: "requires native Responses or Chat"}
 					}
 				}
 				continue
 			}
 			if target != "openai-chat" {
-				return nil, fmt.Errorf("text options require native Responses or Chat")
+				return nil, &RequestFieldError{Field: "text", Message: "options require native Responses or Chat"}
 			}
 			t := dialogueMap(value)
 			if format, exists := t["format"]; exists && dialogueMap(format) == nil {
-				return nil, fmt.Errorf("text.format must be an object")
+				return nil, &RequestFieldError{Field: "text.format", Message: "must be an object"}
 			}
 			if format := dialogueMap(t["format"]); format["type"] == "text" && len(format) != 1 {
-				return nil, fmt.Errorf("unsupported text.format options")
+				return nil, atRequestField("text.format", dialogueFields(format, "type"))
 			}
 			for k := range t {
 				if k != "format" && k != "verbosity" {
-					return nil, fmt.Errorf("unsupported text.%s bridge", k)
+					return nil, &RequestFieldError{Field: "text." + k, Message: "unsupported by this protocol bridge"}
 				}
 			}
 			if v := t["verbosity"]; v != nil {
@@ -436,18 +483,18 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				} else if f["type"] == "json_object" {
 					out["response_format"] = f
 				} else {
-					return nil, fmt.Errorf("unsupported text.format bridge")
+					return nil, &RequestFieldError{Field: "text.format.type", Message: "unsupported by this protocol bridge; use text, json_schema or json_object"}
 				}
 			}
 		case "response_format":
 			if target != "openai-responses" {
-				return nil, fmt.Errorf("response_format requires OpenAI protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			f := dialogueMap(value)
 			if f["type"] == "json_schema" {
 				schema, _ := cloneObject(dialogueMap(f["json_schema"]))
 				if schema == nil {
-					return nil, fmt.Errorf("json_schema must be an object")
+					return nil, &RequestFieldError{Field: "response_format.json_schema", Message: "must be an object"}
 				}
 				schema["type"] = "json_schema"
 				out["text"] = map[string]any{"format": schema}
@@ -455,23 +502,23 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				out["text"] = map[string]any{"format": f}
 			}
 		case "include":
-			for _, item := range dialogueList(value) {
+			for index, item := range dialogueList(value) {
 				if item != "reasoning.encrypted_content" {
-					return nil, fmt.Errorf("include requires native Responses")
+					return nil, &RequestFieldError{Field: fmt.Sprintf("include[%d]", index), Message: "include requires native Responses for this entry"}
 				}
 			}
 			// include 是可选返回字段请求，不是已提交的密文；不伪造密文，真正的密文历史仍由 ParseDialogue 拒绝。
 		case "client_metadata":
 			if err := agentClientMetadata(value); err != nil {
-				return nil, err
+				return nil, atRequestField(key, err)
 			}
 		case "metadata":
 			if target != "openai-chat" && target != "openai-responses" {
-				return nil, fmt.Errorf("metadata requires OpenAI protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			if d.Source == "anthropic-messages" {
 				if err := dialogueFields(dialogueMap(value), "user_id"); err != nil {
-					return nil, err
+					return nil, atRequestField(key, err)
 				}
 			}
 			if d.Source != "anthropic-messages" && (target == "openai-chat" || target == "openai-responses") {
@@ -482,7 +529,7 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 			if target == "anthropic-messages" {
 				parallel, ok := value.(bool)
 				if !ok {
-					return nil, fmt.Errorf("parallel_tool_calls must be boolean")
+					return nil, &RequestFieldError{Field: key, Message: "must be boolean"}
 				}
 				if len(dialogueList(out["tools"])) > 0 {
 					choice := dialogueMap(out["tool_choice"])
@@ -498,47 +545,47 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				continue
 			}
 			if target != "openai-chat" && target != "openai-responses" {
-				return nil, fmt.Errorf("parallel_tool_calls requires OpenAI protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			out[key] = value
 		case "prompt_cache_key":
 			if target == "anthropic-messages" {
 				if _, ok := value.(string); !ok {
-					return nil, fmt.Errorf("prompt_cache_key must be a string")
+					return nil, &RequestFieldError{Field: key, Message: "must be a string"}
 				}
 				// OpenAI 的缓存路由提示不属于对话内容或鉴权；Messages 没有同义字段。
 				// 不擅自启用有额外缓存写入费用的 cache_control，也不承诺缓存命中或保留期。
 				continue
 			}
 			if target != "openai-chat" && target != "openai-responses" {
-				return nil, fmt.Errorf("prompt_cache_key requires OpenAI protocol")
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			out[key] = value
 		case "prompt_cache_retention", "service_tier", "safety_identifier", "user":
 			if target != "openai-chat" && target != "openai-responses" {
-				return nil, fmt.Errorf("%s requires OpenAI protocol", key)
+				return nil, &RequestFieldError{Field: key, Message: "requires OpenAI protocol"}
 			}
 			out[key] = value
 		case "context_management":
 			// 与额度预占共用严格校验；仅 keep=all 无清理动作可跨协议等价保留。
 			if err := ValidateKeepAllContextManagement(value); err != nil {
-				return nil, err
+				return nil, atRequestField(key, err)
 			}
 		case "thinking", "output_config":
 			if d.Source != "anthropic-messages" || (target != "openai-responses" && target != "openai-chat") {
-				return nil, fmt.Errorf("%s requires native Messages", key)
+				return nil, &RequestFieldError{Field: key, Message: "requires native Messages"}
 			}
 			thinking := dialogueMap(d.Native["thinking"])
 			for k, v := range thinking {
 				if k != "type" && !(k == "display" && v == "omitted") {
-					return nil, fmt.Errorf("thinking.%s requires native Messages", k)
+					return nil, &RequestFieldError{Field: "thinking." + k, Message: "requires native Messages"}
 				}
 			}
 			if err := dialogueFields(dialogueMap(d.Native["output_config"]), "effort"); d.Native["output_config"] != nil && err != nil {
-				return nil, err
+				return nil, atRequestField("output_config", err)
 			}
 			if thinking["type"] == "disabled" && dialogueMap(d.Native["output_config"])["effort"] != nil {
-				return nil, fmt.Errorf("thinking disabled conflicts with effort")
+				return nil, &RequestFieldError{Field: "output_config.effort", Message: "thinking disabled conflicts with effort"}
 			}
 			if thinking["type"] == "disabled" {
 				if target == "openai-chat" {
@@ -548,7 +595,7 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				}
 			}
 			if typ := thinking["type"]; typ != nil && typ != "adaptive" && typ != "disabled" {
-				return nil, fmt.Errorf("thinking budget requires native Messages")
+				return nil, &RequestFieldError{Field: "thinking.type", Message: "thinking budget requires native Messages"}
 			}
 			effort := dialogueMap(d.Native["output_config"])["effort"]
 			if effort == nil && thinking["type"] == "adaptive" {
@@ -562,7 +609,7 @@ func bridgeOptions(d Dialogue, target string, out map[string]any) (map[string]an
 				}
 			}
 		default:
-			return nil, fmt.Errorf("%s requires native %s", key, d.Source)
+			return nil, &RequestFieldError{Field: key, Message: "requires native " + d.Source}
 		}
 	}
 	return out, nil

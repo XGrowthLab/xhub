@@ -243,6 +243,7 @@ for (const locale of ["zh-CN", "en"] as const)
         });
         expect(explicitDetail.status, explicitDetail.raw).toBe(400);
         expect(explicitDetail.raw).toContain("unsupported_capability");
+        expect(JSON.parse(explicitDetail.raw).error.param).toBe("input[0].content[1].detail");
         expect(explicitDetail.raw).toContain("image detail cannot be expressed by Messages");
         expect(explicitDetail.raw).toContain("auto");
         await expect.poll(async () => {
@@ -282,6 +283,24 @@ for (const locale of ["zh-CN", "en"] as const)
         ).toBeVisible();
         await stableGoto(page, "/logs");
         await expect(page.getByText(names[0], { exact: true }).first()).toBeVisible();
+        if (!stream) {
+          const incompatible = await browserPost(page, key.key, "/gw/v1/responses", {
+            model: names[0],
+            input: "Reply in one sentence.",
+            tools: [{ type: "custom", name: "run", format: { type: "vendor_only" } }],
+          });
+          expect(incompatible.status, incompatible.raw).toBe(400);
+          expect(JSON.parse(incompatible.raw).error.param).toBe("tools[0].format.type");
+          expect(incompatible.raw).toContain("before sending it upstream");
+          await expect.poll(async () => (
+            await page.request.get(GATEWAY + "/spend/logs/ui/" + incompatible.callID, { headers })
+          ).status()).toBe(200);
+          await stableGoto(page, "/logs?log_id=" + encodeURIComponent(incompatible.callID));
+          const diagnostic = page.getByRole("dialog").getByRole("region", { name: t("logDiagnostics.protocolTitle") });
+          await expect(diagnostic.getByText("tools[0].format.type", { exact: true })).toBeVisible();
+          await expect(diagnostic.getByText("openai-chat", { exact: true })).toBeVisible();
+          await expect(diagnostic).toContainText(translate(locale, "logDiagnostics.rejectedConversion", { protocol: "openai-responses" }));
+        }
       } finally {
         if (keyID)
           expect(
