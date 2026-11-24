@@ -12,12 +12,16 @@ it("模型广场展示市场头像并能回退到本地品牌", () => {
   const rows = priceCatalogRows({ models: {
     "x-ai/grok-4.5": { market_catalog: true, issuer: "xAI", avatar: "https://static.qiniu.com/model-icons/grok.png" },
     "claude-opus": { market_catalog: true },
+    "moonshotai/kimi-k3.1-pro": { market_catalog: true, litellm_provider: "openai" },
   } });
   render(<MarketPriceCatalog rows={rows} />);
   const marketAvatar = within(screen.getByTestId("price-row-x-ai/grok-4.5")).getByTestId("model-avatar");
   const localAvatar = within(screen.getByTestId("price-row-claude-opus")).getByTestId("model-avatar");
   expect(marketAvatar).toHaveAttribute("data-avatar-kind", "market");
   expect(localAvatar).toHaveAttribute("data-avatar-kind", "provider");
+  const kimi = within(screen.getByTestId("price-row-moonshotai/kimi-k3.1-pro"));
+  expect(kimi.getByText("Moonshot AI", { exact: true })).toBeVisible();
+  expect(kimi.getByTestId("model-avatar").querySelector("img")).toHaveAttribute("src", expect.stringContaining("moonshot"));
   fireEvent.error(marketAvatar.querySelector("img")!);
   expect(marketAvatar).toHaveAttribute("data-avatar-kind", "provider");
 });

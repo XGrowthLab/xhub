@@ -1,4 +1,5 @@
 import { t as translate, type TFunction } from "@/i18n";
+import { resolveModelBrand } from "@/components/molecules/models/modelBrand";
 import type { PriceCatalogRow } from "./priceCatalogRows";
 
 export const MODALITY_NAMES: Record<string, string> = {
@@ -14,6 +15,11 @@ export const CAPABILITIES: Record<string, string> = {
   reasoning: "推理能力",
   content_cache: "内容缓存",
 };
+
+/** 返回广场卡片、详情与筛选共用的原厂名称；目录未提供原厂且型号无法识别时使用本地化默认文本。 */
+export function marketBrandLabel(row: PriceCatalogRow, t: TFunction): string {
+  return resolveModelBrand({ model: row.id, issuer: row.raw.issuer, provider: row.provider })?.name ?? t("marketSync.custom");
+}
 
 /** 读取市场字符串数组；参数为未知字段，返回有效字符串，供筛选和详情使用；缺失或非法字段返回空数组，无副作用。 */
 export function marketStrings(value: unknown): string[] {

@@ -16,6 +16,7 @@ import type { MyModelCard } from "./grantedModelCards";
 import { invocationSteps } from "./modelInvocation";
 import { protocolParameters } from "./protocolParameters";
 import { ModelPriceDetails } from "./ModelPriceDetails";
+import { resolveModelBrand } from "@/components/molecules/models/modelBrand";
 
 export type ModelDetailTab = "pricing" | "access" | "api" | "docs";
 
@@ -68,6 +69,7 @@ export function MyModelDetail({
 }) {
   const t = useT();
   const [tab, setTab] = useState<ModelDetailTab>(initialTab);
+  const brand = resolveModelBrand({ model: model.id, provider: model.provider });
   const endpoints = model.unavailable_reason ? [] : model.endpoints ?? [];
   const [path, setPath] = useState(endpoints[0]?.path ?? "");
   const endpoint = endpoints.find((item) => item.path === path) ?? endpoints[0];
@@ -87,7 +89,7 @@ export function MyModelDetail({
         <DialogHeader className="pr-8">
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
             <Terminal className="size-4" aria-hidden="true" />
-            XHub API<Badge variant="outline">{model.provider || t("myModels.unknownProvider")}</Badge>
+            XHub API<Badge variant="outline">{brand?.name ?? t("myModels.unknownProvider")}</Badge>
           </div>
           <DialogTitle className="break-all text-xl leading-snug">{model.id}</DialogTitle>
           <DialogDescription>{t("myModels.detailDescription")}</DialogDescription>

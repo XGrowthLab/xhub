@@ -2,19 +2,9 @@
 
 import { useState } from "react";
 import { Boxes } from "lucide-react";
-import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { cn } from "@/lib/cva.config";
 import { logoTreatmentFor } from "@/lib/logoTreatments";
-
-const issuerSlugs: Record<string, string> = {
-  aliyun: "dashscope",
-  bytedance: "volcengine",
-  google: "gemini",
-  "moonshot-kimi": "moonshot",
-  moonshotai: "moonshot",
-  "x-ai": "xai",
-  "z-ai": "zai",
-};
+import { resolveModelBrand } from "./modelBrand";
 
 /** 校验目录提供的头像地址，返回 HTTPS 图片或受支持的内联位图；供模型头像使用，未声明或无效时回退到本地资源。 */
 function marketAvatar(value: unknown): string | undefined {
@@ -30,43 +20,19 @@ function marketAvatar(value: unknown): string | undefined {
   }
 }
 
-/** 从目录原厂标识、模型命名空间和常见家族解析库存图标；返回成功命中的第一张，不使用部署连接或其协议名称推测模型。 */
-function modelProviderLogo(model: string, issuer?: string | null): string {
-  const [namespace] = model.toLowerCase().split("/");
-  const name = model.toLowerCase().split("/").at(-1) ?? "";
-  const family = [
-    [/^(?:gpt-|o[134](?:-|$)|text-embedding-)/, "openai"],
-    [/^claude-/, "anthropic"],
-    [/^(?:gemini-|imagen-|veo-)/, "gemini"],
-    [/^deepseek-/, "deepseek"],
-    [/^grok-/, "xai"],
-    [/^glm-/, "zai"],
-    [/^qwen/, "dashscope"],
-    [/^kimi-/, "moonshot"],
-    [/^minimax-/, "minimax"],
-    [/^(?:doubao-|seedance-|seedream-)/, "volcengine"],
-  ] as const;
-  const provider = family.find(([pattern]) => pattern.test(name))?.[1];
-  for (const value of [issuer?.trim().toLowerCase(), model.includes("/") ? namespace : undefined, provider]) {
-    if (!value) continue;
-    const logo = getProviderLogoAndName(Object.hasOwn(issuerSlugs, value) ? issuerSlugs[value] : value).logo;
-    if (logo) return logo;
-  }
-  return "";
-}
-
 /** 为有相邻模型名称的卡片、展开行和详情显示装饰性头像。
- * model 为目录标识或上游型号，avatar/issuer 可来自目录，className 设置容器尺寸。外部图片失败后依次使用本地原厂图标和中性图标，固定占位防止重排。 */
-export function ModelAvatar({ model, avatar, issuer, className }: {
+ * model 为目录标识或上游型号，avatar/issuer 来自目录，provider 是旧接口执行标识，className 设置尺寸。图片加载失败时固定占位并降级。 */
+export function ModelAvatar({ model, avatar, issuer, provider, className }: {
   model: string;
   avatar?: unknown;
-  issuer?: string | null;
+  issuer?: unknown;
+  provider?: string | null;
   className?: string;
 }) {
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   const artwork = [
     { source: marketAvatar(avatar), kind: "market" },
-    { source: modelProviderLogo(model, issuer), kind: "provider" },
+    { source: resolveModelBrand({ model, issuer, provider })?.logo, kind: "provider" },
   ].find(({ source }) => source && !failed.has(source));
   const source = artwork?.source;
   const treatment = logoTreatmentFor(source ?? "");

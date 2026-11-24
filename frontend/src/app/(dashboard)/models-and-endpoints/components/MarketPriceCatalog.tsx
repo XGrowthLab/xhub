@@ -11,6 +11,7 @@ import type { PriceCatalogRow } from "./priceCatalogRows";
 import {
   CAPABILITIES,
   MODALITY_NAMES,
+  marketBrandLabel,
   marketCapability,
   marketModalities,
   marketMoney,
@@ -41,11 +42,11 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
         onClick={() => onDetail?.(row)}
         aria-label={t("marketSync.detailLabel", { name: row.displayName || row.id })}
       >
-        <ModelAvatar model={row.id} avatar={row.raw.avatar} issuer={row.provider} className="size-10" />
+        <ModelAvatar model={row.id} avatar={row.raw.avatar} issuer={row.raw.issuer} provider={row.provider} className="size-10" />
         <span className="min-w-0">
           <h3 className="text-lg font-semibold">{row.displayName || row.id}</h3>
           <span className="text-xs text-muted-foreground">
-            {String(row.raw.issuer || row.provider || t("marketSync.custom"))}
+            {marketBrandLabel(row, t)}
           </span>
         </span>
       </button>
@@ -145,13 +146,13 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
       )
     : active;
   const suppliers = [
-    ...new Set(pool.map((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")))),
+    ...new Set(pool.map((row) => marketBrandLabel(row, t))),
   ].sort();
   const features = [...new Set(pool.flatMap(marketFeatures))];
   const visible = pool
     .filter(
       (row) =>
-        (!provider || String(row.raw.issuer || row.provider || t("marketSync.custom")) === provider) &&
+        (!provider || marketBrandLabel(row, t) === provider) &&
         (!input || marketModalities(row, "input").includes(input)) &&
         (!output || marketModalities(row, "output").includes(output)) &&
         (!capability || marketCapability(row, capability)) &&
@@ -298,7 +299,7 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
                     {p}
                     <span className="text-muted-foreground">
                       {
-                        pool.filter((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")) === p)
+                        pool.filter((row) => marketBrandLabel(row, t) === p)
                           .length
                       }
                     </span>

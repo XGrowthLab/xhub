@@ -17,7 +17,8 @@ import {
 import { ConsolePageHeader } from "@/components/console/ConsolePrimitives";
 import { ConsoleSelect } from "@/components/console/ConsoleSelect";
 import { Popover, PopoverTrigger, PopoverContent, PopoverTitle, PopoverDescription } from "@/components/ui/popover";
-import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { ModelAvatar } from "@/components/molecules/models/ModelAvatar";
+import { resolveModelBrand } from "@/components/molecules/models/modelBrand";
 import { t, useT, useI18n } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -51,10 +52,10 @@ function categoryLabel(category: string): string {
   return labels[displayed] ?? displayed;
 }
 
-/** 展示授权模型摘要及详情、调试两个入口；参数为模型及打开回调，返回卡片。
+/** 展示授权模型摘要及详情、调试两个入口；参数为模型、展示品牌及打开回调，返回卡片。
  * 供我的模型列表调用；五个子网格行按相邻卡片的真实内容共同伸展，使价格与操作对齐而不写死高度。
  * 只按实际绑定展示可用状态，不因目录分类推断接口；分档价只读已确认快照。 */
-function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelDetailTab) => void }) {
+function ModelCard({ model, brand, onOpen }: { model: MyModelCard; brand?: string; onOpen: (tab: ModelDetailTab) => void }) {
   const { t, locale } = useI18n();
   const capabilityIcons: Record<string, typeof Wrench> = {
     tools: Wrench,
@@ -72,15 +73,13 @@ function ModelCard({ model, onOpen }: { model: MyModelCard; onOpen: (tab: ModelD
       className="row-span-5 grid min-w-0 grid-rows-subgrid gap-y-0 rounded-xl border border-border bg-card p-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none hover:border-primary/40 hover:shadow-sm"
     >
       <div className="flex items-start gap-3">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-background">
-          <ProviderLogo provider={model.provider ?? "unknown"} className="size-6 object-contain" />
-        </div>
+        <ModelAvatar model={model.id} provider={model.provider} className="size-10 bg-background" />
         <div className="min-w-0 flex-1">
           <h2 title={model.id} className="truncate text-base font-semibold leading-6">
             {model.id}
           </h2>
           <p className="mt-0.5 truncate text-sm text-muted-foreground">
-            {model.provider ?? t("myModels.unknownProvider")}
+            {brand ?? t("myModels.unknownProvider")}
           </p>
         </div>
         <Badge
@@ -209,23 +208,26 @@ export function MyModels({
     () => ["all", ...Array.from(new Set(models.map((model) => displayModelCategory(model.category)))).sort()],
     [models],
   );
-  const providers = useMemo(
-    () =>
-      Array.from(
-        new Set(models.map((model) => model.provider).filter((value): value is string => Boolean(value))),
-      ).sort(),
+  // 同一原厂名称用于卡片、搜索和筛选，兼容协议标识只作为旧数据输入。
+  const brands = useMemo(
+    () => new Map(models.map((model) => [model.id, resolveModelBrand({ model: model.id, provider: model.provider })?.name])),
     [models],
+  );
+  const providers = useMemo(
+    () => Array.from(new Set(brands.values())).filter((value): value is string => Boolean(value)).sort(),
+    [brands],
   );
   const activeFilters = Number(category !== "all") + Number(provider !== "all");
   const visible = useMemo(() => {
     const search = query.trim().toLowerCase();
     return models
       .filter((model) => {
+        const brand = brands.get(model.id);
         if (category !== "all" && displayModelCategory(model.category) !== category) return false;
-        if (provider !== "all" && (model.provider ?? "unknown") !== provider) return false;
+        if (provider !== "all" && (brand ?? "unknown") !== provider) return false;
         return (
           !search ||
-          [model.id, model.provider ?? "", model.category, ...model.capabilities]
+          [model.id, brand ?? "", model.category, ...model.capabilities]
             .join(" ")
             .toLowerCase()
             .includes(search)
@@ -244,7 +246,7 @@ export function MyModels({
           );
         return a.id.localeCompare(b.id);
       });
-  }, [category, models, provider, query, sort]);
+  }, [brands, category, models, provider, query, sort]);
 
   /** 清除搜索、类别和供应商条件；无参数和返回值，供清除按钮调用，只更新本地筛选状态。 */
   function resetFilters() {
@@ -328,7 +330,7 @@ export function MyModels({
                   options={[
                     { value: "all", label: t("myModels.allProviders") },
                     ...providers.map((item) => ({ value: item, label: item })),
-                    ...(models.some((model) => model.provider == null)
+                    ...(models.some((model) => !brands.get(model.id))
                       ? [{ value: "unknown", label: t("myModels.unknownProvider") }]
                       : []),
                   ]}
@@ -390,7 +392,7 @@ export function MyModels({
                   <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{categoryLabel(group)}</h2>
                   <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
                     {items.map((model) => (
-                      <ModelCard key={model.id} model={model} onOpen={(tab) => setDetail({ model, tab })} />
+                      <ModelCard key={model.id} model={model} brand={brands.get(model.id)} onOpen={(tab) => setDetail({ model, tab })} />
                     ))}
                   </div>
                 </section>

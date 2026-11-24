@@ -9,7 +9,7 @@ import { ModelAvatar } from "@/components/molecules/models/ModelAvatar";
 import { t as translate, useT } from "@/i18n";
 import { uiHref } from "@/utils/uiHref";
 import type { PriceCatalogRow } from "./priceCatalogRows";
-import { marketMoney, marketPrices, marketModalities, MODALITY_NAMES, marketStrings } from "./marketCatalog";
+import { marketBrandLabel, marketMoney, marketPrices, marketModalities, MODALITY_NAMES, marketStrings } from "./marketCatalog";
 import { modelDeployments, modelCurl, marketDocUrl, effectiveMarketEndpoints, type MarketDeployment } from "./modelAccess";
 
 /** 读取当前用户可见的完整部署与端点；参数为会话，返回部署和公开端点。
@@ -82,7 +82,7 @@ export function MarketModelDetail({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader className="flex-row items-center gap-3">
-          <ModelAvatar model={row.id} avatar={row.raw.avatar} issuer={row.provider} className="size-10" />
+          <ModelAvatar model={row.id} avatar={row.raw.avatar} issuer={row.raw.issuer} provider={row.provider} className="size-10" />
           <div className="min-w-0 space-y-1 text-left">
             <DialogTitle className="[overflow-wrap:anywhere]">{row.displayName || row.id}</DialogTitle>
             <DialogDescription className="[overflow-wrap:anywhere]">{t("marketSync.detail.marketID", { id: row.id })}</DialogDescription>
@@ -146,7 +146,7 @@ export function MarketModelDetail({
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-muted-foreground">{t("marketSync.provider")}</dt>
-                <dd>{String(row.raw.issuer || row.provider || t("marketSync.custom"))}</dd>
+                <dd>{marketBrandLabel(row, t)}</dd>
               </div>
               {(["input", "output"] as const).map((side) => (
                 <div key={side}>
