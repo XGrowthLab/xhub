@@ -25,3 +25,25 @@ func TestNormalizeUsagePreservesExplicitZeroOverAliases(t *testing.T) {
 		})
 	}
 }
+
+// TestNormalizeUsageReadsTrustedSearch 验证通用目录计价读取供应商的搜索次数，非法值与冲突保留阻断原因。
+// 使用内存用量对象，无费率写入和清理步骤。
+func TestNormalizeUsageReadsTrustedSearch(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		raw    map[string]any
+		count  int
+		reason string
+	}{
+		{"grok", map[string]any{"server_side_tool_usage_details": map[string]any{"web_search_calls": 1}, "num_server_side_tools_used": 3}, 1, ""},
+		{"deepseek", map[string]any{"server_tool_use": map[string]any{"tool_search": 2, "tool_fetch": 4}}, 2, ""},
+		{"conflict", map[string]any{"searches": 2, "server_side_tool_usage_details": map[string]any{"web_search_calls": 0}}, 0, "upstream_usage_conflict"},
+		{"invalid", map[string]any{"server_side_tool_usage_details": map[string]any{"web_search_calls": "1"}}, 0, "upstream_usage_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeUsage(tc.raw); got.Searches != tc.count || got.PricingBlocked != tc.reason {
+				t.Fatalf("目录实测搜索用量错误: %+v", got)
+			}
+		})
+	}
+}

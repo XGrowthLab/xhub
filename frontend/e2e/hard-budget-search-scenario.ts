@@ -4,7 +4,7 @@ import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./help
 
 /** 注册独立语言的搜索预算闭环；由场景文件调用，资源在测试finally清理。 */
 export function registerHardBudgetSearchScenario(locale: "zh-CN" | "en") {
-  /** 在双语控制台创建有限额Key，经真实后台与本地上游完成同步/流搜索并检查费用；余额不足阻断。
+  /** 在双语控制台创建有限额Key，经真实后台与本地 Grok 用量夹具完成同步/流搜索，核对来源、次数、费用与余额阻断。
    * 前置隔离数据库和token计价部署，不要求搜索认证配置；finally删除自建Key和模型，不使用生产凭据。 */
   test("budgeted hosted search preserves tools and settles " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -32,12 +32,21 @@ export function registerHardBudgetSearchScenario(locale: "zh-CN" | "en") {
       for (const stream of [false, true]) {
         const response = await page.request.post(GATEWAY + "/v1/responses", { headers: { Authorization: "Bearer " + key.key }, data: { model: name, input: "Search for the official Go website.", tools: [{ type: "web_search" }], tool_choice: "required", max_output_tokens: 32, stream } });
         expect(response.status(), await response.text()).toBe(200);
-        expect(await response.text()).toContain("web_search_call");
+        const raw = await response.text();
+        expect(raw).toContain("web_search_call");
+        expect(raw).toContain("url_citation");
+        expect(raw).toContain("https://go.dev/");
         expect(response.headers()["x-xhub-budget-state"]).toBe("soft");
         expect(response.headers()["x-xhub-budget-guarantee"]).toBe("soft");
         expect(response.headers()["x-xhub-tool-costs"]).toBe("search_metered");
         expect(response.headers()["x-xhub-max-tool-calls"]).toBeUndefined();
         expect(response.headers()["x-xhub-dropped-capabilities"]).toBeUndefined();
+        const callID = response.headers()["x-litellm-call-id"];
+        expect(callID).toBeTruthy();
+        await expect.poll(async () => {
+          const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers });
+          return log.ok() ? (await log.json()).metadata?.cost_breakdown : null;
+        }).toMatchObject({ tool_usage_cost: 0.01, total_cost: 0.010012, usage: { Searches: 1 } });
       }
       await expect.poll(async () => (await (await page.request.get(GATEWAY + "/key/info?key=" + keyID, { headers })).json()).info.spend).toBeCloseTo(0.020024, 8);
       await stableGoto(page, "/api-keys?key=" + keyID);

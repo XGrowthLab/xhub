@@ -12,6 +12,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/catalog"
 	"github.com/sunqirui1987/xhub/internal/config"
 	llmdialogue "github.com/sunqirui1987/xhub/internal/llm/dialogue"
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 )
 
 // DefaultBudgetOutputTokens 是有限预算请求未声明输出上限时公开采用的上限；推理和可见输出共用该额度。
@@ -275,6 +276,10 @@ func ValidateStrictBudgetUsage(raw map[string]any, plans ...BudgetPlan) error {
 	}
 	allowImages := len(plans) > 0 && plans[0].frozen != nil && plans[0].frozen.InputImagesIncluded
 	if len(plans) == 0 || !plans[0].soft {
+		// 供应商新增的搜索计量路径也属于未预占费用，不能只拦顶层别名。
+		if searches, _, _ := llmusage.ParseSearchCount(raw); searches > 0 {
+			return fail("measured usage contains an unreserved pricing dimension")
+		}
 		if err := budgetUsageDimensions(raw, "", allowImages); err != nil {
 			return err
 		}

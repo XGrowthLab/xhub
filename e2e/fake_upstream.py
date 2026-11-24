@@ -390,7 +390,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self.path.endswith("/responses") or "max_tool_calls" in req or not any(t.get("type") == "web_search" for t in req.get("tools", [])):
                 self.send_error(400, "search fixture requires Responses, search and no injected tool cap")
                 return
-            result = {"id": "resp_budget_search", "object": "response", "status": "completed", "output": [{"id": "ws_budget_search", "type": "web_search_call", "status": "completed", "action": {"type": "search", "queries": ["Go programming language"]}}, {"id": "msg_budget_search", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "e2e-budget-search"}]}], "usage": {"input_tokens": 8, "output_tokens": 2, "tool_usage": {"web_search": 1}, "tool_usage_details": {"web_search": {"search_engine": 1}}}}
+            source = "https://go.dev/"
+            result = {
+                "id": "resp_budget_search", "object": "response", "status": "completed",
+                "output": [
+                    {"id": "ws_budget_search", "type": "web_search_call", "status": "completed",
+                     "action": {"type": "search", "queries": ["Go programming language"]}},
+                    {"id": "msg_budget_search", "type": "message", "role": "assistant",
+                     "content": [{"type": "output_text", "text": source,
+                                  "annotations": [{"type": "url_citation", "url": source, "start_index": 0, "end_index": len(source)}]}]},
+                ],
+                # 供应商 Grok 只把实测搜索次数放在工具明细里；工具总量也含其他工具。
+                "usage": {"input_tokens": 8, "output_tokens": 2, "num_server_side_tools_used": 3,
+                          "server_side_tool_usage_details": {"web_search_calls": 1, "x_search_calls": 2}},
+            }
             if req.get("stream"):
                 self._sse([{"type": "response.completed", "response": result}])
             else:

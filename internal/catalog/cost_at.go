@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
@@ -287,7 +288,7 @@ func CostFromFlatOrRates(read func(string) (float64, bool), usage Usage, started
 // text model says, and nothing downstream should read it as a picture count.
 //
 // 参数 usage（map[string]any）：上游返回的 usage 对象。
-// 返回 Usage（Usage）：可以交给 CostAt 的用量。上游没报的量为零。
+// 返回 Usage（Usage）：可以交给 CostAt 的用量。缺失量为零，冲突或非法的搜索用量阻止计价。
 // 调用：gateway/usageOf。
 // 测试：cost_at_test.go
 func NormalizeUsage(usage map[string]any) Usage {
@@ -360,7 +361,16 @@ func NormalizeUsage(usage map[string]any) Usage {
 	out.CacheWriteTokens = firstIntField(usage, "cache_creation_input_tokens", "cache_write_tokens")
 	out.Images = firstIntField(usage, "images", "image_count", "num_images", "output_images")
 	out.Seconds = firstFloatField(usage, "seconds", "duration_seconds", "video_seconds", "audio_seconds")
-	out.Searches = firstIntField(usage, "searches", "search_count", "web_search_requests")
+	searches, _, err := llmusage.ParseSearchCount(usage)
+	out.Searches = searches
+	if out.PricingBlocked == "" {
+		switch err {
+		case llmusage.ErrSearchUsageInvalid:
+			out.PricingBlocked = "upstream_usage_invalid"
+		case llmusage.ErrSearchUsageConflict:
+			out.PricingBlocked = "upstream_usage_conflict"
+		}
+	}
 	return out
 }
 
