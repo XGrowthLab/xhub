@@ -198,6 +198,8 @@ function RequestIdSection({ requestId }: { requestId: string }) {
 
 /** 显示展开、前后切换及关闭按钮；参数为对应回调及展开状态，返回导航控件。
  * 抽屉标题调用；按钮只触发调用方回调，不改变日志。 */
+/** 展示日志详情的相邻记录、宽度与关闭控制；参数为动作回调及宽度状态，返回可键盘操作的工具栏。
+ * 供 DrawerHeader 使用，关闭行为交给抽屉宿主处理，快捷键提示不承担按钮的可访问名称。 */
 function NavigationSection({
   onPrevious,
   onNext,
@@ -240,7 +242,7 @@ function NavigationSection({
       <div style={splitStyle} />
       <TooltipProvider>
         <Tooltip>
-          <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={onClose} />}>
+          <TooltipTrigger render={<Button variant="ghost" size="icon-sm" onClick={onClose} aria-label={t("Close")} />}>
             <X className="size-4" />
           </TooltipTrigger>
           <TooltipContent>{t("ESC to close")}</TooltipContent>

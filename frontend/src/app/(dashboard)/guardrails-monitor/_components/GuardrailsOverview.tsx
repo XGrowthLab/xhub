@@ -1,5 +1,5 @@
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
-import { CircleDollarSign, Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
+import { Activity, CircleDollarSign, HeartPulse, Shield, Timer, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells/money_cell";
@@ -17,12 +17,10 @@ import {
   unpricedSummary,
   type UsageUnits,
 } from "@/components/GuardrailsMonitor/usageUnits";
-import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { scrubBrand } from "@/i18n/brand";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import { ScoreChart } from "./ScoreChart";
 
@@ -50,12 +48,13 @@ const EMPTY_METRICS = {
   totalRequests: 0,
   totalBlocked: 0,
   passRate: "0",
-  avgLatency: 0,
+  avgLatency: null as number | null,
   count: 0,
   totalCost: null as number | null,
   untracked: {} as UsageUnits,
 };
 
+/** 显示护栏行的用量汇总和分项提示；参数为真实计数，空数据以占位符呈现。 */
 function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnits"] }) {
   const t = useT();
   const counters = Object.entries(units);
@@ -66,7 +65,7 @@ function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnit
         <ul className="space-y-0.5">
           {counters.map(([counter, n]) => (
             <li key={counter}>
-              {counterLabel(counter)}: {n.toLocaleString()}
+              {counterLabel(counter, t)}: {n.toLocaleString()}
             </li>
           ))}
         </ul>
@@ -76,6 +75,7 @@ function UsageUnitsCell({ units }: { units: GuardrailUsageOverviewRow["usageUnit
   );
 }
 
+/** 解释已计价总额；参数为用量行与汇总金额，展示分项和未计价提示，不改变计费数据。 */
 function TotalCostMath({
   rows,
   total,
@@ -87,7 +87,7 @@ function TotalCostMath({
 }) {
   const t = useT();
   return (
-    <CalcPopover title={t("How this cost is calculated")} formula="guardrail + guardrail + … = guardrail cost">
+    <CalcPopover title={t("How this cost is calculated")} formula={t("pages.guardrailsMonitor.costFormula")}>
       <MathTable
         rows={rows
           .filter((row) => row.cost != null)
@@ -95,21 +95,22 @@ function TotalCostMath({
         total={formatCost(total)}
       />
       <p className="text-xs text-muted-foreground">
-        {t("Each guardrail's cost is its units per counter × that counter's per-unit price from the cost map. Open a guardrail for its per-counter math.")}
+        {t("pages.guardrailsMonitor.costExplanation")}
       </p>
       <UnpricedNote unpriced={untracked} />
     </CalcPopover>
   );
 }
 
+/** 显示护栏行的已计价金额，以及未计价用量的可访问提示；不重新计算账单。 */
 function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
   const t = useT();
-  const unpriced = unpricedSummary(row.untrackedUsageUnits);
+  const unpriced = unpricedSummary(row.untrackedUsageUnits, t);
   return (
     <span className="inline-flex w-full items-center justify-end gap-1">
       {unpriced && (
         <CellTooltip
-          content={`${unpriced}: these units have no known price and are left out of the cost`}
+          content={t("pages.guardrailsMonitor.costExcludedHint")}
           trigger={<TriangleAlert aria-label={unpriced} className="size-3.5 shrink-0 text-warning" />}
         />
       )}
@@ -118,6 +119,7 @@ function CostCell({ row }: { row: GuardrailUsageOverviewRow }) {
   );
 }
 
+/** 展示所选时间窗内的护栏统计和性能表。参数包含会话、日期和详情回调；不修改护栏设置。 */
 export function GuardrailsOverview({
   accessToken = null,
   startDate,
@@ -128,7 +130,6 @@ export function GuardrailsOverview({
   const t = useT();
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
   const {
     data: guardrailsData,
@@ -139,13 +140,15 @@ export function GuardrailsOverview({
   const activeData: GuardrailUsageOverviewRow[] = useMemo(() => guardrailsData?.rows ?? [], [guardrailsData]);
   const metrics = useMemo(() => {
     if (!guardrailsData) return EMPTY_METRICS;
+    // 不把未采集到延迟的护栏算作 0ms，真实的 0ms 仍参与平均。
+    const recordedLatencies = activeData.flatMap(({ avgLatency }) => avgLatency == null ? [] : [avgLatency]);
     return {
       totalRequests: guardrailsData.totalRequests,
       totalBlocked: guardrailsData.totalBlocked,
       passRate: String(guardrailsData.passRate),
-      avgLatency: activeData.length
-        ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length)
-        : 0,
+      avgLatency: recordedLatencies.length
+        ? Math.round(recordedLatencies.reduce((sum, value) => sum + value, 0) / recordedLatencies.length)
+        : null,
       count: activeData.length,
       totalCost: guardrailsData.totalCost,
       untracked: guardrailsData.totalUntrackedUsageUnits,
@@ -163,6 +166,13 @@ export function GuardrailsOverview({
   }, [activeData, sortBy, sortDir]);
   const isLoading = guardrailsLoading;
   const error = guardrailsError;
+  const showMetrics = !isLoading && !error;
+  let latencyColor = "text-muted-foreground";
+  if (metrics.avgLatency != null) {
+    latencyColor = "text-success";
+    if (metrics.avgLatency > 50) latencyColor = "text-warning";
+    if (metrics.avgLatency > 150) latencyColor = "text-destructive";
+  }
 
   const columns: ColumnDef<GuardrailUsageOverviewRow>[] = [
     {
@@ -172,7 +182,8 @@ export function GuardrailsOverview({
       cell: ({ row }) => (
         <span className="inline-flex items-center gap-1.5">
           <span
-            className={`w-2 h-2 rounded-full ${
+              aria-hidden="true"
+              className={`size-2 shrink-0 rounded-full ${
               row.original.status === "healthy"
                 ? "bg-success"
                 : row.original.status === "warning"
@@ -180,7 +191,7 @@ export function GuardrailsOverview({
                   : "bg-destructive"
             }`}
           />
-          <span className="text-xs text-muted-foreground capitalize">{row.original.status}</span>
+          <span className="text-xs text-muted-foreground capitalize">{t(`pages.guardrailsMonitor.status.${row.original.status}`)}</span>
         </span>
       ),
     },
@@ -191,7 +202,7 @@ export function GuardrailsOverview({
       cell: ({ row }) => (
         <button
           type="button"
-          className="text-sm font-medium text-foreground hover:text-indigo-600 text-left"
+          className="rounded-sm text-start text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
           onClick={() => onSelectGuardrail(row.original.id)}
         >
           {row.original.name}
@@ -235,8 +246,8 @@ export function GuardrailsOverview({
           }
         >
           {row.original.failRate}%
-          {row.original.trend === "up" && <span className="ml-1 text-xs text-destructive">↑</span>}
-          {row.original.trend === "down" && <span className="ml-1 text-xs text-success">↓</span>}
+          {row.original.trend === "up" && <span className="ms-1 text-xs text-destructive"><span aria-hidden="true">↑</span><span className="sr-only">{t("pages.guardrailsMonitor.trendUp")}</span></span>}
+          {row.original.trend === "down" && <span className="ms-1 text-xs text-success"><span aria-hidden="true">↓</span><span className="sr-only">{t("pages.guardrailsMonitor.trendDown")}</span></span>}
         </span>
       ),
     },
@@ -289,75 +300,66 @@ export function GuardrailsOverview({
   };
 
   return (
-    <div>
+    <div className="@container min-w-0 space-y-5">
       <PageHeader
         icon={<HeartPulse />}
         title={t("pages.guardrailsMonitor.title")}
         subtitle={t("pages.guardrailsMonitor.subtitle")}
-        utilities={
-          <>
-            {dateRangeControl}
-            <Button variant="outline" title={t("Coming soon")}>
-              <Download className="size-4" />
-              {t("pages.guardrailsMonitor.export")}
-            </Button>
-          </>
-        }
       />
+      {dateRangeControl && <div className="flex w-full min-w-0 justify-end">{dateRangeControl}</div>}
 
-      <div className="mt-6 mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
-        <MetricCard label={t("Total Evaluations")} value={metrics.totalRequests.toLocaleString()} />
-        <MetricCard
-          label={t("Blocked Requests")}
-          value={metrics.totalBlocked.toLocaleString()}
-          valueColor="text-destructive"
-          icon={<TriangleAlert className="size-4 text-destructive" />}
-        />
-        <MetricCard
-          label={t("Pass Rate")}
-          value={`${metrics.passRate}%`}
-          valueColor="text-success"
-          icon={<TrendingUp className="size-4 text-success" />}
-        />
-        <MetricCard
-          label={t("Avg. latency added")}
-          value={`${metrics.avgLatency}ms`}
-          valueColor={
-            metrics.avgLatency > 150 ? "text-destructive" : metrics.avgLatency > 50 ? "text-warning" : "text-success"
-          }
-        />
-        <MetricCard
-          label={t("Guardrail Cost")}
-          value={formatCost(metrics.totalCost)}
-          valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
-          icon={<CircleDollarSign className="size-4" />}
-          subtitle={unpricedSummary(metrics.untracked) ?? undefined}
-          hint={<TotalCostMath rows={activeData} total={metrics.totalCost} untracked={metrics.untracked} />}
-        />
-        <MetricCard label={t("Active Guardrails")} value={metrics.count} />
-      </div>
+      {isLoading && (
+        <div role="status" aria-busy="true" aria-label={t("Loading")} className="flex items-center justify-center rounded-xl border bg-card py-10">
+          <UiLoadingSpinner className="size-5 text-primary" />
+        </div>
+      )}
+      {error && <p role="alert" className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">{t("Failed to load data. Try again.")}</p>}
 
-      <div className="mb-6">
-        <ScoreChart data={chartData} />
-      </div>
+      {showMetrics && (
+        <section aria-label={t("pages.guardrailsMonitor.metrics")} className="grid grid-cols-2 gap-3 @xl:grid-cols-3 @5xl:grid-cols-6">
+          <MetricCard compact label={t("Total Evaluations")} value={metrics.totalRequests.toLocaleString()} icon={<Activity className="size-4" />} />
+          <MetricCard
+            compact
+            label={t("Blocked Requests")}
+            value={metrics.totalBlocked.toLocaleString()}
+            valueColor={metrics.totalBlocked > 0 ? "text-destructive" : undefined}
+            icon={<TriangleAlert className="size-4 text-destructive" />}
+          />
+          <MetricCard
+            compact
+            label={t("Pass Rate")}
+            value={metrics.totalRequests > 0 ? `${metrics.passRate}%` : "—"}
+            icon={<TrendingUp className="size-4 text-success" />}
+          />
+          <MetricCard
+            compact
+            label={t("Avg. latency added")}
+            value={metrics.avgLatency != null ? `${metrics.avgLatency}ms` : "—"}
+            icon={<Timer className="size-4" />}
+            valueColor={latencyColor}
+          />
+          <MetricCard
+            compact
+            label={t("Guardrail Cost")}
+            value={formatCost(metrics.totalCost)}
+            valueColor={metrics.totalCost != null ? "text-foreground" : "text-muted-foreground"}
+            icon={<CircleDollarSign className="size-4" />}
+            subtitle={unpricedSummary(metrics.untracked, t) ?? undefined}
+            hint={<TotalCostMath rows={activeData} total={metrics.totalCost} untracked={metrics.untracked} />}
+          />
+          <MetricCard compact label={t("Active Guardrails")} value={metrics.count} icon={<Shield className="size-4" />} />
+        </section>
+      )}
 
-      <div>
-        {(isLoading || error) && (
-          <div className="mb-2 flex items-center gap-2">
-            {isLoading && (
-              <span role="status" aria-busy="true" aria-label={t("Loading")} className="inline-flex">
-                <UiLoadingSpinner className="size-4 text-primary" />
-              </span>
-            )}
-            {error && <span className="text-sm text-destructive">{t("Failed to load data. Try again.")}</span>}
-          </div>
-        )}
+      {showMetrics && <ScoreChart data={chartData} />}
+
+      <section aria-label={t("Guardrail Performance")} className="min-w-0">
         <DataTable
           columns={columns}
           data={sorted}
           getRowId={(row) => row.id}
           isLoading={isLoading}
-          noDataMessage="No data for this period"
+          noDataMessage={error ? "—" : t("pages.guardrailsMonitor.emptyPerformance")}
           onRowClick={(row) => onSelectGuardrail(row.id)}
           rowClassName={() => "cursor-pointer"}
           sortingMode="server"
@@ -366,33 +368,16 @@ export function GuardrailsOverview({
           enableSortingRemoval={false}
           size="compact"
           toolbar={() => (
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h5 className="mb-0 text-base font-semibold text-foreground">{t("Guardrail Performance")}</h5>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {t("Click a guardrail to view details, logs, and configuration")}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setEvaluationModalOpen(true)}
-                  title={t("Evaluation settings")}
-                >
-                  <Settings className="size-4" />
-                </Button>
-              </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">{t("Guardrail Performance")}</h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {t("pages.guardrailsMonitor.performanceHint")}
+              </p>
             </div>
           )}
         />
-      </div>
+      </section>
 
-      <EvaluationSettingsModal
-        open={evaluationModalOpen}
-        onClose={() => setEvaluationModalOpen(false)}
-        accessToken={accessToken}
-      />
     </div>
   );
 }

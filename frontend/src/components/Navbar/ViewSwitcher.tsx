@@ -1,96 +1,55 @@
-import React, { useSyncExternalStore } from "react";
-import { usePathname } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { Check, ChevronsUpDown, LayoutGrid } from "lucide-react";
 import { usePluginMode } from "@/contexts/PluginModeContext";
-import { uiHref, routeSegmentForPathname } from "@/utils/uiHref";
 import { useT } from "@/i18n";
 
 const GATEWAY = "ai-gateway";
-const CHAT = "chat";
 
-interface ViewSwitcherItem {
-  key: string;
-  label: React.ReactNode;
-  disabled?: boolean;
-  onClick?: () => void;
-}
-
-/** 展示工作区切换入口；无参数，返回订阅当前语言的菜单；导航调用，切换工作区时更新路由。 */
+/** 展示网关名称和已安装的插件工作区；无参数，返回导航标签或菜单。
+ * 控制台顶部调用，插件选择只更新当前工作区。没有插件时显示静态标签。
+ */
 export default function ViewSwitcher() {
   const t = useT();
   const { mode, setMode, plugins } = usePluginMode();
-  const pathname = usePathname();
+  const gatewayLabel = t("header.viewGateway");
 
-  // A /ui rewrite may expose a different pathname during server rendering.
-  // Keep the first client label identical to the server, then read the route.
-  const hydrated = useSyncExternalStore(() => () => {}, () => true, () => false);
-  const isChatRoute = hydrated && routeSegmentForPathname(pathname ?? "") === CHAT;
+  if (plugins.length === 0) {
+    return (
+      <span className="flex h-10 items-center gap-2 px-2 text-base font-medium text-foreground">
+        <LayoutGrid aria-hidden className="size-4 flex-none text-primary" />
+        {gatewayLabel}
+      </span>
+    );
+  }
 
-  const activeLabel = isChatRoute ? t("header.viewChat") : plugins.find((p) => p.name === mode)?.display_name ?? t("header.viewGateway");
-
-  const modeEntries = [
-    { key: GATEWAY, label: t("header.viewGateway") },
-    ...plugins.map((p) => ({ key: p.name, label: p.display_name })),
-  ];
-
-  const selectMode = (key: string) => {
-    setMode(key);
-    // The chat route lives outside the dashboard SPA shell that reacts to `mode`,
-    // so switching modes from there needs a real navigation, not just state.
-    if (isChatRoute) {
-      window.location.assign(uiHref(""));
-    }
-  };
-
-  const chatItem: ViewSwitcherItem = {
-    key: CHAT,
-    label: (
-      <div className="flex items-center justify-between gap-6 py-0.5">
-        <span className="font-medium">{t("header.viewChat")}</span>
-        {isChatRoute && <Check className="size-4 text-info" />}
-      </div>
-    ),
-    onClick: () => window.location.assign(uiHref(CHAT)),
-  };
-
-  const items: ViewSwitcherItem[] = [
-    ...modeEntries.map((e) => ({
-      key: e.key,
-      label: (
-        <div className="flex items-center justify-between gap-6 py-0.5">
-          <span className="font-medium">{e.label}</span>
-          {!isChatRoute && e.key === mode && <Check className="size-4 text-info" />}
-        </div>
-      ),
-      onClick: () => selectMode(e.key),
-    })),
-    chatItem,
+  const activeLabel = plugins.find((plugin) => plugin.name === mode)?.display_name ?? gatewayLabel;
+  const items = [
+    { key: GATEWAY, label: gatewayLabel },
+    ...plugins.map((plugin) => ({ key: plugin.name, label: plugin.display_name })),
   ];
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={
-          <button
-            type="button"
-            className="flex h-10 max-w-[240px] items-center gap-2 rounded-sm px-2 text-base font-medium text-foreground transition-colors hover:bg-accent"
-          />
-        }
+        render={<Button variant="ghost" className="h-10 max-w-[240px] rounded-sm px-2 text-base font-medium" />}
       >
-        <LayoutGrid className="size-4 flex-none text-primary" />
+        <LayoutGrid aria-hidden className="size-4 flex-none text-primary" />
         <span className="truncate">{activeLabel}</span>
-        <ChevronsUpDown className="size-4 flex-none text-muted-foreground" />
+        <ChevronsUpDown aria-hidden className="size-4 flex-none text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-auto">
         {items.map((item) => (
-          <DropdownMenuItem key={item.key} disabled={item.disabled} onClick={item.onClick}>
-            {item.label}
+          <DropdownMenuItem key={item.key} onClick={() => setMode(item.key)}>
+            <div className="flex w-full items-center justify-between gap-6 py-0.5">
+              <span className="font-medium">{item.label}</span>
+              {item.key === mode && <Check aria-hidden className="size-4 text-info" />}
+            </div>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

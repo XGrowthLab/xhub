@@ -3,6 +3,14 @@ import React from "react";
 import { MetricCard } from "./MetricCard";
 
 describe("MetricCard", () => {
+  /** 前置窄版指标配置，验证辅助图标隐藏且数值与操作仍可访问；测试库负责卸载。 */
+  it("keeps the compact metric named and the icon decorative", () => {
+    const icon = <span data-testid="compact-metric-icon">icon</span>;
+    renderWithProviders(<MetricCard compact label="Metric" value="—" icon={icon} />);
+    const card = screen.getByRole("group", { name: "Metric" });
+    expect(card).toHaveTextContent("—");
+    expect(screen.getByTestId("compact-metric-icon").closest('[aria-hidden="true"]')).not.toBeNull();
+  });
   it("should render", () => {
     renderWithProviders(<MetricCard label="Total Requests" value={1234} />);
     expect(screen.getByText("Total Requests")).toBeInTheDocument();

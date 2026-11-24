@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/components/networking";
-import { t } from "@/i18n";
+import { I18nProvider, t } from "@/i18n";
 import { PriceModelDialog } from "./PriceModelDialog";
 import { priceCatalogRows, type PriceCatalogRow, type PriceProviderRow } from "./priceCatalogRows";
 
@@ -31,6 +31,19 @@ describe("PriceModelDialog classification selects", () => {
         { id: "ark_contents_generation", label: "Ark Video" },
       ],
     });
+  });
+
+  /** 真实翻译组件渲染测试，验证中英文均提示按次价；保存使用桩，卸载时不留持久数据。 */
+  it.each([
+    ["zh-CN", "按单位计价", "按张、按秒或按次计费。"],
+    ["en", "Per-unit rates", "Per image, per second, or per request."],
+  ] as const)("explains every supported non-token unit in %s", (locale, group, hint) => {
+    render(
+      <I18nProvider initialLocale={locale}>
+        <PriceModelDialog open onOpenChange={vi.fn()} editing={null} providers={providers} onSave={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(within(screen.getByRole("group", { name: group })).getByText(hint, { exact: true })).toBeVisible();
   });
 
   /** 前置正常目录与新建表单；验证三个下拉、目录值及保存正文；全局卸载清理，不访问真实后台。 */

@@ -194,3 +194,104 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 		h.ok("POST", "/model/delete", admin, map[string]any{"id": id})
 	}
 }
+
+// TestMarketSearchPriceUnits 以真实价格预览、部署确认、推理和日志接口核对搜索计价。
+// 本地供应商同时上报搜索次数和时长。历史与市场费率均精确按次收费，测试框架回收专用 schema 和服务器。
+func TestMarketSearchPriceUnits(t *testing.T) {
+	h := newHarness(t)
+	admin := h.adminSession()
+	const model = "regression-market-search-units"
+	tenant := h.provision(t, admin, "market-search-units")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":true,"data":[{"id":"regression-market-search-units","issuer":{"name":"OpenAI"},"pricing_rules_v2":[{"details_v2":{"input":{"unit_name":"token","unit_size":1000000,"unit_price_usd":0},"output":{"unit_name":"token","unit_size":1000000,"unit_price_usd":0},"web_search_req":{"unit_name":"time","unit_size":1,"unit_price_usd":0.02}}}]}]}`))
+	}))
+	defer upstream.Close()
+	t.Setenv("XHUB_PRICE_FEED_URL", upstream.URL)
+	h.ok("POST", "/reload/model_cost_map", admin, nil)
+	created := h.ok("POST", "/model/new", admin, map[string]any{
+		"model_name": model,
+		"litellm_params": map[string]any{
+			"model": "openai/" + model, "api_base": h.credentialAPIBase(), "api_key": "sk-test",
+			"rates": []catalog.Rate{
+				{Measure: "token", UnitSize: 1, Side: "input", Variant: "uncached", Window: "all", SourceKey: "input", USD: .000001},
+				{Measure: "token", UnitSize: 1, Side: "output", Window: "all", SourceKey: "output", USD: .000003},
+				{Measure: "second", UnitSize: 1, Side: "output", Variant: "search", Window: "all", SourceKey: "web_search_req", USD: .01},
+			},
+		},
+		"model_info": map[string]any{"transport": "bypass_openai_chat", "endpoint_types": []string{"chat"}, "pricing_source": "manual", "base_model": model},
+	})
+	id := created.json()["model_info"].(map[string]any)["id"].(string)
+	t.Cleanup(func() { h.ok("POST", "/model/delete", admin, map[string]any{"id": id}) })
+	h.usageOverride(model, map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "searches": 2, "seconds": 8})
+	// 对每次调用同时校验同步扣费头和已入账明细；参数是预期总价，返回调用 ID 用于验证历史账单。
+	assertCall := func(want float64) string {
+		t.Helper()
+		result := h.ok("POST", "/v1/chat/completions", tenant.key, chatRequest(model, "Verify search billing."))
+		callID := result.header("x-litellm-call-id")
+		bill := breakdownOf(t, h, admin, callID)
+		if got := parseFloatOrZero(result.header("x-litellm-response-cost")); !nearlyEqual(got, want) {
+			t.Fatalf("搜索按次费用错误：得到 %v，预期 %v，账单 %v", got, want, bill)
+		}
+		searchCount := 0.0
+		for _, item := range listField(bill, "applied") {
+			switch item["measure"] {
+			case "query":
+				if item["fallback"] == true {
+					t.Fatalf("已配置的搜索费率被记为兜底：%v", item)
+				}
+				searchCount += numberOrZero(item["quantity"])
+			case "second":
+				t.Fatalf("搜索报价错误扣取时长费用：%v", item)
+			}
+		}
+		if searchCount != 2 || !nearlyEqual(numberOrZero(bill["total_cost"]), want) {
+			t.Fatalf("落盘账单的搜索单位、次数或扣费错误：%v", bill)
+		}
+		return callID
+	}
+	first := assertCall(.020004)
+	// 普通授权会话使用的模型详情也要展示同一计费单位和实际单价。
+	var publicSearch map[string]any
+	cards := listField(h.ok("GET", "/model/available", tenant.session, nil).json(), "data")
+	for _, card := range cards {
+		if card["id"] == model {
+			for _, price := range listField(card, "rates") {
+				if price["variant"] == "search" {
+					publicSearch = price
+				}
+			}
+		}
+	}
+	if publicSearch["measure"] != "query" || numberOrZero(publicSearch["usd"]) != .01 || publicSearch["source_key"] != nil {
+		t.Fatalf("授权模型的搜索单位、金额或公开字段错误：%v", publicSearch)
+	}
+	rows := listField(h.ok("GET", "/price/deployments", admin, nil).json(), "deployments")
+	for _, row := range rows {
+		if row["id"] != id {
+			continue
+		}
+		current := listField(row, "current")
+		proposed := listField(row, "proposed")
+		currentSearch := false
+		for _, rate := range current {
+			currentSearch = currentSearch || rate["measure"] == "query" && rate["variant"] == "search"
+		}
+		if !currentSearch {
+			t.Fatalf("价格接口的历史搜索展示未按次数统一：%v", current)
+		}
+		found := false
+		for _, rate := range proposed {
+			found = found || rate["measure"] == "query" && rate["variant"] == "search"
+		}
+		if !found || row["changed"] != true {
+			t.Fatalf("市场报价没有提供按次搜索价：%v", row)
+		}
+		h.ok("POST", "/price/deployments/apply", admin, map[string]any{"items": []map[string]any{{"id": id, "version": row["version"]}}})
+		assertCall(.04)
+		if bill := breakdownOf(t, h, admin, first); !nearlyEqual(numberOrZero(bill["total_cost"]), .020004) {
+			t.Fatalf("调价覆盖了历史账单：%v", bill)
+		}
+		return
+	}
+	t.Fatalf("价格预览缺少部署 %s", id)
+}

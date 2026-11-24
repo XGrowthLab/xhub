@@ -117,10 +117,9 @@ export function registerStage4Combined(locale: Locale) {
       await expect(page.getByPlaceholder(tr("Search logs by ID…"), { exact: true })).toBeVisible();
       await page.getByPlaceholder(tr("Search logs by ID…"), { exact: true }).fill(callID);
       await expect(page.getByRole("row").filter({ hasText: callID })).toBeVisible();
-      // 旧页面不再读取假统计，双语说明链接进入真实用量页。
+      // 旧书签直接转到正式用量，仍能读取上一笔真实请求。
       await stableGoto(page, "/old-usage");
-      await expect(page.getByRole("status")).toHaveText(tr("legacyUsage.unavailable"));
-      await page.getByRole("link", { name: tr("legacyUsage.openUsage"), exact: true }).click();
+      await expect(page).toHaveURL(/\/ui\/usage\/?$/);
       await expect(page.getByTestId("daily-spend-settled")).toBeVisible();
     } finally {
       if (modelID)

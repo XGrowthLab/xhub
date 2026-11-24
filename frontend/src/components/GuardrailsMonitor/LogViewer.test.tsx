@@ -78,6 +78,23 @@ describe("GuardrailsMonitor LogViewer drawer", () => {
     expect(screen.getByText("敏感词拦截")).toBeInTheDocument();
   });
 
+  /** 前置一条通过和一条拦截日志，验证筛选与样本量的可访问选中状态；测试库清理 DOM，无外部调用。 */
+  it("announces the active filter and sample size", async () => {
+    const blocked = { ...guardrailLog, id: "blocked-log", action: "blocked" as const, reason: "Keyword matched" };
+    renderWithProviders(<LogViewer logs={[guardrailLog, blocked]} />);
+    const all = screen.getByRole("button", { name: "All", exact: true });
+    const blockedFilter = screen.getByRole("button", { name: "Blocked", exact: true });
+    expect(all).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(blockedFilter);
+    expect(all).toHaveAttribute("aria-pressed", "false");
+    expect(blockedFilter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Keyword matched")).toBeVisible();
+    expect(screen.queryByText(guardrailLog.reason)).not.toBeInTheDocument();
+    const sample = screen.getByRole("button", { name: "50", exact: true });
+    await userEvent.click(sample);
+    expect(sample).toHaveAttribute("aria-pressed", "true");
+  });
+
   /** 用途：验证点击日志时按日志请求 ID 精确选择请求详情；前置为存在相似 call ID 的两行，结果选中精确 request ID，React Query 缓存由 beforeEach 清理。 */
   it("opens the row whose request_id is the clicked log id even when a newer row carries that id as its call id", async () => {
     vi.mocked(uiSpendLogsCall).mockResolvedValue({

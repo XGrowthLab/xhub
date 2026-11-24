@@ -174,6 +174,7 @@ describe("ChatUI", () => {
         <ChatUI accessToken="test" token="test" userRole="user" userID="test" disabledPersonalKeyCreation={false} />,
       );
       await selectComboboxOption(translate("en", "Select a Model"), "NativeModel");
+      await userEvent.click(screen.getByRole("button", { name: translate("en", "protocolProbe.bypass"), exact: true }));
       await selectComboboxOption("Select an endpoint", "/bypass/openai/v1/responses");
       expect(screen.queryByText("Guardrails")).not.toBeInTheDocument();
       const input = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");

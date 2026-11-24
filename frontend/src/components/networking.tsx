@@ -47,6 +47,7 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { PriceCatalogDocument } from "@/app/(dashboard)/models-and-endpoints/components/priceCatalogRows";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import {
+  ApiError,
   createApiClient,
   deriveErrorMessage,
   isQuietAccessDenial,
@@ -7298,14 +7299,14 @@ export const getMCPOAuthUserCredentialStatus = async (
   return response.json();
 };
 
-export const listMCPUserCredentials = async (accessToken: string): Promise<MCPUserCredentialListItem[]> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/user-credentials` : `/v1/mcp/user-credentials`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) return [];
-  return response.json();
+/** 查询登录用户的 MCP 凭据；accessToken 为会话凭据，返回真实列表，接口下线或未实现时返回 null，其他失败交给凭据页处理。 */
+export const listMCPUserCredentials = async (accessToken: string): Promise<MCPUserCredentialListItem[] | null> => {
+  try {
+    return await apiClient.get<MCPUserCredentialListItem[]>("/v1/mcp/user-credentials", { accessToken });
+  } catch (error) {
+    if (error instanceof ApiError && [404, 410, 501].includes(error.status)) return null;
+    throw error;
+  }
 };
 
 // ============================================================

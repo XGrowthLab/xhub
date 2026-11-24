@@ -31,6 +31,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       expect(rejected.status, rejected.raw).toBe(400);
       expect(rejected.raw).toContain("web_search");
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
+      await page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true }).click();
       await expect(page.getByLabel(tr("providerGuideUI.searchSupport"))).toHaveValue("inherit");
       await expect(page.getByLabel(tr("providerGuideUI.searchFallback"))).toHaveValue("reject");
       await page.getByLabel(tr("providerGuideUI.searchSupport")).selectOption("unsupported");
@@ -47,6 +48,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       expect((await saving).status()).toBe(200);
       await page.reload();
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
+      await page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true }).click();
       await expect(page.getByLabel(tr("providerGuideUI.searchSupport"))).toHaveValue("unsupported");
       await expect(page.getByLabel(tr("providerGuideUI.searchFallback"))).toHaveValue("drop_optional");
       await page.getByRole("button", { name: tr("providerGuideUI.cancel"), exact: true }).click();

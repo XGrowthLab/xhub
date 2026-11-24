@@ -19,10 +19,6 @@ vi.mock("@/components/GuardrailsMonitor/LogViewer", () => ({
   LogViewer: ({ guardrailName }: { guardrailName: string }) => <div data-testid="log-viewer">{guardrailName}</div>,
 }));
 
-vi.mock("./EvaluationSettingsModal", () => ({
-  EvaluationSettingsModal: ({ open }: { open: boolean }) => (open ? <div data-testid="evaluation-modal" /> : null),
-}));
-
 const detail: GuardrailUsageDetail = {
   guardrail_id: "pii-detector",
   guardrail_name: "pii-detector",
@@ -152,14 +148,11 @@ describe("GuardrailDetail", () => {
     expect(screen.getByTestId("log-viewer")).toHaveTextContent("pii-detector");
   });
 
-  it("should keep the evaluation settings modal closed until its button is clicked", async () => {
-    const user = userEvent.setup();
+  /** 前置详情已加载，确认日志入口保留且没有未接执行器的评估按钮；组件自动卸载。 */
+  it("keeps logs accessible without an inactive evaluation action", async () => {
     renderDetail();
-    await screen.findByRole("heading", { name: "pii-detector" });
-    expect(screen.queryByTestId("evaluation-modal")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTitle("Evaluation settings"));
-    expect(screen.getByTestId("evaluation-modal")).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Logs" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Evaluation settings" })).not.toBeInTheDocument();
   });
 
   it("should not request anything without an access token", () => {

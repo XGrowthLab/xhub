@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Settings, Shield, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Shield, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageLogs } from "@/components/networking";
 import { useGuardrailsUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { GuardrailUsageBreakdown } from "./GuardrailUsageBreakdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
@@ -29,10 +28,10 @@ const STATUS_TONE: Record<string, StatusTone> = {
   critical: "error",
 };
 
+/** 展示护栏的统计、用量和日志；参数为护栏标识、会话、日期和返回回调，按访问权限读取原始数据。 */
 export function GuardrailDetail({ guardrailId, onBack, accessToken = null, startDate, endDate }: GuardrailDetailProps) {
   const t = useT();
   const [activeTab, setActiveTab] = useState("overview");
-  const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
   const [logsPage] = useState(1);
   const logsPageSize = 50;
 
@@ -129,35 +128,27 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
   );
 
   return (
-    <div>
+    <div className="@container min-w-0">
       <div className="mb-6">
         <Button variant="link" onClick={onBack} className="mb-4 pl-0">
           <ArrowLeft className="size-4" />
           {t("Back to Overview")}
         </Button>
 
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="mb-1 flex items-center gap-3">
-              <Shield className="size-5 text-muted-foreground" />
-              <h1 className="text-xl font-semibold text-foreground">{data.name}</h1>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Shield className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <h1 className="min-w-0 break-words text-xl font-semibold text-foreground">{data.name}</h1>
               <StatusBadge
                 tone={STATUS_TONE[data.status] ?? "success"}
-                label={data.status.charAt(0).toUpperCase() + data.status.slice(1)}
+                label={t(`pages.guardrailsMonitor.status.${data.status}`)}
               />
             </div>
-            <p className="ml-8 text-sm text-muted-foreground">{data.description}</p>
+            {data.description && <p className="text-sm text-muted-foreground">{data.description}</p>}
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline">{data.provider}</Badge>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setEvaluationModalOpen(true)}
-              title={t("Evaluation settings")}
-            >
-              <Settings className="size-4" />
-            </Button>
           </div>
         </div>
       </div>
@@ -173,9 +164,10 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-6">
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-            <MetricCard label={t("Requests Evaluated")} value={data.requestsEvaluated.toLocaleString()} />
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+            <MetricCard compact label={t("Requests Evaluated")} value={data.requestsEvaluated.toLocaleString()} />
             <MetricCard
+              compact
               label={t("Fail Rate")}
               value={`${data.failRate}%`}
               valueColor={data.failRate > 15 ? "text-destructive" : data.failRate > 5 ? "text-warning" : "text-success"}
@@ -183,6 +175,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
               icon={data.failRate > 15 ? <TriangleAlert className="size-4 text-destructive" /> : undefined}
             />
             <MetricCard
+              compact
               label={t("Avg. latency added")}
               value={data.avgLatency != null ? `${Math.round(data.avgLatency)}ms` : "—"}
               valueColor={
@@ -208,12 +201,6 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
         </TabsContent>
       </Tabs>
 
-      <EvaluationSettingsModal
-        open={evaluationModalOpen}
-        onClose={() => setEvaluationModalOpen(false)}
-        guardrailName={data.name}
-        accessToken={accessToken}
-      />
     </div>
   );
 }

@@ -14,6 +14,10 @@ describe("console detail translations", () => {
     ["Narrow down your budgets", "筛选预算"],
     ["Narrow down your teams", "筛选团队"],
     ["Narrows every target above to requests for these models", "以上目标仅统计这些模型的请求"],
+    ["Create New Project", "创建项目"],
+    ["Key Name", "密钥名称"],
+    ["No reset", "不重置"],
+    ["Search by key name…", "搜索密钥名称…"],
   ])("translates %s", (key, expected) => {
     expect(translate("zh-CN", key)).toBe(expected);
     expect(translate("en", key)).toBe(key);

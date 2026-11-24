@@ -41,14 +41,3 @@ test("all dashboard pages stay in the shell", async ({ page }) => {
     await guard.assertOk();
   });
 }
-/** 用途：注册独立场景「chat shell is not admin sidebar」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
-export function registerSC097() {
-
-
-test("chat shell is not admin sidebar", async ({ page }) => {
-    await loginAdmin(page);
-    await stableGoto(page, "/chat");
-    await expect(page).toHaveURL(/\/chat/, { timeout: 15_000 });
-    await expect(page.locator("[data-slot=sidebar-group-label]", { hasText: t("nav.groups.mine") })).toHaveCount(0);
-  });
-}

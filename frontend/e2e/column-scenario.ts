@@ -36,11 +36,7 @@ export function registerColumnScenario(route: string, verb: string, prerequisite
   await loginAdmin(page);
   const name = "e2e-column-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
   try {
-   if (route === "/tag-management") {
-    await stableGoto(page, route);
-    await expect(page.getByText("当前权限模型不支持标签管理。请通过组织、团队和项目管理访问范围。")).toBeVisible();
-    await expect(page.getByRole("button", {name:"创建",exact:true})).toHaveCount(0);
-   } else await writeColumn(page, route, name, prerequisite ? ["创建", verb] : [verb]);
+   await writeColumn(page, route, name, prerequisite ? ["创建", verb] : [verb]);
    await guard.assertOk();
   } finally {
    if ((route === "/search-tools" || route === "/prompts") && verb !== "删除") {

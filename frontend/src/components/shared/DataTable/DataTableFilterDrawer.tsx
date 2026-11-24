@@ -20,6 +20,8 @@ interface DataTableFilterDrawerProps<TData> {
   title?: string;
   description?: React.ReactNode;
   applyLabel?: string;
+  /** 开启时窄屏占满视口，桌面保留侧栏宽度。 */
+  fullWidthOnMobile?: boolean;
   resetLabel?: string;
   /** Runs instead of the default "clear this table's column filters" when the reset button is pressed. */
   onReset?: () => void;
@@ -44,7 +46,7 @@ function toFilters(draft: Record<string, unknown>): ColumnFiltersState {
 }
 
 /** 筛选抽屉：接收表格、开关状态、可选文案及草稿渲染器，返回筛选界面。
- * 表格调用方通过应用提交草稿、重置清除筛选；默认按钮文案跟随当前语言更新，自定义文案原样保留。 */
+ * 表格调用方通过应用提交草稿、重置清除筛选；默认按钮文案跟随当前语言更新；宽表单可显式采用移动端满宽布局。 */
 export function DataTableFilterDrawer<TData>({
   table,
   open,
@@ -52,6 +54,7 @@ export function DataTableFilterDrawer<TData>({
   title = t("Filters"),
   description,
   applyLabel,
+  fullWidthOnMobile = false,
   resetLabel,
   onReset,
   children,
@@ -88,15 +91,18 @@ export function DataTableFilterDrawer<TData>({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right">
-        <SheetHeader>
+      <SheetContent
+        side="right"
+        className={fullWidthOnMobile ? "data-[side=right]:w-full data-[side=right]:sm:max-w-md" : undefined}
+      >
+        <SheetHeader className="shrink-0 pr-14">
           <SheetTitle>{title}</SheetTitle>
           {description !== undefined && <SheetDescription>{description}</SheetDescription>}
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4" data-testid="filter-drawer-body">
           {children(helpers)}
         </div>
-        <SheetFooter className="flex-row">
+        <SheetFooter className="shrink-0 flex-row">
           <Button variant="outline" className="flex-1" onClick={reset} data-testid="filter-drawer-reset">
             {resetLabel ?? t("Reset")}
           </Button>

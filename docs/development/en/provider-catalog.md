@@ -137,7 +137,7 @@ Rebuild and start the gateway → add the provider in the UI → create a deploy
 | Specialized credential form | `internal/provider/registry/suppliers.go` + `internal/catalog/credential_providers.go` |
 | Specialized model defaults | `RegisterModel` in `internal/provider/registry/models.go` |
 | Usage and pricing | `internal/provider/measurement` + `internal/catalog` |
-| Parameter editing and results | `frontend/src/components/chat`; maintain en/zh text |
+| Parameter editing and results | `frontend/src/app/(dashboard)/playground/components/chat_ui`; maintain en/zh text |
 
 ### Asynchronous protocols: existing task example
 

@@ -24,7 +24,6 @@ const TEST_TS_FILES_THAT_RENDER_REACT: readonly string[] = [
   "src/**/cost-tracking/_components/**/use_*.test.ts",
   "src/**/models-and-endpoints/detailNavigation.test.ts",
   "src/**/models-and-endpoints/vertexCredentialsUpload.test.ts",
-  "src/components/chat/useChatHistory.test.ts",
   "src/lib/forms/pickDirty.test.ts",
 ];
 

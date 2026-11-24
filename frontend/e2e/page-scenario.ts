@@ -38,7 +38,6 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       if (path === "/user/daily/activity") observed.usage = await res.json().catch(() => undefined);
       if (path === "/spend/logs/ui") observed.logs = await res.json().catch(() => undefined);
       if (path === "/guardrails/usage/overview") observed.guardrails = await res.json().catch(() => undefined);
-      if (path === "/user/daily/activity/aggregated") observed.chatUsage = await res.json().catch(() => undefined);
     }
     if (!/\/user\/daily\/activity|\/guardrails\/usage\/overview|\/key\/list/.test(url)) return;
     if (res.status() >= 400) failedReads.push(`${res.status()} ${res.request().method()} ${url}`);
@@ -80,9 +79,6 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
         await expect(settled.getByText(t("No data"))).toHaveCount(0);
       }
     }
-    if (item.route === "/old-usage") {
-      await expect(page.getByTestId("old-usage-body")).toContainText(t("legacyUsage.unavailable"), { timeout: 15_000 });
-    }
     if (item.route === "/logs") {
       const logsResponse = await page.request.get(GATEWAY + "/spend/logs/ui?page=1&page_size=1", { headers: authHeaders });
       expect(logsResponse.status(), await logsResponse.text()).toBe(200);
@@ -98,34 +94,23 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       observed.guardrails = await guardrailsResponse.json();
       await expect.poll(() => observed.guardrails !== undefined, { timeout: 15_000 }).toBe(true);
       const rows = observed.guardrails?.rows ?? [];
-      if (rows.length === 0) await expect(page.getByText("No data for this period").first()).toBeVisible({ timeout: 15_000 });
+      if (rows.length === 0) await expect(page.getByText(t("pages.guardrailsMonitor.emptyPerformance")).first()).toBeVisible({ timeout: 15_000 });
       else await expect(page.getByRole("table")).toBeVisible({ timeout: 15_000 });
       await expect(page.getByText(t("Failed to load data. Try again."))).toHaveCount(0);
+      await expect(page.getByText("评估次数", { exact: true })).toBeVisible();
+      await expect(page.getByText("通过率", { exact: true })).toBeVisible();
+      await expect(page.getByText("请求处理结果趋势", { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await expect(page.getByText("Total Evaluations", { exact: true })).toBeVisible();
+      await expect(page.getByText("Request Outcomes Over Time", { exact: true })).toBeVisible();
     }
-    if (item.route === "/chat/api-keys") {
-      await expect(
-        page
-          .getByText(t("No keys found"))
-          .or(page.getByRole("cell", { name: /^\$/ }))
-          .first(),
-      ).toBeVisible({ timeout: 15_000 });
-    }
-    if (item.route === "/chat/logs") {
-      await expect(
-        page.getByText(t("No logs for this period")).or(page.getByRole("table")).first(),
-      ).toBeVisible({ timeout: 15_000 });
-    }
-    if (item.route === "/chat/usage") {
-      const chatUsageResponse = await page.request.get(GATEWAY + "/user/daily/activity/aggregated", { headers: authHeaders });
-      expect(chatUsageResponse.status(), await chatUsageResponse.text()).toBe(200);
-      observed.chatUsage = await chatUsageResponse.json();
-      await expect.poll(() => observed.chatUsage !== undefined, { timeout: 15_000 }).toBe(true);
-      const requests = Number(observed.chatUsage?.metadata?.total_api_requests ?? 0);
-      if (requests === 0) await expect(page.getByText(t("No usage data for this period"))).toBeVisible({ timeout: 15_000 });
-      else {
-        await expect(page.getByText(t("API Requests"), { exact: true })).toBeVisible({ timeout: 15_000 });
-        await expect(page.getByText(t("No usage data for this period"))).toHaveCount(0);
-      }
+    if (item.route === "/admin-panel") {
+      await expect(page.getByRole("group", { name: t("enterprise.identitySection") }).getByRole("tab", { name: "SCIM" })).toBeVisible();
+      const logs = page.getByRole("group", { name: t("enterprise.storageSection") }).getByRole("tab", { name: t("enterprise.tabs.logs") });
+      await logs.click();
+      await expect(logs).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("link", { name: t("pages.adminPanel.openUsers") }).click();
+      await expect(page).toHaveURL(/\/ui\/users\/?$/);
     }
     requirePageSuccess(response?.status(), businessPath, page.url());
   expect(errors, errors.join("\n")).toEqual([]);

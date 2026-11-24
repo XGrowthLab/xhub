@@ -128,6 +128,27 @@ describe("ModelEditor", () => {
     mocks.patch.mockImplementation(async (_token, payload) => payload);
   });
 
+  /** 新建表单从空状态开始；核对双语提示、上游填写前后的计价可用性及协议设置显隐，自动卸载且不提交数据。 */
+  it.each(["en", "zh-CN"] as const)("explains when pricing becomes available in %s", async (locale) => {
+    setActiveLocale(locale);
+    const user = userEvent.setup();
+    renderEditor();
+    const prices = screen.getByLabelText(t("providerGuideUI.priceSource"));
+    const upstream = screen.getByRole("combobox", { name: t("providerGuideUI.upstreamLabel") });
+    expect(screen.getByText(t("providerGuideUI.pricingRequiresModel"))).toBeVisible();
+    expect(prices).toBeDisabled();
+    expect(upstream).toBeDisabled();
+    expect(screen.queryByText(t("providerGuideUI.advancedProtocol"))).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(t("providerGuideUI.providerLabel")), "relay-a");
+    expect(upstream).toBeEnabled();
+    expect(prices).toBeDisabled();
+    await user.type(upstream, "provider/model:version");
+    expect(prices).toBeEnabled();
+    expect(screen.getByText(t("providerGuideUI.pricingIntro"))).toBeVisible();
+    expect(screen.queryByText(t("providerGuideUI.advancedProtocol"))).not.toBeInTheDocument();
+    expect(upstream).toHaveValue("provider/model:version");
+  });
+
   /** 前置真实编辑器及隔离目录；验证自动公开名合法、随上游联动、保留人工名称；测试库自动卸载，无数据写入。 */
   it("suggests safe aliases for path model IDs and preserves custom names", async () => {
     const user = userEvent.setup();
@@ -328,6 +349,8 @@ it.each(["zh-CN", "en"] as const)("%s saves explicit web search capability and f
   mocks.patch.mockImplementation(async (_token, payload) => payload);
   const user = userEvent.setup();
   renderEditor({model:{model_name:"my-original-model",litellm_params:{model:"upstream-original",custom_llm_provider:"openai",litellm_credential_name:"relay-a",input_cost_per_token:0.000001},model_info:{id:"search-test",transport:"bypass_openai_chat",endpoint_types:["responses"],pricing_source:"manual"}}});
+  expect(screen.getByText(t("providerGuideUI.searchDropHelp"))).not.toBeVisible();
+  await user.click(screen.getByText(t("providerGuideUI.advancedProtocol")));
   await user.selectOptions(screen.getByLabelText(t("providerGuideUI.searchSupport")), "unsupported");
   await user.selectOptions(screen.getByLabelText(t("providerGuideUI.searchFallback")), "drop_optional");
   expect(screen.getByText(t("providerGuideUI.searchDropHelp"))).toBeVisible();
@@ -348,6 +371,7 @@ it.each(["zh-CN", "en"] as const)("%s persists explicit adaptive Messages reason
   const model: EditorModel = { model_name: "original-public", litellm_params: { model: "original-upstream", custom_llm_provider: "anthropic", litellm_credential_name: "relay-a", input_cost_per_token: 0.000001 }, model_info: { id: "reasoning-test", transport: "bypass_anthropic_messages", endpoint_types: ["responses", "messages"], pricing_source: "manual", messages_reasoning_mode: "adaptive" } };
   const user = userEvent.setup();
   renderEditor({ model });
+  await user.click(screen.getByText(t("providerGuideUI.advancedProtocol")));
   const selector = screen.getByLabelText(t("providerGuideUI.messagesReasoningMode"));
   expect(selector).toHaveValue("adaptive");
   expect(screen.getByText(t("providerGuideUI.messagesReasoningHistory"))).toBeVisible();
@@ -361,12 +385,13 @@ it.each(["zh-CN", "en"] as const)("%s persists explicit adaptive Messages reason
   setActiveLocale("zh-CN");
 });
 
-/** 前置非Messages连接；验证自适应选项不可选且缺省不启用，避免未确认协议误配置；自动卸载，无外部数据。 */
-it("does not offer adaptive reasoning for a non-Messages connection", () => {
+/** 前置非 Messages 的 Chat 连接；展开高级设置后确认没有推理且原生搜索不可选，自动卸载、无外部数据。 */
+it("shows only applicable protocol settings for a Chat connection", async () => {
   setActiveLocale("en");
   renderEditor({ model: { model_name: "public", litellm_params: { model: "upstream", custom_llm_provider: "openai", litellm_credential_name: "relay-a" }, model_info: { transport: "bypass_openai_chat", endpoint_types: ["responses"] } } });
-  expect(screen.getByLabelText(t("providerGuideUI.messagesReasoningMode"))).toHaveValue("disabled");
-  expect(screen.getByRole("option", { name: t("providerGuideUI.messagesReasoningAdaptive") })).toBeDisabled();
+  await userEvent.click(screen.getByText(t("providerGuideUI.advancedProtocol")));
+  expect(screen.queryByLabelText(t("providerGuideUI.messagesReasoningMode"))).not.toBeInTheDocument();
+  expect(screen.getByRole("option", { name: t("providerGuideUI.searchSupported") })).toBeDisabled();
   setActiveLocale("zh-CN");
 });
 

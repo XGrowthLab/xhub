@@ -45,6 +45,7 @@ export function registerMessagesSignedHistoryScenario(locale: "zh-CN" | "en") {
       modelID = (await created.json()).model_info.id;
       await stableGoto(page, "/models-and-endpoints?model=" + encodeURIComponent(modelID));
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
+      await page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true }).click();
       const mode = page.getByLabel(tr("providerGuideUI.messagesReasoningMode"));
       await expect(mode).toHaveValue("disabled");
       await mode.selectOption("adaptive");
@@ -64,6 +65,7 @@ export function registerMessagesSignedHistoryScenario(locale: "zh-CN" | "en") {
       expect(updated.status(), await updated.text()).toBe(200);
       expect(updated.request().postDataJSON().model_info.messages_reasoning_mode).toBe("adaptive");
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();
+      await page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true }).click();
       await expect(page.getByLabel(tr("providerGuideUI.messagesReasoningMode"))).toHaveValue("adaptive");
       await stableGoto(page, "/api-keys");
       await page.getByTestId("create-key-button").click();

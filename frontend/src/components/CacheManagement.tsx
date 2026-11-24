@@ -2,6 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { apiClient } from "@/components/networking";
+import { RefreshCw, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 
@@ -21,7 +33,12 @@ export function CacheManagement({ accessToken }: { accessToken: string | null })
     async function load() {
       if (!accessToken) return;
       try {
-        const data = await apiClient.get<{ enabled: boolean; cache_type: string; scope: string; configurable: boolean }>("/cache/settings", { accessToken });
+        const data = await apiClient.get<{
+          enabled: boolean;
+          cache_type: string;
+          scope: string;
+          configurable: boolean;
+        }>("/cache/settings", { accessToken });
         const processMemory = data.cache_type === "memory" && data.scope === "process";
         const ready = processMemory && data.enabled === true && data.configurable === false;
         if (!cancelled) setStatus({ token: accessToken, ready });
@@ -30,17 +47,24 @@ export function CacheManagement({ accessToken }: { accessToken: string | null })
       }
     }
     void load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [accessToken, generation]);
 
   /** 清理当前进程响应缓存；点击调用，无参数；只有原成功契约确认后显示成功，不改预算和用量。 */
   async function flush() {
-    if (!accessToken || busy) return;
+    if (!accessToken || status?.token !== accessToken || !status.ready || busy) return;
     setBusy(true);
     setResult("");
     try {
       const data = await apiClient.post<{ status: string; message: string }>("/flushall", { accessToken, body: {} });
-      setResult(data.status === "ok" && data.message === "cache flushed" ? "flushed" : "flushFailed");
+      if (data.status === "ok" && data.message === "cache flushed") {
+        setResult("flushed");
+        setGeneration((value) => value + 1);
+      } else {
+        setResult("flushFailed");
+      }
     } catch {
       setResult("flushFailed");
     } finally {
@@ -58,15 +82,46 @@ export function CacheManagement({ accessToken }: { accessToken: string | null })
   const current = status?.token === accessToken ? status : null;
   let stateKey = "loading";
   if (current) stateKey = current.ready ? "ready" : "loadFailed";
-  return <section className="space-y-4 p-6">
-    <h1 className="text-2xl font-semibold">{t("cacheAdmin.title")}</h1>
-    <p>{t("cacheAdmin.scope")}</p>
-    <p>{t("cacheAdmin.unsupported")}</p>
-    <p role={current && !current.ready ? "alert" : "status"}>{t(`cacheAdmin.${stateKey}`)}</p>
-    <div className="flex gap-2">
-      <Button onClick={refresh} disabled={busy}>{t("cacheAdmin.refresh")}</Button>
-      <Button onClick={() => void flush()} disabled={!current?.ready || busy}>{t(`cacheAdmin.${busy ? "flushing" : "flush"}`)}</Button>
-    </div>
-    {result && <p role={result === "flushFailed" ? "alert" : "status"} data-testid="cache-result">{t(`cacheAdmin.${result}`)}</p>}
-  </section>;
+  return (
+    <section className="space-y-4 p-6">
+      <h1 className="text-2xl font-semibold">{t("cacheAdmin.title")}</h1>
+      <p>{t("cacheAdmin.scope")}</p>
+      <p>{t("cacheAdmin.unsupported")}</p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="space-y-3 rounded-lg border p-4">
+          <h2 className="font-semibold">{t("cacheAdmin.statusTitle")}</h2>
+          <p role={current && !current.ready ? "alert" : "status"}>{t(`cacheAdmin.${stateKey}`)}</p>
+          <Button variant="outline" onClick={refresh} disabled={busy}>
+            <RefreshCw aria-hidden="true" /> {t("cacheAdmin.refresh")}
+          </Button>
+        </section>
+        <section className="space-y-3 rounded-lg border border-destructive/25 p-4">
+          <h2 className="font-semibold">{t("cacheAdmin.flushSection")}</h2>
+          <p className="text-sm text-muted-foreground">{t("cacheAdmin.flushScope")}</p>
+          <AlertDialog>
+            <AlertDialogTrigger render={<Button variant="destructive" />} disabled={!current?.ready || busy}>
+              <Trash2 aria-hidden="true" /> {t(`cacheAdmin.${busy ? "flushing" : "flush"}`)}
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("cacheAdmin.flushTitle")}</AlertDialogTitle>
+                <AlertDialogDescription>{t("cacheAdmin.flushScope")}</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("cacheAdmin.cancel")}</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" onClick={() => void flush()}>
+                  {t("cacheAdmin.flushConfirm")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          {result && (
+            <p role={result === "flushFailed" ? "alert" : "status"} data-testid="cache-result">
+              {t(`cacheAdmin.${result}`)}
+            </p>
+          )}
+        </section>
+      </div>
+    </section>
+  );
 }

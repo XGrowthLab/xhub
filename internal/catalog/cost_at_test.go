@@ -559,6 +559,38 @@ func TestASearchPriceIsBilledAsAQuery(t *testing.T) {
 	}
 }
 
+// TestConfiguredSearchRateIsExact 验证明示搜索单价精确按次结算，且不会将记录标为兜底。
+// 用现代、旧格式及同时配置的内存费率测试金额、来源和秒数隔离，无外部资源需清理。
+func TestConfiguredSearchRateIsExact(t *testing.T) {
+	modern := Rate{Measure: "query", Variant: "search", Side: "output", Window: "all", UnitSize: 1, SourceKey: "search_context_cost_per_query", USD: .02}
+	legacy := Rate{Measure: "second", Variant: "search", Side: "output", Window: "all", UnitSize: 1, SourceKey: "web_search_req", USD: .01}
+	flat := Rate{Measure: "query", Side: "output", Window: "all", UnitSize: 1, SourceKey: "flat-query", USD: .03}
+	other := Rate{Measure: "query", Variant: "custom", Side: "output", Window: "all", UnitSize: 1, SourceKey: "custom", USD: .001}
+	for _, tc := range []struct {
+		name  string
+		rates []Rate
+		want  Rate
+	}{
+		{"modern", []Rate{modern}, modern},
+		{"legacy", []Rate{legacy}, legacy},
+		{"modern with unrelated variant", []Rate{other, modern}, modern},
+		{"legacy with modern spelling", []Rate{modern, legacy}, legacy},
+		{"unqualified rate with modern spelling", []Rate{modern, flat}, flat},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			charge, ok := CostFromRates(tc.rates, Usage{Searches: 3, Seconds: 8}, peakInstant())
+			if !ok || len(charge.Applied) != 1 {
+				t.Fatalf("搜索应只计一次按次费用：%+v", charge)
+			}
+			item := charge.Applied[0]
+			if item.Measure != "query" || item.Fallback || item.SourceKey != tc.want.SourceKey {
+				t.Fatalf("搜索费率应精确匹配 %q：%+v", tc.want.SourceKey, item)
+			}
+			assertClose(t, "three searches", charge.Total, 3*tc.want.USD)
+		})
+	}
+}
+
 // TestAQueryWithoutAPriceIsNotBillable 证明按次计费只在模型真的报了按次价时发生。
 // 参数 t（*testing.T）：当前测试。
 // 返回：无。
@@ -974,5 +1006,34 @@ func assertClose(t *testing.T, label string, got, want float64) {
 	}
 	if diff > limit {
 		t.Fatalf("%s = %v, want %v", label, got, want)
+	}
+}
+
+// TestWebSearchQueryClassification 验证历史搜索、当前搜索语义与真实时长的分类。
+// 输入均为内存费率，检查金额与来源保留；不修改原费率或全局目录。
+func TestWebSearchQueryClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, measure, variant, source string
+		search                         bool
+	}{
+		{"legacy", "second", "search", "web_search_req", true},
+		{"canonical", "query", "search", "web_search_req", true},
+		{"flat", "query", "", "search_context_cost_per_query", true},
+		{"tier", "query", "", "web_search_req_peak", true},
+		{"duration", "second", "", "output_cost_per_second", false},
+		{"other query", "query", "", "other_tool", false},
+		{"tokens", "token", "search", "web_search_req", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := Rate{Measure: tc.measure, Variant: tc.variant, SourceKey: tc.source, Side: "output", Window: "all", UnitSize: 1, USD: .02}
+			got, isSearch := original.WebSearchQuery()
+			want := original
+			if tc.search {
+				want.Measure = "query"
+			}
+			if isSearch != tc.search || got != want {
+				t.Fatalf("搜索分类或费率值错误：得到 %+v/%v，预期 %+v/%v", got, isSearch, want, tc.search)
+			}
+		})
 	}
 }

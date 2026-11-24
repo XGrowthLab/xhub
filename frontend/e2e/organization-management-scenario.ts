@@ -5,7 +5,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, MASTER, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册组织管理闭环；locale 为语言，无返回值。前置真实后台、隔离库与本地上游。
- * 验证周期创建/刷新/修改/取消、组合搜索、管理员口径及角色只读、到期准入恢复；finally 删除模型/Key/用户/团队/组织，运行器删 schema。 */
+ * 验证双语周期标签、项目创建、周期刷新/修改/取消、组合搜索、角色只读和到期准入；finally 删除测试资源，运行器删 schema。 */
 export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
  test("organization budgets filters and roles " + locale, async ({page},info) => {
   test.setTimeout(150000);
@@ -17,7 +17,7 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
   const settings = page.getByRole("tabpanel", {name: tr("Settings"), exact:true});
   const headers={Authorization:"Bearer "+await sessionBearer(page)};
   const name="budget-"+locale+"-"+Date.now(),email=name+"@example.test";
-  let orgID="",teamID="",userID="",keyID="",modelID="";
+  let orgID="",teamID="",projectID="",userID="",keyID="",modelID="";
   /** 调用本测试的真实管理接口；path/body 为请求，返回成功 JSON；资源仅属于当前场景并在 finally 清理。 */
   const create=async(path:string,body:unknown)=>{const r=await page.request.post(GATEWAY+path,{headers,data:body});expect(r.status(),path+": "+await r.text()).toBe(200);return r.json()};
   try {
@@ -36,6 +36,7 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    const dialog=page.getByRole("dialog");
    await dialog.getByLabel(tr("Organization Name"),{exact:true}).fill(name);
    await dialog.getByLabel(tr("Max Budget (USD)"),{exact:true}).fill("10");
+   await expect(dialog.getByRole("combobox", {name:tr("Reset Budget"),exact:true})).toContainText(tr("No reset"));
    await dialog.getByRole("combobox",{name:tr("Reset Budget"),exact:true}).click();
    await page.getByRole("option",{name:tr("organizationBudget.every30d"),exact:true}).click();
    const created=page.waitForResponse(r=>r.url().endsWith("/organization/new")&&r.request().method()==="POST");
@@ -62,6 +63,21 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    await page.reload();await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
    await expect(settings.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every7d")),{exact:true})).toBeVisible();
    teamID=(await create("/team/new",{organization_id:orgID,team_alias:name})).team_id;
+   // 双语名称通过实际项目弹窗验证，并读回网关持久化结果；项目必须先于依赖的团队清理。
+   await stableGoto(page, "/projects");
+   await page.getByRole("button", { name: tr("pages.projects.create"), exact: true }).click();
+   await expect(dialog.getByRole("heading", { name: tr("Create New Project"), exact: true })).toBeVisible();
+   await dialog.getByLabel(tr("Project Name"), { exact: true }).fill("项目 " + name);
+   await dialog.getByRole("combobox", { name: tr("Team"), exact: true }).click();
+   await page.getByRole("option").filter({ hasText: teamID }).click();
+   const creatingProject = page.waitForResponse(r => r.url().endsWith("/project/new") && r.request().method() === "POST");
+   await dialog.getByRole("button", { name: tr("Create Project"), exact: true }).click();
+   const project = await creatingProject;
+   expect(project.status(), await project.text()).toBe(200);
+   projectID = (await project.json()).project_id;
+   const projectDetails = await page.request.get(GATEWAY + "/project/info?project_id=" + projectID, { headers });
+   expect(projectDetails.status(), await projectDetails.text()).toBe(200);
+   expect((await projectDetails.json()).project).toMatchObject({ project_alias: "项目 " + name, team_id: teamID });
    userID=(await create("/user/new",{user_email:email,password:"organization-test-password",team_id:teamID})).user_id;
    await create("/organization/member_add",{organization_id:orgID,member:{user_email:email,role:"org_admin"}});
    const credential=await create("/key/generate",{user_id:userID,key_alias:name});keyID=credential.token_id;
@@ -111,6 +127,7 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    test.setTimeout(test.info().timeout+30000);
    if(keyID)expect((await page.request.post(GATEWAY+"/key/delete",{headers,data:{keys:[keyID]}})).status()).toBe(200);
    if(userID)expect((await page.request.post(GATEWAY+"/user/delete",{headers,data:{user_id:userID}})).status()).toBe(200);
+   if(projectID)expect((await page.request.post(GATEWAY+"/project/delete",{headers,data:{project_id:projectID}})).status()).toBe(200);
    if(teamID)expect((await page.request.post(GATEWAY+"/team/delete",{headers,data:{team_id:teamID}})).status()).toBe(200);
    if(orgID)expect((await page.request.delete(GATEWAY+"/organization/delete",{headers,data:{organization_id:orgID}})).status()).toBe(200);
    if(modelID)expect((await page.request.post(GATEWAY+"/model/delete",{headers,data:{id:modelID}})).status()).toBe(200);

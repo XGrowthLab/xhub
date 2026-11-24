@@ -38,6 +38,17 @@ type Rate struct {
 	Fallback bool `json:"fallback,omitempty"`
 }
 
+// WebSearchQuery 返回已明确识别的搜索费率和识别状态，供目录计费、软预算和价格预览共用。
+// 旧费率将搜索标为 second/search，仅返回副本将它按 query 解释；普通时长和无关查询不算搜索。
+func (r Rate) WebSearchQuery() (Rate, bool) {
+	if r.Measure == "second" && r.Variant == searchVariant {
+		r.Measure = "query"
+		return r, true
+	}
+	return r, r.Measure == "query" && (r.Variant == searchVariant ||
+		r.SourceKey == "search_context_cost_per_query" || strings.HasPrefix(r.SourceKey, "web_search_req"))
+}
+
 // rateSpec is the static classification of a known feed key.
 type rateSpec struct {
 	side    string

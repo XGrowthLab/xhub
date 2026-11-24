@@ -33,7 +33,10 @@ for (const locale of ["en", "zh-CN"] as const) test("enterprise identity lifecyc
       "csv-identity-" + locale + "@example.invalid,user,csv-identity-password," + connectionID + ",csv-employee-" + locale;
     await expect(dialog.getByLabel(tr("userCsv.upload"))).toBeEnabled();
     await dialog.getByLabel(tr("userCsv.upload")).setInputFiles({ name: "identities.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-    await expect(dialog.getByText("csv-employee-" + locale, { exact: false })).toBeVisible();
+    const preview = dialog.getByRole("region", { name: tr("userCsv.preview") });
+    await expect(preview.getByText("csv-employee-" + locale, { exact: true })).toBeVisible();
+    await expect(preview.getByText("Manual identity " + locale, { exact: true })).toBeVisible();
+    await expect(preview.getByText(connectionID, { exact: true })).toBeVisible();
     const imported = page.waitForResponse(r => r.url().endsWith("/user/new") && r.request().method() === "POST");
     await dialog.getByRole("button", { name: translate(locale, "userCsv.create", { count: 1 }), exact: true }).click();
     const importedResponse = await imported;

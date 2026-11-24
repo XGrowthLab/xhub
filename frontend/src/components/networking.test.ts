@@ -985,3 +985,37 @@ describe("optional UI settings response lifecycle", () => {
     expect(await Networking.getUISettings("session")).toBeNull();
   });
 });
+
+describe("listMCPUserCredentials", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 前置个人凭据读取接口成功；验证保留服务字段和令牌，清理时恢复 fetch。 */
+  it("returns the credential list as received", async () => {
+    const credential = { server_id: "oauth-srv", credential_type: "oauth", has_credential: true };
+    const fetcher = vi.fn().mockResolvedValue(Response.json([credential]));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(Networking.listMCPUserCredentials("fixture-token")).resolves.toEqual([credential]);
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/mcp/user-credentials"),
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer fixture-token" }),
+      }),
+    );
+  });
+
+  /** 前置网关明确未开放能力；返回 null，客户端可区别空列表；无外部数据。 */
+  it.each([404, 410, 501])("recognizes %d as an unavailable credential endpoint", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
+    await expect(Networking.listMCPUserCredentials("fixture-token")).resolves.toBeNull();
+  });
+
+  /** 前置禁止访问或暂时读取失败；失败状态交给页面重试，无远程副作用。 */
+  it.each([403, 503])("preserves HTTP %d when loading credentials fails", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status })));
+    await expect(Networking.listMCPUserCredentials("fixture-token")).rejects.toMatchObject({ status });
+  });
+});

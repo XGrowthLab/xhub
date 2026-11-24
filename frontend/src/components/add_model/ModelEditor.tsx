@@ -38,6 +38,13 @@ import ModelAutocomplete from "./ModelAutocomplete";
 import { toast } from "@/lib/toast";
 
 const selectClass = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm";
+const dialogueTransports = new Set([
+  "bypass_openai_chat",
+  "bypass_openai_responses",
+  "bypass_anthropic_messages",
+  "gemini_generate_content",
+  "vertex_generate_content",
+]);
 /** ModelEditor 管理供应商连接引用、上游模型、公开端点与独立价格绑定。
  * 参数 model：编辑的部署；initialSupplier/initialCatalogId：新建预选项；onSaved/onCancel：完成回调。
  * 返回：模型配置表单；连接凭据由供应商统一管理，表单不复制密钥。
@@ -84,6 +91,18 @@ export default function ModelEditor({
   const rows = catalogRows(catalog?.models);
   const row = rows[String(values.pricing_model ?? "")];
   const provider = String(values.custom_llm_provider ?? "");
+  const hasModel = Boolean(values.supplier && String(values.model ?? "").trim());
+  const transport = String(values.transport ?? "");
+  const dialogue = hasModel && dialogueTransports.has(transport);
+  const canManageProbe = isProxyAdminRole(userRole ?? "") && !isViewOnly;
+  // 非对话部署不展示无关选项。已有显式设置时仍能调整，防止协议切换后旧配置不可见也无法修正。
+  const reasoningMode = String(values.messages_reasoning_mode ?? "disabled");
+  const searchSupport = String(values.web_search_support ?? "inherit");
+  const searchFallback = String(values.web_search_fallback ?? "reject");
+  const showReasoning = hasModel && (transport === "bypass_anthropic_messages" || reasoningMode !== "disabled");
+  const showSearch = dialogue || (hasModel && (
+    searchSupport !== "inherit" || searchFallback !== "reject"
+  ));
   const discovery = useQuery({
     queryKey: ["providerModelList", values.supplier],
     enabled: !!accessToken && !!supplier,
@@ -382,15 +401,6 @@ export default function ModelEditor({
                 </div>
                 {textField("model_name", t("providerGuideUI.publicName"), t("providerGuideUI.publicPlaceholder"))}
                 <p className="text-xs leading-relaxed text-muted-foreground">{t("providerGuideUI.publicHelp")}</p>
-                {/* 探测范围由已选对话执行器决定；旧部署可能只有透传声明或尚未补全入口列表。 */}
-                {isProxyAdminRole(userRole ?? "") && !isViewOnly && ["bypass_openai_chat", "bypass_openai_responses", "bypass_anthropic_messages", "gemini_generate_content", "vertex_generate_content"].includes(String(values.transport)) && (
-                  <ProtocolProbePanel
-                    id={model?.model_info?.id as string | undefined}
-                    token={accessToken}
-                    automatic={values.auto_probe === true}
-                    onChange={value => set("auto_probe", value)}
-                  />
-                )}
                 <EndpointTypeField
                   key={String(values.supplier)}
                   selectedProvider={String(values.custom_llm_provider || "")}
@@ -401,34 +411,52 @@ export default function ModelEditor({
                   }
                   modelCostMap={rows}
                 />
-                <section aria-label={t("providerGuideUI.messagesReasoningTitle")} className="space-y-3 rounded-lg border p-4">
-                  <h4 className="font-medium">{t("providerGuideUI.messagesReasoningTitle")}</h4>
-                  <Label htmlFor="editor-messages-reasoning">{t("providerGuideUI.messagesReasoningMode")}</Label>
-                  <select id="editor-messages-reasoning" className={selectClass}
-                    value={String(values.messages_reasoning_mode ?? "disabled")}
-                    onChange={event => set("messages_reasoning_mode", event.target.value)}>
-                    <option value="disabled">{t("providerGuideUI.messagesReasoningDisabled")}</option>
-                    <option value="adaptive" disabled={values.transport !== "bypass_anthropic_messages"}>{t("providerGuideUI.messagesReasoningAdaptive")}</option>
-                  </select>
-                  <p className="text-xs text-muted-foreground">{t("providerGuideUI.messagesReasoningHelp")}</p>
-                  <p className="text-xs text-muted-foreground">{t("providerGuideUI.messagesReasoningHistory")}</p>
-                </section>
-                <section aria-label={t("providerGuideUI.searchTitle")} className="space-y-3 rounded-lg border p-4">
-                  <h4 className="font-medium">{t("providerGuideUI.searchTitle")}</h4>
-                  <p className="text-xs text-muted-foreground">{t("providerGuideUI.searchHelp")}</p>
-                  <Label htmlFor="editor-search-support">{t("providerGuideUI.searchSupport")}</Label>
-                  <select id="editor-search-support" className={selectClass} value={String(values.web_search_support ?? "inherit")} onChange={event => set("web_search_support", event.target.value)}>
-                    <option value="inherit">{t("providerGuideUI.searchInherit")}</option>
-                    <option value="supported">{t("providerGuideUI.searchSupported")}</option>
-                    <option value="unsupported">{t("providerGuideUI.searchUnsupported")}</option>
-                  </select>
-                  <Label htmlFor="editor-search-fallback">{t("providerGuideUI.searchFallback")}</Label>
-                  <select id="editor-search-fallback" className={selectClass} value={String(values.web_search_fallback ?? "reject")} onChange={event => set("web_search_fallback", event.target.value)}>
-                    <option value="reject">{t("providerGuideUI.searchReject")}</option>
-                    <option value="drop_optional">{t("providerGuideUI.searchDrop")}</option>
-                  </select>
-                  <p className="text-xs text-muted-foreground">{t("providerGuideUI.searchDropHelp")}</p>
-                </section>
+                {/* 探测范围由已选对话执行器决定；旧部署可能只有透传声明或尚未补全入口列表。 */}
+                {dialogue && canManageProbe && (
+                  <ProtocolProbePanel
+                    id={model?.model_info?.id as string | undefined}
+                    token={accessToken}
+                    automatic={values.auto_probe === true}
+                    onChange={value => set("auto_probe", value)}
+                  />
+                )}
+                {(showReasoning || showSearch) && (
+                  <details className="rounded-lg border p-4">
+                    <summary className="cursor-pointer font-medium">{t("providerGuideUI.advancedProtocol")}</summary>
+                    {showReasoning && (
+                      <section aria-label={t("providerGuideUI.messagesReasoningTitle")} className="mt-4 space-y-3 border-t pt-4">
+                        <h4 className="font-medium">{t("providerGuideUI.messagesReasoningTitle")}</h4>
+                        <Label htmlFor="editor-messages-reasoning">{t("providerGuideUI.messagesReasoningMode")}</Label>
+                        <select id="editor-messages-reasoning" className={selectClass}
+                          value={reasoningMode}
+                          onChange={event => set("messages_reasoning_mode", event.target.value)}>
+                          <option value="disabled">{t("providerGuideUI.messagesReasoningDisabled")}</option>
+                          <option value="adaptive" disabled={transport !== "bypass_anthropic_messages"}>{t("providerGuideUI.messagesReasoningAdaptive")}</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">{t("providerGuideUI.messagesReasoningHelp")}</p>
+                        <p className="text-xs text-muted-foreground">{t("providerGuideUI.messagesReasoningHistory")}</p>
+                      </section>
+                    )}
+                    {showSearch && (
+                      <section aria-label={t("providerGuideUI.searchTitle")} className="mt-4 space-y-3 border-t pt-4">
+                        <h4 className="font-medium">{t("providerGuideUI.searchTitle")}</h4>
+                        <p className="text-xs text-muted-foreground">{t("providerGuideUI.searchHelp")}</p>
+                        <Label htmlFor="editor-search-support">{t("providerGuideUI.searchSupport")}</Label>
+                        <select id="editor-search-support" className={selectClass} value={searchSupport} onChange={event => set("web_search_support", event.target.value)}>
+                          <option value="inherit">{t("providerGuideUI.searchInherit")}</option>
+                          <option value="supported" disabled={transport !== "bypass_openai_responses"}>{t("providerGuideUI.searchSupported")}</option>
+                          <option value="unsupported">{t("providerGuideUI.searchUnsupported")}</option>
+                        </select>
+                        <Label htmlFor="editor-search-fallback">{t("providerGuideUI.searchFallback")}</Label>
+                        <select id="editor-search-fallback" className={selectClass} value={searchFallback} onChange={event => set("web_search_fallback", event.target.value)}>
+                          <option value="reject">{t("providerGuideUI.searchReject")}</option>
+                          <option value="drop_optional">{t("providerGuideUI.searchDrop")}</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">{t("providerGuideUI.searchDropHelp")}</p>
+                      </section>
+                    )}
+                  </details>
+                )}
                 <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
                   <div>
                     <Label htmlFor="editor-enabled">{t("providerGuideUI.enable")}</Label>
@@ -443,12 +471,12 @@ export default function ModelEditor({
               </fieldset>
             </div>
             <fieldset
-              disabled={!values.supplier || !values.model || saving}
+              disabled={!hasModel || saving}
               className="space-y-5 rounded-xl border bg-card p-5 sm:p-6"
             >
               <div>
                 <h3 className="font-semibold">{t("providerGuideUI.pricingStep")}</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{t("providerGuideUI.pricingIntro")}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{t(hasModel ? "providerGuideUI.pricingIntro" : "providerGuideUI.pricingRequiresModel")}</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="editor-pricing-source">{t("providerGuideUI.priceSource")}</Label>
