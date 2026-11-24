@@ -1,5 +1,6 @@
 """更新清单和事务状态的确定性测试。Docker 实际替换由浏览器回归另行验证。"""
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
@@ -121,24 +122,45 @@ class UpdateTests(unittest.TestCase):
             source.latest()
 
     def test_running_main_image_can_check_but_cannot_apply(self):
-        """模拟主分支镜像无发布版本的实例，检查后拒绝切换，临时状态由用例清理。"""
+        """核对两份运行镜像的 main 提交，允许查询且拒绝切换；混用构建时不展示单一提交。"""
         labels = {
             "org.opencontainers.image.version": "main",
             "org.opencontainers.image.revision": self.base["revision"],
             "io.xhub.database-compatibility": self.base["database_compatibility"],
         }
-        with patch.object(self.compose, "current", side_effect=lambda: Compose.release_labels(labels)):
-            self.agent = Agent(self.root, self.compose, self.releases)
+        ids = {"gateway": "1" * 12, "console": "2" * 12}
+        images = {identifier: {"Config": {"Labels": dict(labels)}} for identifier in ids.values()}
+        compose = Compose(self.root / "compose.yml", self.root / "override.json", "test", NAMESPACE, ())
+        with patch.object(compose, "compose", side_effect=lambda *args: ids[args[-1]]), \
+                patch.object(compose, "run", side_effect=lambda _, image: json.dumps([{
+                    "State": {"Running": True}, "Image": image, "Config": {"Image": "test:main"},
+                }])), patch.object(compose, "image", side_effect=images.__getitem__), patch.object(compose, "switch") as switch:
+            self.agent = Agent(self.root, compose, self.releases)
+            expected = {"revision": self.base["revision"], "main": True}
+            self.assertEqual(self.agent.status()["current_build"], expected)
             status = self.check()
             self.assertIsNone(status["current"])
+            self.assertEqual(status["current_build"], expected)
             self.assertEqual(status["candidate"]["version"], self.next["version"])
             self.assertFalse(status["candidate"]["compatible"])
             code, _ = self.agent.submit("apply", {"actor": "admin", "version": self.next["version"],
                                                   "revision": self.next["revision"]})
             self.assertEqual(code, 409)
-            self.assertEqual(self.compose.switched, [])
+            switch.assert_not_called()
+            images[ids["console"]]["Config"]["Labels"]["org.opencontainers.image.revision"] = "a" * 40
+            self.assertIsNone(self.check()["current_build"])
         with self.assertRaises(UntrackedRelease):
             Compose.release_labels({})
+
+    def test_build_identity_ignores_missing_or_untrusted_labels(self):
+        """空标签、畸形提交或未知标签不伪装成发布；合法本地构建只返回受限的标识。"""
+        key = "org.opencontainers.image.revision"
+        labels = {"gateway": {}, "console": None}
+        self.assertIsNone(Compose.build_identity(labels))
+        labels = {"gateway": {key: "invalid"}, "console": {key: "invalid"}}
+        self.assertIsNone(Compose.build_identity(labels))
+        self.assertEqual(Compose.build_identity({"gateway": {key: "a" * 40}, "console": {key: "a" * 40}}),
+                         {"revision": "a" * 40, "main": False})
 
     def test_health_targets_stay_on_local_network(self):
         """验证回环与私网地址可用，同时拒绝 DNS、公共 IP、非法端口和重定向参数，无外部请求。"""

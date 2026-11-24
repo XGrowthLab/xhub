@@ -16,6 +16,7 @@ export interface VersionUpdateStatus {
   channel?: UpdateChannel;
   channel_switch_enabled?: boolean;
   current?: string;
+  current_build?: { revision: string; main?: boolean };
   previous?: string;
   candidate?: { version: string; revision: string; prerelease: boolean; compatible: boolean; notes: string };
   error?: UpdateFailure;

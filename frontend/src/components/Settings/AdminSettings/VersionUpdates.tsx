@@ -14,16 +14,23 @@ const failures = new Set(["interrupted", "rolled_back", "recovery_required", "ch
 
 type Confirmation = { action: "apply"; version: string; revision: string } | { action: "rollback"; version: string };
 
-/** 展示候选版本、兼容性和纯文本发布说明。由状态面板在已检查到新版本时渲染，只读。 */
-function ReleasePreview({ candidate }: { candidate: NonNullable<VersionUpdateStatus["candidate"]> }) {
+/** 展示当前渠道的发布信息。存在发布基线时才显示数据库兼容判断，发布说明只按纯文本渲染。 */
+function ReleasePreview({ candidate, hasBaseline }: {
+  candidate: NonNullable<VersionUpdateStatus["candidate"]>;
+  hasBaseline: boolean;
+}) {
   const t = useT();
   return (
     <section aria-label={t("versionUpdates.target")} className="space-y-2 rounded-lg border p-4">
       <h4 className="flex flex-wrap items-center gap-2 font-medium">
-        {t("versionUpdates.available", { version: candidate.version })}
+        {t(hasBaseline ? "versionUpdates.available" : "versionUpdates.latestRelease", { version: candidate.version })}
         {candidate.prerelease && <span className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-900">{t("versionUpdates.prerelease")}</span>}
       </h4>
-      {!candidate.compatible && <p className="text-sm text-muted-foreground">{t("versionUpdates.incompatible")}</p>}
+      {(!hasBaseline || !candidate.compatible) && (
+        <p id="version-update-block-reason" className="text-sm text-muted-foreground">
+          {t(hasBaseline ? "versionUpdates.incompatible" : "versionUpdates.bootstrap")}
+        </p>
+      )}
       {candidate.notes && (
         <details>
           <summary className="cursor-pointer text-sm">{t("versionUpdates.notes")}</summary>
@@ -44,22 +51,25 @@ function UpdateDetails({ status, active, busy, onCheck, onChannel, onConfirm }: 
   onConfirm: (target: Confirmation) => void;
 }) {
   const t = useT();
-  const { candidate, current, previous, stage, error } = status;
+  const { candidate, current, current_build: build, previous, stage, error } = status;
+  const currentLabel = current ?? (build
+    ? t(build.main ? "versionUpdates.mainBuild" : "versionUpdates.commitBuild", { revision: build.revision.slice(0, 7) })
+    : t("versionUpdates.unknown"));
   const blocked = busy || status.recovery_required;
   const checkedCurrent = status.checked && !candidate && stage === "idle";
   return (
     <>
       <dl className="grid gap-3 rounded-lg border bg-muted/20 p-4 sm:grid-cols-3">
-        <div><dt className="text-sm text-muted-foreground">{t("versionUpdates.current")}</dt><dd className="font-medium">{current ?? t("versionUpdates.unknown")}</dd></div>
+        <div><dt className="text-sm text-muted-foreground">{t("versionUpdates.current")}</dt><dd className="font-medium" title={build?.revision}>{currentLabel}</dd></div>
         <div><dt className="text-sm text-muted-foreground">{t("versionUpdates.channel")}</dt><dd className="font-medium">{t(status.channel === "beta" ? "versionUpdates.beta" : "versionUpdates.stable")}</dd></div>
         <div><dt className="text-sm text-muted-foreground">{t("versionUpdates.previous")}</dt><dd className="font-medium">{previous ?? t("versionUpdates.none")}</dd></div>
       </dl>
-      {!current && <p role="status">{t("versionUpdates.bootstrap")}</p>}
+      {!current && !candidate && <p id="version-update-block-reason" role="status">{t("versionUpdates.bootstrap")}</p>}
       {active && <p role="status" className="font-medium">{t("versionUpdates.stage." + stage)}</p>}
       {stage === "succeeded" && <p role="status" className="flex items-center gap-2"><CircleCheck aria-hidden className="size-4" />{t("versionUpdates.success", { version: current ?? "" })}</p>}
       {error && <p role="alert" className="text-sm text-destructive">{t(failures.has(error) ? "versionUpdates.errors." + error : "versionUpdates.unavailable")}</p>}
       {Boolean(checkedCurrent) && <p role="status">{t("versionUpdates.currentRelease")}</p>}
-      {candidate && <ReleasePreview candidate={candidate} />}
+      {candidate && <ReleasePreview candidate={candidate} hasBaseline={Boolean(current)} />}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" disabled={blocked} onClick={onCheck}>
           {t("versionUpdates.check")}
@@ -68,11 +78,12 @@ function UpdateDetails({ status, active, busy, onCheck, onChannel, onConfirm }: 
           onClick={() => onChannel(status.channel === "beta" ? "stable" : "beta")}>
           {t(status.channel === "beta" ? "versionUpdates.switchToStable" : "versionUpdates.switchToBeta")}
         </Button>}
-        {candidate && <Button type="button" disabled={blocked || !candidate.compatible}
+        {candidate && <Button type="button" disabled={blocked || !current || !candidate.compatible}
+          aria-describedby={!current || !candidate.compatible ? "version-update-block-reason" : undefined}
           onClick={() => onConfirm({ action: "apply", version: candidate.version, revision: candidate.revision })}>
           <ArrowDownToLine aria-hidden className="size-4" />{t("versionUpdates.apply")}
         </Button>}
-        {previous && <Button type="button" variant="outline" disabled={blocked}
+        {previous && <Button type="button" variant="outline" disabled={blocked || !current}
           onClick={() => onConfirm({ action: "rollback", version: previous })}>
           <RotateCcw aria-hidden className="size-4" />{t("versionUpdates.rollback")}
         </Button>}

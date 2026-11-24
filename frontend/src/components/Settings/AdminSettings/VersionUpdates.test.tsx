@@ -79,8 +79,28 @@ it("renders a blocked candidate without an actionable update", async () => {
   render(<I18nProvider initialLocale="en"><VersionUpdates /></I18nProvider>);
   expect(await screen.findByText(/The database compatibility identifiers differ/)).toBeVisible();
   expect(screen.getByRole("button", { name: "Update now" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Update now" })).toHaveAccessibleDescription(/The database compatibility identifiers differ/);
   await user.click(screen.getByText("View release notes"));
   expect(screen.getByText(blocked.candidate.notes)).toBeVisible();
+});
+
+/** 有运行构建且缺发布基线时，两种语言展示最新发布和真实限制，结束后卸载并停止轮询。 */
+it.each([
+  ["zh-CN", "渠道最新发布 v0.1.0-beta.2", "立即更新", /当前部署缺少可回退的发布版本/, /数据库兼容标识不同/],
+  ["en", "Latest channel release v0.1.0-beta.2", "Update now", /needs a release to roll back to/, /database compatibility identifiers differ/],
+] as const)("shows the main commit and correct blocking reason in %s", async (locale, heading, update, reason, wrongReason) => {
+  const revision = "e107582706b4fd37f299c48a7af0da593b2c2bfb";
+  vi.mocked(versionUpdateStatus).mockResolvedValue({
+    ...installed, current: undefined, current_build: { main: true, revision },
+    candidate: { ...target, compatible: false },
+  });
+  render(<I18nProvider initialLocale={locale}><VersionUpdates /></I18nProvider>);
+  expect(await screen.findByText("main · e107582")).toHaveAttribute("title", revision);
+  expect(screen.getByRole("heading", { name: new RegExp(heading) })).toBeVisible();
+  const button = screen.getByRole("button", { name: update });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAccessibleDescription(reason);
+  expect(screen.queryByText(wrongReason)).not.toBeInTheDocument();
 });
 
 /** 读取有未恢复事务的状态时展示故障及版本，阻止检查、更新和回退。卸载后停止轮询。 */
