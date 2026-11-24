@@ -166,6 +166,14 @@ def continuation_usage(req: dict) -> dict:
             "provider_statistics": {"turn": turn, "cache_source": "local-fixture"}}
 
 
+class BrowserUpstreamServer(HTTPServer):
+    """浏览器 E2E 的本地 HTTP 服务。预留足够的监听队列，允许 16 个计费请求同时到达。
+    仍按顺序执行 Handler，避免并发修改媒体任务和会话夹具。绑定和关闭沿用 HTTPServer。
+    """
+
+    request_queue_size = max(64, HTTPServer.request_queue_size)
+
+
 class Handler(BaseHTTPRequestHandler):
     request_count = 0
     market_variant = False
@@ -1020,10 +1028,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    """供浏览器测试传入 --port 后启动本机 HTTP 上游；持续处理请求，退出时释放监听套接字。"""
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=4010)
     args = p.parse_args()
-    HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    with BrowserUpstreamServer(("127.0.0.1", args.port), Handler) as server:
+        server.serve_forever()
 
 
 if __name__ == "__main__":
