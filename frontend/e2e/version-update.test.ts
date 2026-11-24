@@ -27,6 +27,12 @@ test("version update switches both application images and restores a failed rele
   await stableGoto(page, "/admin-panel");
   await page.getByRole("tab", { name: "版本更新", exact: true }).click();
   await expect(page.getByText("v0.1.0-beta.1", { exact: true })).toBeVisible();
+  const feed = process.env.E2E_VERSION_FEED!;
+  copyFileSync(join(dirname(feed), "invalid.json"), feed);
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "检查更新失败，请检查发布源和运行中的镜像。" })).toBeVisible();
+  await expectRunningVersions(page, "v0.1.0-beta.1");
+  copyFileSync(join(dirname(feed), "update.json"), feed);
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByRole("heading", { name: /可更新到 v0\.1\.0-beta\.2/ })).toBeVisible();
   await expect(page.getByText("测试版", { exact: true })).toBeVisible();
@@ -51,7 +57,6 @@ test("version update switches both application images and restores a failed rele
   await expect(page.getByText("Operation complete. Current version v0.1.0-beta.1.", { exact: true })).toBeVisible({ timeout: 30000 });
   await expectRunningVersions(page, "v0.1.0-beta.1");
 
-  const feed = process.env.E2E_VERSION_FEED!;
   copyFileSync(join(dirname(feed), "incompatible.json"), feed);
   const check = page.getByRole("button", { name: "Check for updates", exact: true });
   await check.click();

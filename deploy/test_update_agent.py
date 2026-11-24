@@ -5,9 +5,10 @@ from tempfile import TemporaryDirectory
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from deploy.update_manifest import MANIFEST_NAME, NAMESPACE, validate_manifest, version_key
-from deploy.update_agent import ACTIVE, Agent, Releases, save_json
+from deploy.update_agent import ACTIVE, Agent, Compose, Releases, save_json
 
 
 def manifest(number, compatibility="a"):
@@ -24,6 +25,7 @@ class Runtime:
     def __init__(self, current):
         """以当前镜像开始，准备阶段可由测试阻塞，启动失败由单个目标配置。"""
         self.running = current
+        self.namespace = NAMESPACE
         self.started = threading.Event()
         self.release = threading.Event()
         self.release.set()
@@ -47,6 +49,10 @@ class Runtime:
         self.switched.append(target["version"])
         if target == self.fail:
             raise ValueError("unhealthy target")
+
+    def healthy(self, target):
+        """返回指定夹具版本是否正在运行且健康，供重启恢复分支断言，无副作用。"""
+        return self.running == target and target != self.fail
 
 
 class UpdateTests(unittest.TestCase):
@@ -161,6 +167,77 @@ class UpdateTests(unittest.TestCase):
         agent = Agent(self.root, self.compose, self.releases)
         self.assertTrue(agent.status()["recovery_required"])
         self.assertEqual(agent.submit("check", {"actor": "test-admin"})[0], 409)
+
+    def test_missing_docker_labels_fail_as_validation(self):
+        """验证 Docker 缺失、空或不完整标签返回可处理异常。夹具不运行 Docker，不修改状态。"""
+        for labels in (None, {}, [], {"org.opencontainers.image.version": None}):
+            with self.subTest(labels=labels), self.assertRaisesRegex(ValueError, "release labels"):
+                Compose.release_labels(labels)
+        self.assertEqual(Compose.release_labels({
+            "org.opencontainers.image.version": self.base["version"][1:],
+            "org.opencontainers.image.revision": self.base["revision"],
+            "io.xhub.database-compatibility": self.base["database_compatibility"],
+        }), (self.base["version"], self.base["revision"], self.base["database_compatibility"]))
+
+    def test_unexpected_failure_releases_operation_even_when_status_write_fails(self):
+        """活动任务抛出未预期异常且失败状态暂时无法写盘时，日志可定位、状态可见且允许下一次检查。"""
+        def record_failure(path, state):
+            """只阻止失败阶段写盘，其他阶段委托真实原子持久化，退出夹具后撤销。"""
+            if state.get("stage") == "failed":
+                raise OSError("fixture status storage temporarily full")
+            save_json(path, state)
+
+        with self.assertLogs("xhub-updater", level="ERROR") as logs:
+            with patch.object(self.releases, "latest", side_effect=RuntimeError("fixture lookup failure")), \
+                    patch("deploy.update_agent.save_json", side_effect=record_failure):
+                result = self.check()
+                self.assertEqual((result["stage"], result["error"]), ("failed", "check_failed"))
+                self.assertFalse(result["recovery_required"])
+        self.assertIn(self.agent.state["operation"]["id"], "\n".join(logs.output))
+        self.assertIn("fixture status storage temporarily full", "\n".join(logs.output))
+        self.assertEqual(self.check()["candidate"]["version"], self.next["version"])
+
+    def test_healthy_switch_with_failed_completion_is_reconciled_without_rollback(self):
+        """已通过健康检查后写盘失败，保留待完成事务。修复介质并重启时验证原摘要，不重新切换。"""
+        def save_without_completion(path, state):
+            """拒绝写入成功终态，其他写入使用临时目录中的真实持久化。"""
+            if state.get("stage") == "succeeded":
+                raise OSError("fixture completion write failed")
+            save_json(path, state)
+
+        self.check()
+        with self.assertLogs("xhub-updater", level="ERROR"), \
+                patch("deploy.update_agent.save_json", side_effect=save_without_completion):
+            self.apply()
+            status = self.await_idle()
+            self.assertEqual(status["current"], self.next["version"])
+            self.assertTrue(status["recovery_required"])
+        self.assertEqual(self.compose.switched, [self.next["version"]])
+        self.assertEqual(self.agent.submit("check", {"actor": "test-admin"})[0], 409)
+        self.assertEqual(self.agent.state["pending"]["action"], "apply")
+        self.agent = Agent(self.root, self.compose, self.releases)
+        status = self.agent.status()
+        self.assertEqual((status["stage"], status["current"], status["previous"]),
+                         ("succeeded", self.next["version"], self.base["version"]))
+        self.assertFalse(status["recovery_required"])
+        self.assertEqual(self.compose.switched, [self.next["version"]])
+
+    def test_bad_state_is_visible_without_replacing_transaction_evidence(self):
+        """状态文件无法解析时执行器只读地显示待恢复并拒绝新操作，原文件由临时目录清理。"""
+        state_file = self.root / "state.json"
+        state_file.write_text("{invalid")
+        with self.assertLogs("xhub-updater", level="ERROR"):
+            agent = Agent(self.root, self.compose, self.releases)
+        self.assertTrue(agent.status()["recovery_required"])
+        self.assertEqual(agent.submit("check", {"actor": "test-admin"})[0], 409)
+        self.assertEqual(state_file.read_text(), "{invalid")
+        broken = {"stage": "switching", "pending": {"prior": False}, "operation": "invalid"}
+        save_json(state_file, broken)
+        with self.assertLogs("xhub-updater", level="ERROR") as logs:
+            agent = Agent(self.root, self.compose, self.releases)
+        self.assertIn("operation=none", "\n".join(logs.output))
+        self.assertTrue(agent.status()["recovery_required"])
+        self.assertEqual(agent.state["pending"], broken["pending"])
 
 
 if __name__ == "__main__":

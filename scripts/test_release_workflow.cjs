@@ -253,43 +253,39 @@ test('both images preserve tags and standalone layout', () => {
   assert.equal(step('Publish GitHub Release').if, "github.ref_type == 'tag'");
 });
 
-/** 运行真实发布 shell 及清单生成器。覆盖首次发布、测试版、重复运行和不可变冲突；finally 删除临时夹具。 */
-test('release attaches immutable version and image manifests', () => {
+/** 执行真实版本预检并核对构建条件。新发布允许推送，既有发布或查询错误不推送；测试后删除只读 GitHub 夹具。 */
+test('tagged release plans check GitHub before allowing any image push', () => {
+  const plan = step('Plan tagged release');
+  const firstBuild = publish.steps.findIndex(item => item.uses === 'docker/build-push-action@v6');
+  assert.ok(publish.steps.indexOf(plan) < firstBuild);
+  assert.equal(plan.if, "github.ref_type == 'tag'");
+  const build = "github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'";
+  const builds = publish.steps.filter(item => item.uses === 'docker/build-push-action@v6');
+  assert.equal(builds.length, 2);
+  builds.forEach(item => assert.equal(item.if, build));
+  assert.equal(step('Prepare runtime artifacts').if, build);
+  assert.match(step('Publish GitHub Release').run, /deploy\/publish_release\.py publish$/);
+  assert.equal(publish.steps.find(item => item.uses === 'docker/login-action@v3').if,
+    "github.ref_type != 'tag' || steps.release_plan.outputs.registry == 'true'");
   const directory = mkdtempSync(join(tmpdir(), 'xhub-release-publish-'));
   try {
-    mkdirSync(join(directory, 'deploy'));
-    writeFileSync(join(directory, 'deploy/update_manifest.py'), readFileSync(join(__dirname, '../deploy/update_manifest.py')));
-    writeFileSync(join(directory, 'gh'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALLS"\ncase "$2" in\nview) exit "$EXISTS";;\ncreate) exit "$CREATE_STATUS";;\ndownload) if [[ "$EXPECTED" == altered ]]; then printf "{}\\n" > existing-release.json; else cp xhub-release.json existing-release.json; fi;;\nesac\n', { mode: 0o755 });
-    for (const [version, exists, createStatus, expected, exit] of [
-      ['v0.1.0', '1', '0', 'same', 0],
-      ['v0.1.0-beta.1', '1', '0', 'same', 0],
-      ['v0.1.0', '1', '5', 'same', 5],
-      ['v0.1.0', '0', '0', 'same', 0],
-      ['v0.1.0', '0', '0', 'altered', 1],
+    writeFileSync(join(directory, 'gh'), '#!/bin/bash\n[[ "$1" == api ]] || exit 99\nprintf "%s" "$RELEASE_FIXTURE"\nexit "$QUERY_STATUS"\n', { mode: 0o755 });
+    const origin = join(__dirname, '..');
+    const target = { tag_name: 'v0.1.0', assets: [{ name: 'xhub-release.json', id: 12, state: 'uploaded' }] };
+    for (const [fixture, status, output] of [
+      [[], 0, 'build=true\nregistry=true\n'],
+      [[target], 0, 'build=false\nregistry=false\n'],
+      [[], 9, ''],
     ]) {
-      const calls = join(directory, 'calls');
-      writeFileSync(calls, '');
-      const gateway = 'sha256:' + 'a'.repeat(64);
-      const consoleImage = 'sha256:' + 'b'.repeat(64);
-      const sha = 'c'.repeat(40);
-      const compatibility = 'd'.repeat(64);
-      const result = spawnSync('bash', ['-c', step('Publish GitHub Release').run], {
-        cwd: directory, encoding: 'utf8', env: { ...process.env, PATH: directory + ':' + process.env.PATH,
-          VERSION: version, REPOSITORY: 'owner/xhub', GATEWAY_DIGEST: gateway, CONSOLE_DIGEST: consoleImage,
-          RELEASE_SHA: sha, DATABASE_COMPATIBILITY: compatibility,
-          CALLS: calls, EXISTS: exists, CREATE_STATUS: createStatus, EXPECTED: expected },
+      const out = join(directory, 'output');
+      writeFileSync(out, '');
+      const result = spawnSync('bash', ['-c', plan.run], {
+        cwd: origin, encoding: 'utf8', env: { ...process.env, PATH: directory + ':' + process.env.PATH,
+          VERSION: 'v0.1.0', GITHUB_REPOSITORY: 'owner/xhub', GITHUB_OUTPUT: out,
+          RELEASE_FIXTURE: JSON.stringify([fixture]), QUERY_STATUS: String(status) },
       });
-      assert.equal(result.status, exit, result.stderr);
-      const log = readFileSync(calls, 'utf8');
-      assert.equal(log.includes('release create'), exists === '1');
-      if (version.includes('-')) assert.match(log, /--prerelease --latest=false/);
-      if (exists === '1') assert.match(log, /release create .* docker-images.txt xhub-release.json/);
-      else assert.match(log, /release download .* --pattern xhub-release.json/);
-      assert.doesNotMatch(log, /--clobber/);
-      assert.deepEqual(JSON.parse(readFileSync(join(directory, 'xhub-release.json'), 'utf8')), {
-        schema: 1, version, revision: sha, database_compatibility: compatibility,
-        images: { gateway: 'ghcr.io/owner/xhub-gateway@' + gateway, console: 'ghcr.io/owner/xhub-console@' + consoleImage },
-      });
+      assert.equal(result.status === 0, status === 0, result.stderr);
+      assert.equal(readFileSync(out, 'utf8'), output);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

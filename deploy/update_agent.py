@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import fcntl
 from http.server import BaseHTTPRequestHandler
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ else:
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
 CHECK_TTL = 3600
 URLS = ("http://127.0.0.1:4000/health/readiness", "http://127.0.0.1:3000/login")
+LOG = logging.getLogger("xhub-updater")
 
 
 class TrustedRedirect(HTTPRedirectHandler):
@@ -147,7 +149,7 @@ class Compose:
 
     def current(self):
         """检查两个运行容器是否属于同一发布并有可恢复摘要；否则需人工完成首装。"""
-        labels, digests = {}, {}
+        releases, digests = {}, {}
         for service in SERVICES:
             ident = self.compose("ps", "-q", service)
             if not re.fullmatch(r"[0-9a-f]{12,64}", ident):
@@ -156,9 +158,9 @@ class Compose:
             if not container["State"]["Running"]:
                 raise ValueError("service not running")
             image = self.image(container["Image"])
-            labels[service] = image["Config"]["Labels"]
+            releases[service] = self.release_labels(image["Config"].get("Labels"))
             prefix = f"{self.namespace}-{service}@sha256:"
-            match = [x for x in image.get("RepoDigests", []) if x.startswith(prefix)]
+            match = [x for x in image.get("RepoDigests") or [] if x.startswith(prefix)]
             # Compose 已固定摘要时优先采用其明确引用；标签部署必须有唯一能回退的摘要。
             reference = container["Config"]["Image"]
             if reference in match:
@@ -167,18 +169,22 @@ class Compose:
                 digests[service] = match[0]
             else:
                 raise ValueError("missing or ambiguous rollback image")
-        version, revision, compatibility = self.release_labels(labels["gateway"])
-        if self.release_labels(labels["console"]) != (version, revision, compatibility):
+        version, revision, compatibility = releases["gateway"]
+        if releases["console"] != (version, revision, compatibility):
             raise ValueError("application images do not belong to the same release")
         return validate_manifest({"schema": 1, "version": version, "revision": revision,
                                   "database_compatibility": compatibility, "images": digests}, self.namespace)
 
     @staticmethod
     def release_labels(labels):
-        """读取镜像发布身份。元数据生成的标签可能省略 v，统一为清单格式。"""
-        version = labels.get("org.opencontainers.image.version", "")
-        return (version if version.startswith("v") else "v" + version,
-                labels.get("org.opencontainers.image.revision", ""), labels.get(COMPAT_LABEL, ""))
+        """把 Docker 标签对象转为版本、提交、兼容标识三元组；缺少或无效的发布标签抛 ValueError。"""
+        if not isinstance(labels, dict):
+            raise ValueError("image has no release labels")
+        version, revision, compatibility = (labels.get(key) for key in (
+            "org.opencontainers.image.version", "org.opencontainers.image.revision", COMPAT_LABEL))
+        if not all(isinstance(value, str) and value for value in (version, revision, compatibility)):
+            raise ValueError("image has incomplete release labels")
+        return version if version.startswith("v") else "v" + version, revision, compatibility
 
     def prepare(self, manifest, pull):
         """拉取并验证两份镜像与清单相符。完整通过前不修改任何 Compose 配置。"""
@@ -187,25 +193,29 @@ class Compose:
             if pull:
                 self.run("pull", reference, timeout=300)
             image = self.image(reference)
-            if reference not in image.get("RepoDigests", []) or self.release_labels(image["Config"]["Labels"]) != expected:
+            if reference not in (image.get("RepoDigests") or []) or self.release_labels(image["Config"].get("Labels")) != expected:
                 raise ValueError("release image identity mismatch")
+
+    def healthy(self, manifest):
+        """检查给定清单对应的两个运行摘要和健康探针；切换及重启恢复调用，无 Compose 写入。"""
+        no_redirect = build_opener(NoRedirect())
+        try:
+            for url in self.health_urls:
+                with no_redirect.open(url, timeout=2) as response:
+                    if response.status != 200:
+                        return False
+            return self.current() == manifest
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            return False
 
     def switch(self, manifest):
         """持久化指定镜像并启动固定服务。保留数据库、Redis 和外部对象，给网关停机留出时间。"""
         save_json(self.overlay, {"services": {service: {"image": manifest["images"][service]} for service in SERVICES}})
         self.compose("up", "-d", "--no-deps", "--no-build", "--pull", "never", "--timeout", "80", *SERVICES, timeout=160)
         deadline = time.monotonic() + self.health_timeout
-        no_redirect = build_opener(NoRedirect())
         while time.monotonic() < deadline:
-            try:
-                for url in self.health_urls:
-                    with no_redirect.open(url, timeout=2) as response:
-                        if response.status != 200:
-                            raise ValueError("service is unhealthy")
-                if self.current() == manifest:
-                    return
-            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-                pass
+            if self.healthy(manifest):
+                return
             time.sleep(1)
         raise ValueError("updated services did not become healthy")
 
@@ -226,16 +236,30 @@ class Agent:
         self.file = directory / "state.json"
         self.compose, self.releases = compose, releases
         self.lock = threading.RLock()
-        if self.file.exists():
-            with self.file.open("rb") as stream:
-                self.state = read_json(stream, 128 << 10)
-        else:
-            self.state = {"stage": "idle"}
+        self.state = {"stage": "idle", "updated_at": 0}
+        try:
+            if self.file.exists():
+                with self.file.open("rb") as stream:
+                    persisted = read_json(stream, 128 << 10)
+                if not isinstance(persisted, dict) or persisted.get("stage") not in ACTIVE | {"idle", "failed", "succeeded"}:
+                    raise ValueError("invalid saved update state")
+                self.state.update(persisted)
+        except Exception:
+            # 文件不可信时保留原始证据，禁止后续更新覆盖它。
+            LOG.exception("Unable to load updater state")
+            self.state.update(stage="failed", error="recovery_required")
+            return
         self.recover()
         try:
-            self.record(current=compose.current())
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-            self.record(current=None)
+            current = compose.current()
+        except Exception:
+            LOG.exception("Unable to inspect the running release")
+            current = None
+        try:
+            self.record(current=current)
+        except Exception:
+            LOG.exception("Unable to persist the running release")
+            self.state["current"] = current
 
     def record(self, **fields):
         """原子更新对象和磁盘；写盘成功前不发布状态，供工作线程与 IPC 共用。"""
@@ -244,24 +268,67 @@ class Agent:
             save_json(self.file, latest)
             self.state = latest
 
+    def log_failure(self, step):
+        """将当前异常及操作编号记入主机日志。浏览器只通过状态接口读取稳定错误码。"""
+        operation = self.state.get("operation")
+        operation_id = operation.get("id", "none") if isinstance(operation, dict) else "none"
+        LOG.exception("Updater %s failed (operation=%s)", step, operation_id)
+
+    def mark_failed(self, error, **fields):
+        """结束忙状态并尝试持久化错误。磁盘写入失败时保留内存错误和已有回退记录。"""
+        with self.lock:
+            try:
+                self.record(stage="failed", error=error, **fields)
+            except Exception:
+                self.log_failure("record failure")
+                self.state = {**self.state, **fields, "stage": "failed", "error": error, "updated_at": int(time.time())}
+
     def recover(self):
-        """有未完成切换则恢复原镜像，无切换副作用时仅记录中断；恢复失败保留事务。"""
+        """启动时对照未完成事务、运行摘要与健康探针，确认成功或恢复原镜像，旧事务仍按原方式回退。"""
         pending = self.state.get("pending")
         if pending:
-            self.restore(pending["prior"], interrupted=True)
+            try:
+                prior = validate_manifest(pending["prior"], self.compose.namespace)
+                target = validate_manifest(pending["target"], self.compose.namespace)
+                action = pending.get("action")
+                if action in {"apply", "rollback"} and self.compose.healthy(target):
+                    self.complete(prior, target, action)
+                else:
+                    self.restore(prior, interrupted=True)
+            except Exception:
+                self.log_failure("recover")
+                self.mark_failed("recovery_required")
         elif self.state["stage"] in ACTIVE:
-            self.record(stage="failed", error="interrupted")
+            self.mark_failed("interrupted")
+
+    def complete(self, prior, target, action):
+        """健康切换后同时保存当前版本、回退点并清除事务。写入失败保留现场，避免回退已经健康的新版本。"""
+        try:
+            self.record(current=target, previous=prior if action == "apply" else None,
+                        pending=None, stage="succeeded", error=None)
+        except Exception:
+            self.log_failure("record completion")
+            self.mark_failed("recovery_required", current=target)
 
     def restore(self, prior, interrupted=False):
         """按已保存的摘要恢复并检查两项服务。失败保留 pending，禁止启动新升级。"""
-        self.record(stage="recovering")
+        try:
+            self.record(stage="recovering")
+        except Exception:
+            # 切换前的 pending 已经落盘；状态写入故障不应阻止试图恢复服务。
+            self.log_failure("record recovery")
         try:
             self.compose.prepare(prior, pull=False)
             self.compose.switch(prior)
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-            self.record(stage="failed", error="recovery_required")
+        except Exception:
+            self.log_failure("restore")
+            self.mark_failed("recovery_required")
             return
-        self.record(current=prior, pending=None, stage="failed", error="interrupted" if interrupted else "rolled_back")
+        try:
+            self.record(current=prior, pending=None, stage="failed", error="interrupted" if interrupted else "rolled_back")
+        except Exception:
+            self.log_failure("record restoration")
+            self.mark_failed("recovery_required", current=prior)
 
     def status(self):
         """返回浏览器所需版本与阶段，省略镜像、目录、原始命令和管理身份。"""
@@ -284,13 +351,13 @@ class Agent:
             return {"enabled": True, "channel": "beta" if self.releases.beta else "stable", "stage": state["stage"],
                     "current": current["version"] if current else None, "candidate": candidate,
                     "previous": previous["version"] if previous else None, "error": state.get("error"),
-                    "recovery_required": bool(state.get("pending") and state["stage"] == "failed"),
+                    "recovery_required": state.get("error") == "recovery_required",
                     "checked": checked_at, "updated_at": state["updated_at"]}
 
     def submit(self, action, body):
         """校验目标版本并取得唯一操作槽；操作记录落盘后才向浏览器确认接收。"""
         with self.lock:
-            if self.state["stage"] in ACTIVE or self.state.get("pending"):
+            if self.state["stage"] in ACTIVE or self.state.get("pending") or self.state.get("error") == "recovery_required":
                 return 409, "busy"
             current = self.state.get("current")
             if action == "apply":
@@ -310,9 +377,14 @@ class Agent:
                 "id": uuid.uuid4().hex, "action": action, "actor": body["actor"]}}
             if action == "check":
                 fields.update(checked=None, checked_at=0)
-            self.record(**fields)
-            thread = threading.Thread(target=self.execute, args=(action, current, target), daemon=True)
-            thread.start()
+            try:
+                self.record(**fields)
+                thread = threading.Thread(target=self.execute, args=(action, current, target), daemon=True)
+                thread.start()
+            except Exception:
+                self.log_failure("submit")
+                self.mark_failed("check_failed" if action == "check" else "prepare_failed")
+                return 503, "update_agent_unavailable"
             return 202, self.status()
 
     def execute(self, action, expected, target):
@@ -331,14 +403,16 @@ class Agent:
             if self.compose.current() != current:
                 self.record(stage="failed", error="invalid_target")
                 return
-            self.record(stage="switching", pending={"prior": current, "target": target})
+            self.record(stage="switching", pending={"prior": current, "target": target, "action": action})
             self.compose.switch(target)
-            self.record(current=target, previous=current if action == "apply" else None, pending=None, stage="succeeded")
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-            if self.state.get("pending"):
-                self.restore(current)
+        except Exception:
+            self.log_failure(action)
+            if pending := self.state.get("pending"):
+                self.restore(pending["prior"])
             else:
-                self.record(stage="failed", error="check_failed" if action == "check" else "prepare_failed")
+                self.mark_failed("check_failed" if action == "check" else "prepare_failed")
+            return
+        self.complete(current, target, action)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -431,10 +505,12 @@ def main():
             args.socket.unlink()
         compose = Compose(args.compose.resolve(), args.state_dir / "compose.override.json",
                           args.project, args.namespace, health, args.health_timeout)
+        # 先恢复上次事务，再接受客户端请求，避免启动恢复期间的 IPC 连接超时积压。
+        agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace))
         with socketserver.ThreadingUnixStreamServer(str(args.socket), Handler) as server:
             server.daemon_threads = True
             os.chmod(args.socket, 0o660)
-            server.agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace))
+            server.agent = agent
             try:
                 server.serve_forever()
             finally:

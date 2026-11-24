@@ -13,6 +13,9 @@ import time
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from deploy.publish_release import Publisher
+
 REGISTRY = os.environ.get("E2E_UPDATE_REGISTRY", "ghcr.io/distribution/distribution:3.0.0")
 NGINX = "nginx:1.28-alpine"
 
@@ -69,7 +72,7 @@ def make_release(directory, registry, variant, resources):
         config = directory / "nginx.conf"
         status = 503 if variant == 3 and service == "gateway" else 200
         config.write_text(f'server {{ listen 80; location / {{ return {status} "{release}"; }} }}\n')
-        tag = f"{registry}/xhub-{service}:test-{variant}"
+        tag = f"{registry}/xhub-{service}:{release[1:]}"
         with ExitStack() as stack:
             container = run("docker", "create", NGINX)
             stack.callback(run, "docker", "rm", "-v", container)
@@ -119,9 +122,15 @@ def main():
         registry = "localhost:" + registry_host.rsplit(":", 1)[1]
         print("Preparing versioned Compose images in a private test registry", flush=True)
         base, update, broken, incompatible = [make_release(directory, registry, v, resources) for v in range(1, 5)]
+        # 在隔离 Registry 实测重跑发布重新发现同一摘要，GitHub 读写另由命令边界测试覆盖。
+        publisher = Publisher("example/xhub", base["version"])
+        publisher.namespace = registry + "/xhub"
+        for references in (base["images"], None):
+            assert publisher.recover_images(references, base["revision"], base["database_compatibility"]) == base["images"]
+        print("Verified digest recovery from pinned references and existing version tags", flush=True)
         feed = directory / "release.json"
         write_json(feed, update)
-        for target, name in ((broken, "broken"), (incompatible, "incompatible")):
+        for target, name in ((update, "update"), (broken, "broken"), (incompatible, "incompatible"), ({"schema": 2}, "invalid")):
             write_json(directory / (name + ".json"), target)
         compose = directory / "compose.json"
         write_json(compose, {"services": {

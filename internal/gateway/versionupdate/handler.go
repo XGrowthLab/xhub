@@ -127,6 +127,10 @@ func handler(guard AdminGuard, client *http.Client, operation string) http.Handl
 			return
 		}
 		defer response.Body.Close()
+		if response.StatusCode == http.StatusServiceUnavailable {
+			util.WriteError(w, 503, "update_agent_unavailable", "Version update service unavailable")
+			return
+		}
 		if response.StatusCode == 409 {
 			util.WriteError(w, 409, "update_conflict", "Deployment is busy or the selected version changed")
 			return

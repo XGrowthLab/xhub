@@ -40,6 +40,9 @@ func TestVersionUpdateAdminBoundary(t *testing.T) {
 			seen <- target
 			w.WriteHeader(202)
 			_, _ = w.Write([]byte("{\"enabled\":true,\"stage\":\"pulling\"}"))
+		case "/rollback":
+			w.WriteHeader(503)
+			_, _ = w.Write([]byte("private host write error"))
 		default:
 			w.WriteHeader(409)
 		}
@@ -86,6 +89,10 @@ func TestVersionUpdateAdminBoundary(t *testing.T) {
 	}
 	if r := h.do("POST", versionUpdatePath+"/check", admin, map[string]any{}); r.status != 409 {
 		t.Fatalf("concurrent operation got %d", r.status)
+	}
+	if unavailable := h.do("POST", versionUpdatePath+"/rollback", admin, map[string]any{"version": "v0.1.0-beta.1"}); unavailable.status != 503 ||
+		!strings.Contains(unavailable.text(), "update_agent_unavailable") || strings.Contains(unavailable.text(), "private host") {
+		t.Fatalf("host write failure should be handled without private details: %+v", unavailable)
 	}
 	_ = agent.Close()
 	if r := h.do("GET", versionUpdatePath, admin, nil); r.status != 503 {

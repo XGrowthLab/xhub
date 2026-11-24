@@ -112,6 +112,16 @@ func TestUnixBridge(t *testing.T) {
 			}
 			w.WriteHeader(409)
 		case "/rollback":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read test updater request: %v", err)
+				return
+			}
+			if strings.Contains(string(body), "v0.1.0-beta.3") {
+				w.WriteHeader(503)
+				_, _ = io.WriteString(w, "hidden")
+				return
+			}
 			w.WriteHeader(202)
 			_, _ = io.WriteString(w, strings.Repeat("0", 32770))
 		default:
@@ -132,6 +142,7 @@ func TestUnixBridge(t *testing.T) {
 		{"POST", "/check", "{}", 202},
 		{"POST", "/apply", "{\"version\":\"v0.1.0-beta.2\",\"revision\":\"" + strings.Repeat("1", 40) + "\"}", 409},
 		{"POST", "/rollback", "{\"version\":\"v0.1.0-beta.1\"}", 502},
+		{"POST", "/rollback", "{\"version\":\"v0.1.0-beta.3\"}", 503},
 	} {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest(tc.method, Path+tc.suffix, strings.NewReader(tc.body)))
