@@ -281,9 +281,14 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
 	for _, key := range []string{scope.key, scope.session} {
-		r := h.do(http.MethodPost, "/v1/chat/completions", key, chatRequest("spool-admission", "Verify durable admission."))
-		if r.status != 503 || !strings.Contains(string(r.body), "billing_storage_unavailable") {
-			t.Fatalf("存储故障未明确拒绝: %s", r.describe())
+		// 已通过身份校验的流式请求可以提前刷盘；与非流式一样，故障必须在付费出站前明确拒绝。
+		for _, stream := range []bool{false, true} {
+			body := chatRequest("spool-admission", "Verify durable admission.")
+			body["stream"] = stream
+			r := h.do(http.MethodPost, "/v1/chat/completions", key, body)
+			if r.status != 503 || !strings.Contains(string(r.body), "billing_storage_unavailable") {
+				t.Fatalf("存储故障未明确拒绝 stream=%v: %s", stream, r.describe())
+			}
 		}
 	}
 	if len(h.upstreamCalls()) != 0 {

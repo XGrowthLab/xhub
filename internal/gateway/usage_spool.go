@@ -78,6 +78,22 @@ func (s *Server) CloseUsageSpool() error {
 	return s.usageSpool.Close()
 }
 
+// streamBudgetProbeKey 仅在当前网关请求的上下文中传递磁盘探针，客户端请求头无法设置它。
+type streamBudgetProbeKey struct{}
+
+// WithStreamBudgetProbe 供通过身份、限流和护栏的流式请求并行准备磁盘。返回携带一次性探针的请求；
+// 原请求、未启用队列以及无法提前探测的情况都继续使用同步准入路径。调用不占账单槽位。
+func (s *Server) WithStreamBudgetProbe(r *http.Request, callID string) *http.Request {
+	if !s.usageSpoolEnabled || s.usageSpoolErr != nil || s.usageSpool == nil || r.Context().Err() != nil {
+		return r
+	}
+	probe := s.usageSpool.StartAttemptProbe(callID)
+	if probe == nil {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), streamBudgetProbeKey{}, probe))
+}
+
 // admitUsageSpool 在上游付费发送前为本次call预留本机容量，返回这次分配时已发布的待结账单数及是否继续；失败写 503。
 // 覆盖硬额度、无限额和搜索软额度，不能等收到付费结果后才发现配置/容量已不可用。
 func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID string) (int, bool) {
@@ -90,7 +106,8 @@ func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID 
 		err = usagespool.ErrUnavailable
 	}
 	if err == nil {
-		pending, err = s.usageSpool.ReserveForAttemptWithBacklog(callID)
+		probe, _ := r.Context().Value(streamBudgetProbeKey{}).(*usagespool.AttemptProbe)
+		pending, err = s.usageSpool.ReserveAfterProbe(callID, probe)
 	}
 	if err == nil {
 		return pending, true

@@ -145,6 +145,13 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 			util.WriteTypedError(w, r.URL.Path, 400, "guardrail_failed", msg)
 			return
 		}
+		// 流式调用不读取响应缓存。护栏通过后先启动一次真实磁盘探针，让它与重编码、选路和协议准备重叠。
+		// 槽位、已发布账单及所有预算仍在实际出站前检查；解析拒绝或空候选不占用预留。
+		if streaming, _ := body["stream"].(bool); streaming {
+			if probe, ok := h.(dpcontract.StreamBudgetProbeHost); ok {
+				r = probe.WithStreamBudgetProbe(r, callID)
+			}
+		}
 		// 脱敏可能原地修改 body，必须重编码，让缓存键、交互日志和出站编码器看到同一份输入。
 		raw, err = json.Marshal(body)
 		if err != nil {

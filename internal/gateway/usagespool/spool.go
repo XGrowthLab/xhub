@@ -532,6 +532,12 @@ func (s *Spool) reserve(callID string, renew bool, probe func(string) error, pen
 	} else {
 		s.mu.Lock()
 	}
+	return s.reserveLocked(callID, renew, probe, pending, ticket, earlyErr)
+}
+
+// reserveLocked 用本次尝试的原始票号分配槽位。调用方持有 mu，earlyErr 为先行探针的结果。
+// 每次在锁内读取当前容量、权限及待结水位；故障已使探针失效时重新实写。返回前释放 mu。
+func (s *Spool) reserveLocked(callID string, renew bool, probe func(string) error, pending *int, ticket uint64, earlyErr error) (err error) {
 	defer s.finishLocked(&err)
 	preparedOutside := false
 	for {

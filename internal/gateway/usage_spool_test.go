@@ -73,6 +73,40 @@ func TestUsageSpoolAdmissionFailure(t *testing.T) {
 	}
 }
 
+// TestUsageSpoolProbeFallback 验证关闭队列、初始化故障、缺少标识及取消的请求不会提前操作磁盘。
+// 每个子测试使用独立请求，实际队列由 t.Cleanup 关闭，临时目录自动删除；所有回退都保留原请求上下文。
+func TestUsageSpoolProbeFallback(t *testing.T) {
+	spool, err := usagespool.Open(usagespool.Config{Dir: filepath.Join(t.TempDir(), "spool")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = spool.Close() })
+	for _, mode := range []string{"disabled", "missing-spool", "init-error", "missing-id", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			s := &Server{usageSpoolEnabled: true, usageSpool: spool}
+			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			id := "stream"
+			switch mode {
+			case "disabled":
+				s.usageSpoolEnabled = false
+			case "missing-spool":
+				s.usageSpool = nil
+			case "init-error":
+				s.usageSpoolErr = usagespool.ErrUnavailable
+			case "missing-id":
+				id = ""
+			case "canceled":
+				ctx, cancel := context.WithCancel(r.Context())
+				cancel()
+				r = r.WithContext(ctx)
+			}
+			if got := s.WithStreamBudgetProbe(r, id); got != r {
+				t.Fatal("回退时改变了请求或启动了探针")
+			}
+		})
+	}
+}
+
 // TestUsageSpoolAdmissionBacklog 通过网关准入入口预留真实临时磁盘，验证带回旧账数量、满队列的 503 和结清后的再次放行。
 // 所有账单使用合成请求 ID，不访问供应商；测试结束后关闭队列并删除整个私有目录。
 func TestUsageSpoolAdmissionBacklog(t *testing.T) {
@@ -84,6 +118,11 @@ func TestUsageSpoolAdmissionBacklog(t *testing.T) {
 	t.Cleanup(func() { _ = spool.Close() })
 	server := &Server{usageSpool: spool, usageSpoolEnabled: true}
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	// 先发起流式探针，再发布旧账；只有正式准入时才读取水位。
+	request = server.WithStreamBudgetProbe(request, "first")
+	if request.Context().Value(streamBudgetProbeKey{}) == nil {
+		t.Fatal("流式网关没有为可用的磁盘队列准备探针")
+	}
 	owed := iam.UsageRecord{RequestID: "older-charge", TS: time.Now(), Cost: 1}
 	if err := spool.Put(owed); err != nil {
 		t.Fatalf("创建待结账单失败: %v", err)
