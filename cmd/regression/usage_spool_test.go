@@ -250,7 +250,7 @@ func TestUsageSpoolDatabaseDisconnect(t *testing.T) {
 	}
 }
 
-// TestUsageSpoolUnavailableAdmission 验证不可写磁盘在真实HTTP准入时返回503且不调用上游；恢复权限后可继续对话。
+// TestUsageSpoolUnavailableAdmission 验证不可写磁盘在真实HTTP准入时返回503且不调用上游；恢复权限后的首笔对话在重复刷账后仍只扣一次。
 // 使用临时目录及私有PG，硬额度与无限额账号均走相同存储准入；最后清理所有测试数据。
 func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "spool")
@@ -261,6 +261,7 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	admin := h.adminSession()
 	scope := h.openScope(t, admin, "spool-admission")
 	h.setKeyBudget(t, admin, scope.key, 10)
+	before := h.moneyOf(t, scope)
 	if err := os.Chmod(dir, 0500); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +278,20 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
+	resumed := h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
+	id := resumed.headers.Get("x-litellm-call-id")
+	h.flushSpend()
+	h.flushSpend()
+	var events []iam.UsageEvent
+	if err := h.db.Engine.Where("request_id = ?", id).Find(&events); err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || len(events) != 1 || events[0].Status != "success" || !nearlyEqual(events[0].Cost, expectedCost()) {
+		t.Fatalf("恢复请求必须对应一笔足额成功账单: id=%q 笔数=%d", id, len(events))
+	}
+	if len(h.upstreamCalls()) != 1 || !h.moneyOf(t, scope).grewBy(before, expectedCost()) {
+		t.Fatal("存储恢复后上游调用次数或五层累计费用不符")
+	}
 }
 
 // TestUsageSpoolUnsettledEvidenceBlocksUpstream 在真实 PostgreSQL 账本与持久目录构造同一请求的冲突快照。

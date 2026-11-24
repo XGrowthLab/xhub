@@ -482,12 +482,18 @@ func (s *Spool) Status() (status Status, err error) {
 // 并发在途与待结算共同受字节/条数限制；磁盘满、权限错误、隔离证据时拒绝，调用结束必须Release。
 // 预留限制本队列并发容量，不承诺抵抗外部进程在准入后耗尽磁盘或硬件故障。
 func (s *Spool) Reserve(callID string) error {
-	return s.reserve(callID, s.probeWritableLocked)
+	return s.reserve(callID, false, s.probeWritableLocked)
 }
 
-// reserve 是 Reserve 的准入实现。callID 标识当前独立预留，probe 在 mu 内执行完整真实写盘探针。
+// ReserveForAttempt 为网关的本次出站尝试预留账单空间。callID 贯穿重试和回退，返回与 Reserve 相同的准入错误。
+// 新请求直接取票；已有普通预留在同一把锁内重新校验，仍在交付中的同步账单继续占用其终态空间。
+func (s *Spool) ReserveForAttempt(callID string) error {
+	return s.reserve(callID, true, s.probeWritableLocked)
+}
+
+// reserve 为 callID 申请空间；renew 为真时替换上次普通尝试的预留，probe 在锁内验证可持久写入。
 // 每个请求先取票，随后逐个检查权限与容量；只有在其取票后才开始并已成功的探针可以共享。
-func (s *Spool) reserve(callID string, probe func() error) (err error) {
+func (s *Spool) reserve(callID string, renew bool, probe func() error) (err error) {
 	if callID == "" {
 		return ErrUnavailable
 	}
@@ -498,7 +504,11 @@ func (s *Spool) reserve(callID string, probe func() error) (err error) {
 		return ErrUnavailable
 	}
 	if s.reserved[callID] {
-		return nil
+		if !renew || s.activeDelivery[basename(callID)] {
+			return nil
+		}
+		// 重试必须先归还普通预留再按当前容量、权限及可写性准入；校验失败也不能留下旧槽。
+		delete(s.reserved, callID)
 	}
 	status, err := s.statusLocked()
 	if err != nil {

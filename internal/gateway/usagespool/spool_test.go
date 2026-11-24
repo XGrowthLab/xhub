@@ -260,6 +260,17 @@ func TestDeliveryReservationPersists(t *testing.T) {
 	if err := s.BeginDelivery(marker); err != nil {
 		t.Fatal(err)
 	}
+	// 即使卷权限已改变，同标识重试也必须保留已经开始交付的终态空间。
+	defer os.Chmod(s.config.Dir, 0700)
+	if err := os.Chmod(s.config.Dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt(final.RequestID); err != nil {
+		t.Fatalf("重试破坏了交付中的预留: %v", err)
+	}
+	if err := os.Chmod(s.config.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s.Release(final.RequestID)
 	status, err := s.Status()
 	if err != nil || status.Reserved != 1 {
@@ -750,6 +761,44 @@ func awaitAdmissionTickets(t *testing.T, s *Spool, want uint64) {
 	}
 }
 
+// TestReserveForAttempt 用单槽临时队列验证首次准入先取票、普通重试重新核验磁盘，
+// 以及重试失败后槽位可复用。夹具负责关闭队列、清理文件，并在失败时恢复目录权限。
+func TestReserveForAttempt(t *testing.T) {
+	s := openSpool(t, Config{MaxEntries: 1, MaxBytes: 4096, MaxRecordBytes: 4096})
+	if err := s.ReserveForAttempt(""); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("空请求标识准入结果不符: %v", err)
+	}
+	result := make(chan error, 1)
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		go func() { result <- s.ReserveForAttempt("retry") }()
+		awaitAdmissionTickets(t, s, 1)
+	}()
+	if err := <-result; err != nil {
+		t.Fatalf("首次请求无法预留: %v", err)
+	}
+	if err := s.ReserveForAttempt("retry"); err != nil {
+		t.Fatalf("单槽队列无法更新原请求的预留: %v", err)
+	}
+	if err := s.ReserveForAttempt("other"); !errors.Is(err, ErrFull) {
+		t.Fatalf("已满队列仍允许另一个请求进入: %v", err)
+	}
+	defer os.Chmod(s.config.Dir, 0700)
+	if err := os.Chmod(s.config.Dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt("retry"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("旧预留绕过了当前磁盘权限: %v", err)
+	}
+	if err := os.Chmod(s.config.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt("other"); err != nil {
+		t.Fatalf("重试失败仍占用唯一的预留槽: %v", err)
+	}
+}
+
 // TestReserveOnlySharesOverlappingProbes 用真实磁盘探针及已取票的并发请求检查复用次数。
 // 每笔仍独立检查字节、条数、权限、隔离区；失败探针后必须重试。临时目录、权限和预留由夹具回收。
 func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
@@ -793,7 +842,7 @@ func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
 				s.mu.Lock()
 				defer s.mu.Unlock()
 				for i := range 4 {
-					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), probe) }()
+					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), false, probe) }()
 				}
 				awaitAdmissionTickets(t, s, 4)
 			}()
@@ -823,7 +872,7 @@ func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
 	var probes atomic.Int32
 	first := make(chan error, 1)
 	go func() {
-		first <- s.reserve("earlier", func() error {
+		first <- s.reserve("earlier", false, func() error {
 			probes.Add(1)
 			close(started)
 			<-allow
@@ -833,7 +882,7 @@ func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
 	<-started
 	second := make(chan error, 1)
 	probe := func() error { probes.Add(1); return s.probeWritableLocked() }
-	go func() { second <- s.reserve("during-probe", probe) }()
+	go func() { second <- s.reserve("during-probe", false, probe) }()
 	func() {
 		defer close(allow)
 		awaitAdmissionTickets(t, s, 2)
@@ -841,7 +890,7 @@ func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
 	if a, b := <-first, <-second; a != nil || b != nil || probes.Load() != 2 {
 		t.Fatalf("探针开始后进入的请求复用了旧探针: first=%v second=%v probes=%d", a, b, probes.Load())
 	}
-	if err := s.reserve("later", probe); err != nil || probes.Load() != 3 {
+	if err := s.reserve("later", false, probe); err != nil || probes.Load() != 3 {
 		t.Fatalf("空闲后单次调用未重新探测: err=%v probes=%d", err, probes.Load())
 	}
 }

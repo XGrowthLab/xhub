@@ -6,7 +6,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量。
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
  * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
@@ -221,6 +221,18 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       });
       expect(resumed.status(), await resumed.text()).toBe(200);
       expect((await resumed.json()).choices[0].message.content).toBe("e2e-ok");
+      const resumedID = resumed.headers()["x-litellm-call-id"];
+      expect(resumedID).toBeTruthy();
+      expect([callID, ...concurrentIDs]).not.toContain(resumedID);
+      await expect.poll(async () => {
+        const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + resumedID, { headers });
+        return log.ok() ? await log.json() : null;
+      }).toMatchObject({ request_id: resumedID, status: "success", spend: expect.closeTo(0.12, 8) });
+      await expect.poll(async () => {
+        const info = await page.request.get(GATEWAY + "/user/info", { headers });
+        expect(info.status()).toBe(200);
+        return Number((await info.json()).user_info.spend) - startingSpend;
+      }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
     } finally {
       if (injected)
         expect((await page.request.post(control + "/usage-spool/recover", { data: { model } })).status()).toBe(200);

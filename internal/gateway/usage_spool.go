@@ -89,7 +89,7 @@ func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID 
 		err = usagespool.ErrUnavailable
 	}
 	if err == nil {
-		err = s.usageSpool.Reserve(callID)
+		err = s.usageSpool.ReserveForAttempt(callID)
 	}
 	if err == nil {
 		return true

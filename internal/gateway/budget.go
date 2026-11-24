@@ -59,7 +59,8 @@ func billingPendingCause(err error) string {
 // 每次重试重新核对余额；放行后允许该请求完成并按实际token结算，并发调用可能使余额变负。
 // 同步对话首次出站前还会持久化不含正文的交付标记；标记不可用时以 503 阻断上游调用。
 func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p *auth.Principal, callID string, dep config.ModelEntry, protocol string, body []byte, start time.Time) ([]byte, bool) {
-	s.finishBudgetCall(callID)
+	// 每次重新冻结价格。首次尝试直接进入磁盘准入，旧尝试的普通槽由队列在同一次加锁时处理。
+	s.clearBudgetPrice(callID)
 	if !s.admitUsageSpool(w, r, callID) {
 		return nil, false
 	}
@@ -196,6 +197,11 @@ func (s *Server) finishBudgetCall(callID string) {
 	if s.usageSpool != nil {
 		s.usageSpool.Release(callID)
 	}
+	s.clearBudgetPrice(callID)
+}
+
+// clearBudgetPrice 清除 callID 上一次冻结的价格，无返回值。开始新尝试和结束请求时调用，未知 ID 无副作用。
+func (s *Server) clearBudgetPrice(callID string) {
 	s.mu.Lock()
 	delete(s.budgetCalls, callID)
 	s.mu.Unlock()
