@@ -207,14 +207,15 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       const deferred = await page.request.post(control + "/usage-spool/defer", { data: { model } });
       expect(deferred.status(), await deferred.text()).toBe(200);
       expect(await deferred.json()).toEqual({ pending: 1, quarantined: 0 });
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // 多个调用同时观察同一份冲突账单，均需等待恢复或收到明确拒绝。
+      await Promise.all([0, 1].map(async () => {
         const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
           headers,
           data: { model, messages: [{ role: "user", content: "Check admission while settlement is pending." }] },
         });
         expect(refused.status(), await refused.text()).toBe(503);
         expect((await refused.json()).error.type).toBe("billing_storage_pending");
-      }
+      }));
       const cleared = await page.request.post(control + "/usage-spool/recover", { data: { model } });
       expect(cleared.status(), await cleared.text()).toBe(200);
       expect(await cleared.json()).toEqual({ pending: 0, quarantined: 0 });

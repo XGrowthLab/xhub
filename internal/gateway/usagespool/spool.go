@@ -91,6 +91,8 @@ type replayFailure struct {
 type Spool struct {
 	mu     sync.Mutex
 	writes mutationQueue
+	// settling 只跟踪从发布最终账单到持久确认结束的前台写入；重启后由磁盘证据恢复。
+	settling sync.Map // basename -> chan struct{}
 	// probeMu 保护锁外探针的生命周期。Close 先取得它，再关闭根目录和进程锁。
 	probeMu    sync.Mutex
 	probePath  string
@@ -932,6 +934,30 @@ func (s *Spool) acknowledgeLocked(name string, raw []byte) error {
 	return s.syncSettledRemovalLocked(name)
 }
 
+// Settle 先持久化 record，再调用 commit 精确入账并确认删除同一份快照，供普通请求结算使用。
+// 返回值表示 Put 是否成功；数据库或确认失败时仍有落盘证据，只有 Put 失败才需要其他介质兜底。
+// commit 不得递归重放本队列。重放者可等待本次操作，随后仍需核对自己观察到的账单是否已获耐久确认。
+func (s *Spool) Settle(record iam.UsageRecord, commit func() error) (bool, error) {
+	if commit == nil {
+		return false, ErrUnavailable
+	}
+	name := basename(record.RequestID)
+	done := make(chan struct{})
+	if _, loaded := s.settling.LoadOrStore(name, done); !loaded {
+		defer func() {
+			s.settling.Delete(name)
+			close(done)
+		}()
+	}
+	if err := s.Put(record); err != nil {
+		return false, err
+	}
+	if err := commit(); err != nil {
+		return true, err
+	}
+	return true, s.Acknowledge(record)
+}
+
 // Acknowledge 在调用方确认账单事务成功后删除同一快照；record必须是Put时完整值，不可仅凭RequestID删除新内容。
 func (s *Spool) Acknowledge(record iam.UsageRecord) (err error) {
 	raw, err := encode(record)
@@ -1103,6 +1129,17 @@ func (s *Spool) replayLocked(ctx context.Context, limit int, commit func(context
 			break
 		}
 		s.mu.Lock()
+		if owner, ok := s.settling.Load(name); ok && batch.pending[name] {
+			// 前台确认需要目录锁；等待期间释放锁。关闭信号只表示它已经返回，是否真正
+			// 结清仍看 noteSettledLocked 的证据。前台提交失败、外部丢文件均走下面的恢复和报错。
+			s.mu.Unlock()
+			select {
+			case <-owner.(chan struct{}):
+			case <-ctx.Done():
+				return count, errors.Join(append(failures, ctx.Err())...)
+			}
+			s.mu.Lock()
+		}
 		if len(batch.pending) == 0 {
 			// 只有实际入账且删除目录项已同步才会撤下候选，外部丢失文件不会走这里。
 			s.mu.Unlock()

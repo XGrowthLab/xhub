@@ -351,12 +351,16 @@ func TestUsageSpoolUnsettledEvidenceBlocksUpstream(t *testing.T) {
 	if err := h.gw.FlushLocalUsage(t.Context()); err != nil {
 		t.Fatalf("后台未进入退避: %v", err)
 	}
+	var refusals sync.WaitGroup
 	for _, token := range []string{scope.key, scope.session} {
-		r := h.do(http.MethodPost, "/v1/chat/completions", token, chatRequest(model, "Check unresolved billing admission."))
-		if r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "billing_storage_pending") {
-			t.Fatalf("未结清账单时未明确拒绝: %s", r.describe())
-		}
+		refusals.Go(func() {
+			r := h.do(http.MethodPost, "/v1/chat/completions", token, chatRequest(model, "Check unresolved billing admission."))
+			if r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "billing_storage_pending") {
+				t.Errorf("并发准入未保留待结算错误: %s", r.describe())
+			}
+		})
 	}
+	refusals.Wait()
 	if got := len(h.upstreamCalls()); got != 1 {
 		t.Fatalf("冲突后重复访问上游: 总调用=%d 正常对照=1", got)
 	}

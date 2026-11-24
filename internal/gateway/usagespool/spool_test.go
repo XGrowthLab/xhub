@@ -1336,3 +1336,98 @@ func TestContendedProbeClose(t *testing.T) {
 		t.Fatalf("重启后未清理前一实例的探针: %v", err)
 	}
 }
+
+// TestSettleJoinsForeground 在真实私有卷上暂停前台事务，同时发起要求结清的重放。
+// 验证成功只提交一次、失败可恢复、取消不影响前台，文件意外丢失不能伪造持久确认。队列与卷自动清理。
+func TestSettleJoinsForeground(t *testing.T) {
+	for _, mode := range []string{"success", "retry", "cancel", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				record := spoolRecord("joined")
+				started, resume := make(chan struct{}), make(chan struct{})
+				foreground := make(chan error, 1)
+				go func() {
+					durable, err := s.Settle(record, func() error {
+						close(started)
+						<-resume
+						if mode == "retry" {
+							return ErrUnavailable
+						}
+						return nil
+					})
+					if !durable {
+						t.Error("数据库确认前完整快照必须可靠落盘")
+					}
+					foreground <- err
+				}()
+				<-started
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				replayed := make(chan error, 1)
+				var commits int
+				go func() {
+					_, err := s.ReplayForAdmission(ctx, 1, func(_ context.Context, got iam.UsageRecord) error {
+						commits++
+						if got.RequestID != record.RequestID || got.Cost != record.Cost {
+							return ErrConflict
+						}
+						return nil
+					})
+					replayed <- err
+				}()
+				synctest.Wait()
+				if len(replayed) != 0 || commits != 0 {
+					t.Error("前台仍在结算时出现重复提交或提前准入")
+				}
+				if mode == "cancel" {
+					cancel()
+					synctest.Wait()
+				}
+				if mode == "missing" {
+					if err := os.Remove(filepath.Join(s.config.Dir, basename(record.RequestID))); err != nil {
+						t.Error(err)
+					}
+				}
+				close(resume)
+				fgErr, replayErr := <-foreground, <-replayed
+				if (mode == "retry") != errors.Is(fgErr, ErrUnavailable) {
+					t.Errorf("前台提交结果错误: %v", fgErr)
+				}
+				switch mode {
+				case "success", "retry":
+					if replayErr != nil || commits != boolInt(mode == "retry") {
+						t.Fatalf("重放未按已确认状态接管: commits=%d err=%v", commits, replayErr)
+					}
+				case "cancel":
+					if !errors.Is(replayErr, context.Canceled) || commits != 0 {
+						t.Fatalf("取消等待影响账单: commits=%d err=%v", commits, replayErr)
+					}
+				case "missing":
+					if !errors.Is(replayErr, os.ErrNotExist) || commits != 0 {
+						t.Fatalf("外部丢失文件被当作成功确认: commits=%d err=%v", commits, replayErr)
+					}
+				}
+				if _, ok := s.settling.Load(basename(record.RequestID)); ok {
+					t.Error("前台结束后仍保留旧请求的结算标记")
+				}
+			})
+		})
+	}
+}
+
+// TestSettleRejectsUnavailable 用单槽私有队列验证缺少结算器和容量耗尽均在提交前拒绝，
+// 返回的 durable 必须为假，以便网关选择其他可靠介质；预留和目录由测试回收。
+func TestSettleRejectsUnavailable(t *testing.T) {
+	s := openSpool(t, Config{MaxEntries: 1})
+	record := spoolRecord("full")
+	if ok, err := s.Settle(record, nil); ok || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("空结算器结果错误: durable=%v err=%v", ok, err)
+	}
+	if err := s.Reserve("occupy"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Settle(record, func() error { t.Error("没有可靠快照却执行了提交"); return nil }); ok || !errors.Is(err, ErrFull) {
+		t.Fatalf("队列已满时结果错误: durable=%v err=%v", ok, err)
+	}
+}
