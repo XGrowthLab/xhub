@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useT } from "@/i18n";
 import { ApiError } from "@/lib/http/client";
-import { submitVersionUpdate, versionUpdateStatus, type UpdateAction, type VersionUpdateStatus } from "@/lib/http/versionUpdates";
+import { submitVersionUpdate, versionUpdateStatus, type UpdateAction, type UpdateChannel, type UpdateTarget, type VersionUpdateStatus } from "@/lib/http/versionUpdates";
 
 const activeStages = new Set(["checking", "pulling", "switching", "recovering"]);
 const failures = new Set(["interrupted", "rolled_back", "recovery_required", "check_failed", "prepare_failed", "invalid_target"]);
@@ -34,12 +34,13 @@ function ReleasePreview({ candidate }: { candidate: NonNullable<VersionUpdateSta
   );
 }
 
-/** 显示主机已启用时的状态和可用操作。检查直接触发读取，切换类操作交由父组件确认。 */
-function UpdateDetails({ status, active, busy, onCheck, onConfirm }: {
+/** 显示主机状态、检查与渠道按钮，并把需确认的镜像切换交给父组件。忙或恢复时禁用操作。 */
+function UpdateDetails({ status, active, busy, onCheck, onChannel, onConfirm }: {
   status: VersionUpdateStatus;
   active: boolean;
   busy: boolean;
   onCheck: () => void;
+  onChannel: (channel: UpdateChannel) => void;
   onConfirm: (target: Confirmation) => void;
 }) {
   const t = useT();
@@ -63,6 +64,10 @@ function UpdateDetails({ status, active, busy, onCheck, onConfirm }: {
         <Button type="button" variant="outline" disabled={blocked} onClick={onCheck}>
           {t("versionUpdates.check")}
         </Button>
+        {status.channel_switch_enabled && <Button type="button" variant="outline" disabled={blocked}
+          onClick={() => onChannel(status.channel === "beta" ? "stable" : "beta")}>
+          {t(status.channel === "beta" ? "versionUpdates.switchToStable" : "versionUpdates.switchToBeta")}
+        </Button>}
         {candidate && <Button type="button" disabled={blocked || !candidate.compatible}
           onClick={() => onConfirm({ action: "apply", version: candidate.version, revision: candidate.revision })}>
           <ArrowDownToLine aria-hidden className="size-4" />{t("versionUpdates.apply")}
@@ -76,13 +81,13 @@ function UpdateDetails({ status, active, busy, onCheck, onConfirm }: {
   );
 }
 
-/** 在管理员页中检查、应用或回退主机版本。无参数，返回持久化作业状态与发布说明。
+/** 在管理员页检查、应用或回退版本，并允许主机授权的渠道切换。展示持久化状态与发布说明。
  * 选中页签时读取状态，即使网关重启也继续恢复轮询。仅响应用户点击提交，不重试写操作。
  */
 export default function VersionUpdates() {
   const t = useT();
   const [status, setStatus] = useState<VersionUpdateStatus>();
-  const [requestError, setRequestError] = useState<"unavailable" | "conflict" | null>(null);
+  const [requestError, setRequestError] = useState<"unavailable" | "conflict" | "channelLocked" | null>(null);
   const [pending, setPending] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const activity = useRef(0);
@@ -118,8 +123,8 @@ export default function VersionUpdates() {
     };
   }, []);
 
-  /** 发送一次已选操作，保留确认时的版本。409 提示重新检查，连接中断时由读状态确认操作结果。 */
-  async function submit(action: UpdateAction, target: { version?: string; revision?: string } = {}) {
+  /** 发送一次已选操作。渠道锁定和并发冲突给出对应提示，连接中断时由读状态确认结果。 */
+  async function submit(action: UpdateAction, target: UpdateTarget = {}) {
     if (busy) return;
     const epoch = ++activity.current;
     setPending(true);
@@ -130,7 +135,9 @@ export default function VersionUpdates() {
       if (alive.current && epoch === activity.current) setStatus(next);
     } catch (error) {
       if (alive.current && epoch === activity.current) {
-        setRequestError(error instanceof ApiError && error.status === 409 ? "conflict" : "unavailable");
+        const response = error instanceof ApiError ? error : null;
+        const type = (response?.body as { error?: { type?: string } } | null)?.error?.type;
+        setRequestError(response?.status === 409 ? "conflict" : type === "update_channel_locked" ? "channelLocked" : "unavailable");
       }
     } finally {
       if (epoch === activity.current) activity.current++;
@@ -159,7 +166,8 @@ export default function VersionUpdates() {
         {requestError && <p role="alert" className="text-sm text-destructive">{t("versionUpdates." + requestError)}</p>}
         {status && !status.enabled && <p className="text-sm text-muted-foreground">{t("versionUpdates.disabled")}</p>}
         {status?.enabled && (
-          <UpdateDetails status={status} active={active} busy={busy} onCheck={() => void submit("check")} onConfirm={setConfirm} />
+          <UpdateDetails status={status} active={active} busy={busy} onCheck={() => void submit("check")}
+            onChannel={(channel) => void submit("channel", { channel })} onConfirm={setConfirm} />
         )}
         <Dialog open={!!confirm} onOpenChange={(open) => { if (!open) setConfirm(null); }}>
           <DialogContent>

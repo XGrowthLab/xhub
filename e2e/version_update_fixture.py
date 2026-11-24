@@ -161,7 +161,7 @@ def main():
         agent_args = [
             sys.executable, "-B", str(ROOT / "deploy/update_agent.py"), "--compose", str(compose), "--project", project,
             "--state-dir", str(state), "--socket", str(ipc), "--manifest-file", str(feed),
-            "--allow-beta", "--namespace", registry + "/xhub", "--health-url", gateway_url,
+            "--enable-channel-switch", "--namespace", registry + "/xhub", "--health-url", gateway_url,
             "--health-url", console_url, "--health-timeout", "7",
         ]
         agent = subprocess.Popen(agent_args, stdout=out, stderr=out, cwd=ROOT)
@@ -190,7 +190,7 @@ def main():
         agent = subprocess.Popen(agent_args, stdout=out, stderr=out, cwd=ROOT)
         resources.callback(stop, agent)
         status = wait_for(lambda: json.loads(run("curl", "-fsS", "--unix-socket", str(ipc), "http://localhost/status", timeout=4)))
-        assert status["current"] == base["version"] and status["error"] == "rolled_back"
+        assert status["current"] == base["version"] and status["error"] == "rolled_back" and status["channel"] == "beta"
         print("Verified application rollback, durable state after updater restart, untouched PostgreSQL and Redis", flush=True)
         return 0
 

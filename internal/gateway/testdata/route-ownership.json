@@ -928,6 +928,7 @@
     "prefs": [
       "GET /admin/version-update",
       "POST /admin/version-update/apply",
+      "POST /admin/version-update/channel",
       "POST /admin/version-update/check",
       "POST /admin/version-update/rollback"
     ],

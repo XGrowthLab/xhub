@@ -26,6 +26,11 @@ func TestDecodeTarget(t *testing.T) {
 		{"check", "check", "{}", true},
 		{"apply", "apply", "{\"version\":\"v0.1.0-beta.1\",\"revision\":\"" + revision + "\"}", true},
 		{"rollback", "rollback", "{\"version\":\"v0.1.0\"}", true},
+		{"beta channel", "channel", "{\"channel\":\"beta\"}", true},
+		{"stable channel", "channel", "{\"channel\":\"stable\"}", true},
+		{"custom channel", "channel", "{\"channel\":\"nightly\"}", false},
+		{"channel with version", "channel", "{\"channel\":\"stable\",\"version\":\"v0.1.0\"}", false},
+		{"channel on check", "check", "{\"channel\":\"beta\"}", false},
 		{"unsafe version", "apply", "{\"version\":\"--help\",\"revision\":\"" + revision + "\"}", false},
 		{"missing revision", "apply", "{\"version\":\"v0.1.0\"}", false},
 		{"arbitrary image", "apply", "{\"image\":\"elsewhere/app\"}", false},
@@ -105,6 +110,18 @@ func TestUnixBridge(t *testing.T) {
 		case "/check":
 			w.WriteHeader(202)
 			_, _ = io.WriteString(w, "{\"enabled\":true,\"stage\":\"checking\"}")
+		case "/channel":
+			var request map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("read channel request: %v", err)
+				return
+			}
+			if request["channel"] == "stable" {
+				w.WriteHeader(403)
+				return
+			}
+			observed <- request
+			_, _ = io.WriteString(w, "{\"enabled\":true,\"channel\":\"beta\",\"channel_switch_enabled\":true,\"secret\":\"hidden\"}")
 		case "/apply":
 			var request map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&request); err == nil {
@@ -141,6 +158,8 @@ func TestUnixBridge(t *testing.T) {
 		{"GET", "", "", 200},
 		{"POST", "/check", "{}", 202},
 		{"POST", "/apply", "{\"version\":\"v0.1.0-beta.2\",\"revision\":\"" + strings.Repeat("1", 40) + "\"}", 409},
+		{"POST", "/channel", "{\"channel\":\"beta\"}", 200},
+		{"POST", "/channel", "{\"channel\":\"stable\"}", 403},
 		{"POST", "/rollback", "{\"version\":\"v0.1.0-beta.1\"}", 502},
 		{"POST", "/rollback", "{\"version\":\"v0.1.0-beta.3\"}", 503},
 	} {
@@ -157,6 +176,14 @@ func TestUnixBridge(t *testing.T) {
 		}
 	default:
 		t.Fatal("valid apply did not reach the agent")
+	}
+	select {
+	case body := <-observed:
+		if body["actor"] != "internal-admin" || body["channel"] != "beta" || len(body) != 2 {
+			t.Fatalf("wrong channel payload: %v", body)
+		}
+	default:
+		t.Fatal("valid channel did not reach the agent")
 	}
 	_ = agent.Close()
 	w := httptest.NewRecorder()

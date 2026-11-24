@@ -28,3 +28,13 @@ it("does not retry an operation when the update connection closes", async () => 
     accessToken: "fixture-session", body: target,
   });
 });
+
+/** 平台管理员保存渠道时只提交选项和既有会话，成功返回主机确认的状态，结束清空模拟客户端。 */
+it("submits a channel to the authenticated version update endpoint", async () => {
+  const status = { enabled: true, channel: "beta", channel_switch_enabled: true };
+  post.mockResolvedValue(status);
+  await expect(submitVersionUpdate("channel", { channel: "beta" })).resolves.toEqual(status);
+  expect(post).toHaveBeenCalledExactlyOnceWith("/admin/version-update/channel", {
+    accessToken: "fixture-session", body: { channel: "beta" },
+  });
+});

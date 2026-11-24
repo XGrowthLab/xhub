@@ -13,7 +13,7 @@ async function expectRunningVersions(page: Page, version: string) {
   }
 }
 
-/** 真实浏览器经单独网关及 Unix 执行器检查、升级、刷新、双语切换和回退。动态清单由本地 Registry 提供。
+/** 真实浏览器经网关及 Unix 执行器切换渠道、检查、升级、刷新、双语切换和回退。动态清单由本地 Registry 提供。
  * 需要 version_update_fixture.py 运行；脚本负责回收 Compose、镜像和状态文件。
  */
 test("version update switches both application images and restores a failed release", async ({ page }) => {
@@ -28,6 +28,12 @@ test("version update switches both application images and restores a failed rele
   await page.getByRole("tab", { name: "版本更新", exact: true }).click();
   await expect(page.getByText("v0.1.0-beta.1", { exact: true })).toBeVisible();
   const feed = process.env.E2E_VERSION_FEED!;
+  await expect(page.getByText("正式版渠道", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(page.getByText("当前渠道没有更新版本。")).toBeVisible();
+  await page.getByRole("button", { name: "切换到测试版渠道", exact: true }).click();
+  await expect(page.getByText("测试版渠道", { exact: true })).toBeVisible();
+  await expect(page.getByText("当前渠道没有更新版本。")).toBeHidden();
   copyFileSync(join(dirname(feed), "invalid.json"), feed);
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "检查更新失败，请检查发布源和运行中的镜像。" })).toBeVisible();
@@ -36,6 +42,11 @@ test("version update switches both application images and restores a failed rele
   await page.getByRole("button", { name: "检查更新", exact: true }).click();
   await expect(page.getByRole("heading", { name: /可更新到 v0\.1\.0-beta\.2/ })).toBeVisible();
   await expect(page.getByText("测试版", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "切换到正式版渠道", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /可更新到 v0\.1\.0-beta\.2/ })).toBeHidden();
+  await page.getByRole("button", { name: "切换到测试版渠道", exact: true }).click();
+  await expect(page.getByText("测试版渠道", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
 
   const update = page.getByRole("button", { name: "立即更新", exact: true });
   await update.click();
@@ -51,6 +62,7 @@ test("version update switches both application images and restores a failed rele
   await page.reload();
   await page.getByRole("button", { name: "English", exact: true }).click();
   await page.getByRole("tab", { name: "Version updates", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Switch to stable channel", exact: true })).toBeVisible();
   await expect(page.getByText("Operation complete. Current version v0.1.0-beta.2.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Roll back", exact: true }).click();
   await page.getByRole("dialog", { name: "Roll back to v0.1.0-beta.1" }).getByRole("button", { name: "Confirm", exact: true }).click();

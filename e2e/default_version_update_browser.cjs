@@ -18,6 +18,7 @@ async function run(consoleURL, gatewayURL, version) {
     await page.getByRole("tab", { name: "版本更新", exact: true }).click();
     await expect(page.getByText(version || "未识别", { exact: true })).toBeVisible({ timeout: 20000 });
     await expect(page.getByText("正式版渠道", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "切换到测试版渠道", exact: true })).toBeEnabled();
     await page.getByRole("button", { name: "检查更新", exact: true }).click();
     const current = page.getByText("当前渠道没有更新版本。", { exact: true });
     const candidate = page.getByRole("heading", { name: /可更新到 v/ });
@@ -30,6 +31,7 @@ async function run(consoleURL, gatewayURL, version) {
     await page.getByRole("button", { name: "English", exact: true }).click();
     await page.getByRole("tab", { name: "Version updates", exact: true }).click();
     await expect(page.getByRole("button", { name: "Check for updates", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Switch to beta channel", exact: true })).toBeEnabled();
     console.log(JSON.stringify({ passed: 1, version, authenticatedCheck: true, anonymousStatus: unauthorized.status, locales: ["zh-CN", "en"] }));
   } finally {
     await browser.close();

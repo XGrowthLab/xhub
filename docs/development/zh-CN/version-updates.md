@@ -1,6 +1,6 @@
 # 控制台更新与回退
 
-平台管理员打开「管理员设置 → 版本更新」检查发布版本。页面展示当前版本、发布渠道、目标版本和说明。确认后，独立主机执行器校验并切换网关及控制台镜像。刷新页面可继续查看任务。服务器需要一次性的启用配置。
+平台管理员打开「管理员设置 → 版本更新」检查发布版本。标准安装可在同一页面切换正式和测试版渠道。切换后重新检查，可以看到所选渠道的候选版本。确认升级后，独立主机执行器校验并切换网关及控制台镜像。刷新页面可继续查看任务。
 
 ## 正式与测试发布
 
@@ -17,7 +17,7 @@
 1. 将 deploy/update_agent.py 与 deploy/update_manifest.py 安装在同一只允许主机管理员修改的目录，例如 /opt/xhub-updater。
 2. 拷贝 deploy/xhub-updater.service.example 为自己的 systemd 服务并校对 Compose 绝对路径、项目名和健康地址。默认从 XGrowthLab/xhub 读取发布。私有仓库可在受保护的 EnvironmentFile 中配置只读 XHUB_RELEASE_TOKEN。镜像仓库凭据由主机 Docker 管理。
 3. 网关设置 XHUB_UPDATE_SOCKET=/run/xhub-updater/agent.sock，并将 /run/xhub-updater 目录只读挂载到容器同一路径。挂载目录可在进程重启后重新连接新的套接字。目录与套接字的访问权限需允许网关进程。
-4. 启动主机服务并按一次性部署步骤重建网关。默认正式渠道。测试实例可在服务的 ExecStart 末尾加 --allow-beta。私有镜像源或离线场景可由主机管理员提供 --namespace 及 --manifest-file。
+4. 启动主机服务并按一次性部署步骤重建网关。默认正式渠道，`--allow-beta` 为新实例选择测试版渠道。已有主机可在 ExecStart 加 `--enable-channel-switch`，重新加载 systemd 配置和重启执行器后允许控制台保存渠道。标准安装已包含此参数。移除此参数可让渠道固定由主机决定。私有镜像源或离线场景可由主机管理员提供 --namespace 及 --manifest-file。
 
 默认健康地址为 http://127.0.0.1:4000/health/readiness 和 http://127.0.0.1:3000/login。本机端口或私网 IPv4 绑定不一致时，分别通过两个 --health-url 参数指定。管理接口只访问这个 Unix socket，Docker 权限留在执行器。项目下应只有一个网关和一个控制台实例。
 
