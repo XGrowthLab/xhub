@@ -886,7 +886,7 @@ export const en = {
     tokenRates: "Token rates",
     tokenRatesHint: "USD per 1M tokens.",
     unitRates: "Per-unit rates",
-    unitRatesHint: "Per image or per second.",
+    unitRatesHint: "Per image, per second, or per request.",
     invalidRate: "Enter a finite number greater than or equal to zero.",
     providerSlug: "Provider slug",
     providerSlugExample: "acme",

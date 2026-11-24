@@ -193,3 +193,13 @@ it.each([
     new URL(path + "?page=2", process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000").href,
   );
 });
+
+/** 校验直达、/ui 与 /gw 三种常规代理路径都使用配置的网关及原始查询。无请求发送和环境清理。 */
+it.each(["/v1/models", "/ui/v1/models", "/gw/v1/models"])("keeps the configured gateway and original query for %s", (path) => {
+  const query = "?label=a&label=b&model=with%2Bplus";
+  const response = middleware(new NextRequest(`https://console.example${path}${query}`));
+  const rewritten = new URL(response.headers.get("x-middleware-rewrite")!);
+  expect(rewritten.origin).toBe(new URL(process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000").origin);
+  expect(rewritten.pathname).toBe("/v1/models");
+  expect(rewritten.search).toBe(query);
+});

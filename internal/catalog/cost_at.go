@@ -551,10 +551,8 @@ const searchVariant = "search"
 // Two normalizations happen here, both because the feed's spelling and the
 // gateway's billable quantity are not one-to-one:
 //
-//   - A per-query price arrives spelled as a second (web_search_req has
-//     unit_name "second" and a "search" qualifier). It is indexed under the
-//     query measure too, so a call that reported searches is billed for them
-//     rather than for a duration it never reported.
+//   - 现代搜索费率与历史 second/search 费率都可按搜索次数精确命中。
+//     已有无变体的按次项或历史兼容项仍沿用原查价顺序，明确的搜索费率不参与最低价兜底。
 //   - A side quoted only in variants gets a fallback rate, chosen once here
 //     rather than per lookup, so the same model always bills the same way. The
 //     cheapest variant wins, and ties break on the key name; see cheapestFallback.
@@ -569,31 +567,35 @@ func newLookup(rates []Rate) rateLookup {
 		fallback: map[string]Rate{},
 	}
 	variants := map[string]map[string]Rate{}
+	var searchAliases map[string]Rate
 	for _, r := range rates {
 		if r.Measure == "" {
 			continue
 		}
-		// A search price is a query count. File it under both spellings so the
-		// call's own quantity decides which one is read.
 		asQuery, search := r.WebSearchQuery()
-		legacySearch := search && r.Measure != asQuery.Measure
-		if legacySearch {
+		if search && r.Variant != "" {
 			asQuery.Variant = ""
-			if key := rateKey("query", r.Side, "", r.Window); l.byKey[key].Measure == "" {
-				l.byKey[key] = asQuery
+			key := rateKey("query", r.Side, "", r.Window)
+			if r.Measure != asQuery.Measure {
+				// 历史配置原有的精确按次映射保持优先级。现代带变体的搜索项仅填补缺失的精确项。
+				if _, exists := l.byKey[key]; !exists {
+					l.byKey[key] = asQuery
+				}
+			} else {
+				if searchAliases == nil {
+					searchAliases = make(map[string]Rate)
+				}
+				if _, exists := searchAliases[key]; !exists {
+					searchAliases[key] = asQuery
+				}
 			}
 		}
 		key := rateKey(r.Measure, r.Side, r.Variant, r.Window)
 		if _, exists := l.byKey[key]; !exists {
 			l.byKey[key] = r
 		}
-		if r.Variant == "" {
-			continue
-		}
-		// Only a duration may be billed as a duration. The search qualifier is
-		// excluded here as well as being indexed as a query above, so a model
-		// that quotes searches is not charged for them twice under two measures.
-		if legacySearch {
+		// 搜索费率只匹配搜索次数，且不从其他变体中猜价。
+		if r.Variant == "" || search {
 			continue
 		}
 		side := sideKey(r.Measure, r.Side, r.Window)
@@ -604,6 +606,11 @@ func newLookup(rates []Rate) rateLookup {
 		}
 		if _, exists := group[r.Variant]; !exists {
 			group[r.Variant] = r
+		}
+	}
+	for key, rate := range searchAliases {
+		if _, exists := l.byKey[key]; !exists {
+			l.byKey[key] = rate
 		}
 	}
 	for side, group := range variants {

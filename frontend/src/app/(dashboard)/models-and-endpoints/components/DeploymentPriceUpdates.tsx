@@ -173,6 +173,7 @@ function DeploymentPriceComparisonTable({ row }: { row: DeploymentPrice }) {
                 if (!current) change = t("marketSync.priceAdded");
                 else if (!proposed) change = t("marketSync.priceRemoved");
                 else if (current.rate.measure !== proposed.rate.measure) change = t("marketSync.unitChanged");
+                else if (current.rate.usd !== proposed.rate.usd) change = t("marketSync.priceChanged");
               }
               return (
                 <tr key={index} className="border-t align-top">

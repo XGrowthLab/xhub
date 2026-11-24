@@ -41,6 +41,13 @@ export function registerLegacyRoutes(locale: Locale) {
     await expect(page.getByRole("link", { name: label("Chat"), exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: label("Chat"), exact: true })).toHaveCount(0);
 
+    await stableGoto(page, "/?page=chat&from=legacy");
+    await expect(page).toHaveURL(/\/ui\/playground\/?\?from=legacy$/);
+    await expect(page.getByRole("link", { name: label("nav.playground"), exact: true, disabled: false })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
     for (const route of retiredConsolePaths) {
       const response = await page.request.get(CONSOLE_HTTP + route, { maxRedirects: 0 });
       expect(response.status(), route).toBe(410);

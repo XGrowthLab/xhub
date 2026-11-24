@@ -891,6 +891,9 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
         }
+        if model in ("e2e-price-one", "e2e-price-two"):
+            # 调价场景同时核对真实搜索次数、费率来源和 Token 结算。
+            payload["usage"]["searches"] = 2
         self._json(payload, diagnostic_model=model)
 
     def _error_log_response(self, model: str) -> bool:

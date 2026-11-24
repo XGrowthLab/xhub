@@ -195,8 +195,8 @@ func TestModelContractMarketPriceConfirmation(t *testing.T) {
 	}
 }
 
-// TestMarketSearchPriceUnits 以真实价格预览、部署确认、推理和日志接口核对历史搜索计价。
-// 本地供应商同时上报搜索次数和时长，旧搜索标记与市场报价只按次数收费。测试框架回收专用 schema 和服务器。
+// TestMarketSearchPriceUnits 以真实价格预览、部署确认、推理和日志接口核对搜索计价。
+// 本地供应商同时上报搜索次数和时长。历史与市场费率均精确按次收费，测试框架回收专用 schema 和服务器。
 func TestMarketSearchPriceUnits(t *testing.T) {
 	h := newHarness(t)
 	admin := h.adminSession()
@@ -236,6 +236,9 @@ func TestMarketSearchPriceUnits(t *testing.T) {
 		for _, item := range listField(bill, "applied") {
 			switch item["measure"] {
 			case "query":
+				if item["fallback"] == true {
+					t.Fatalf("已配置的搜索费率被记为兜底：%v", item)
+				}
 				searchCount += numberOrZero(item["quantity"])
 			case "second":
 				t.Fatalf("搜索报价错误扣取时长费用：%v", item)

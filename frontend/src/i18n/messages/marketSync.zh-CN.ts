@@ -27,6 +27,7 @@ export const marketSync = {
   priceAdded: "新增",
   priceRemoved: "移除",
   unitChanged: "单位变化",
+  priceChanged: "价格变化",
   action: "操作",
   select: "选择 {name}",
   manual: "手工定价",

@@ -95,6 +95,15 @@ export function brandIconReadPath(method: string, pathname: string): string | nu
   return pathname === "/icon.svg" || pathname === "/ui/icon.svg" ? "/icon.svg" : null;
 }
 
+/** 在固定的网关地址上替换路径和查询；返回仅供中间件重写的 URL，无网络请求或数据写入。 */
+function gatewayURL(pathname: string, search: string): URL {
+  const url = new URL(GATEWAY);
+  url.pathname = pathname;
+  url.search = search;
+  url.hash = "";
+  return url;
+}
+
 /** 分发 Next 请求并保留查询参数和请求正文；返回页面、兼容跳转或网关重写。
  * 退役页面读请求返回不可缓存的 410；/gw 和写入保持交给网关，避免拦截同名 API。 */
 export function middleware(req: NextRequest) {
@@ -116,7 +125,7 @@ export function middleware(req: NextRequest) {
   }
 
   if (pathname === "/gw" || pathname.startsWith("/gw/")) {
-    return NextResponse.rewrite(new URL(stripSlash(pathname.slice(3)) + search, GATEWAY));
+    return NextResponse.rewrite(gatewayURL(stripSlash(pathname.slice(3)), search));
   }
 
   const path = uiAliasPath(pathname);
@@ -142,7 +151,7 @@ export function middleware(req: NextRequest) {
     }
   }
 
-  return NextResponse.rewrite(new URL(path + search, GATEWAY));
+  return NextResponse.rewrite(gatewayURL(path, search));
 }
 
 export const config = {

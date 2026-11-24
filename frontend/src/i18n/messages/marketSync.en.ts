@@ -35,6 +35,7 @@ export const marketSync = {
   priceAdded: "Added",
   priceRemoved: "Removed",
   unitChanged: "Unit changed",
+  priceChanged: "Price changed",
   action: "Action",
   select: "Select {name}",
   manual: "Manual pricing",

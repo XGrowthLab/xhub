@@ -8,7 +8,7 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     "price-data": "price-data",
     "llm-playground": "playground",
     projects: "projects",
-    chat: "chat",
+    chat: "playground",
     "model-monitor": "model-monitor",
     "guardrails-monitor": "guardrails-monitor",
     guardrails: "guardrails",
@@ -24,6 +24,8 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
   }),
 );
 
+/** 解析控制台首页的历史书签；参数为已有查询，返回保留其余查询的当前页面地址，未知页返回 null。
+ * 从首页调用，不修改传入查询或发起跳转；旧 Chat 书签解析到仍可用的调试台。 */
 export function legacyPageRedirectHref(searchParams: URLSearchParams): string | null {
   const page = searchParams.get("page");
   const route = page === null ? undefined : LEGACY_PAGE_ROUTES.get(page);

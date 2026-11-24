@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./helpers";
+import { waitForLog } from "./product-fixes-scenario";
 /** 用途：注册独立场景「market refresh preserves local records and listing state」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC111() {
   test("market refresh preserves local records and listing state", async ({ page }) => {
@@ -110,7 +111,7 @@ export function registerSC111() {
     expect((await page.request.delete(GATEWAY + "/schedule/model_cost_map_reload", { headers })).status()).toBe(200);
   });
   /** 真实浏览器确认单个及批量调价，并经网关调用验证费用变化；使用本地上游和独立数据库。
-   * 覆盖中英文、历史搜索价对齐、取消不写、过期批次整笔回滚和实际计费；finally 删除测试部署。 */
+   * 覆盖中英文、历史搜索价对齐、取消不写、过期批次整笔回滚和实际按次计费；finally 删除测试部署。 */
   test("market deployment prices require explicit single or batch confirmation", async ({ page }) => {
     await loginAdmin(page);
     const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
@@ -153,7 +154,8 @@ export function registerSC111() {
         expect(result.status(), await result.text()).toBe(200);
         ids.push((await result.json()).model_info.id);
       }
-      const cost = async (name: string, prompt: string) => {
+      /** 发起隔离部署的真实调用，按模型、测试提示词和预期的按次价校验持久化账单；返回总额供调价对照。 */
+      const cost = async (name: string, prompt: string, searchRate = 0.01) => {
         const result = await page.request.post(GATEWAY + "/bypass/openai/v1/chat/completions", {
           headers,
           data: { model: name, messages: [{ role: "user", content: prompt }] },
@@ -161,6 +163,14 @@ export function registerSC111() {
         expect(result.status(), await result.text()).toBe(200);
         const amount = Number(result.headers()["x-litellm-response-cost"]);
         expect(Number.isFinite(amount), "请求必须返回完整、有效的计费金额").toBe(true);
+        const callID = result.headers()["x-litellm-call-id"];
+        expect(callID).toBeTruthy();
+        const log = await waitForLog(page.request, headers, callID);
+        expect(log.metadata.cost_breakdown.total_cost).toBeCloseTo(amount, 10);
+        const searchLines = log.metadata.cost_breakdown.applied.filter(({ measure }: { measure: string }) => measure === "query");
+        expect(searchLines).toHaveLength(1);
+        expect(searchLines[0]).toMatchObject({ quantity: 2, usd: searchRate });
+        expect(searchLines[0].fallback ?? false).toBe(false);
         return amount;
       };
       // 保存另一名管理员此刻看到的批量预览，用来验证并发提交不会覆盖已确认的价格。
@@ -180,6 +190,10 @@ export function registerSC111() {
       await expect(visibleSearch.getByRole("cell").last()).toHaveText(/^\$0\.01\s*\/\s*次$/);
       await modelDetail.getByRole("button", { name: t("Close"), exact: true }).click();
       await stableGoto(page, "/price-data");
+      await page.getByRole("button", { name: "添加模型", exact: true }).click();
+      const addModel = page.getByRole("dialog", { name: "添加模型", exact: true });
+      await expect(addModel.getByText("按张、按秒或按次计费。", { exact: true })).toBeVisible();
+      await addModel.getByRole("button", { name: "取消", exact: true }).click();
       await page.getByRole("tab", { name: "部署价格更新", exact: true }).click();
       const section = page.getByRole("region", { name: "部署价格更新", exact: true });
       await expect(section.getByRole("button", { name: "核对已选价格（0）" })).toBeDisabled();
@@ -189,13 +203,14 @@ export function registerSC111() {
       await expect(dialog).toContainText("此操作会覆盖该部署的手工价格。");
       const search = dialog.getByRole("row", { name: /^联网搜索/ });
       await expect(search.getByRole("cell")).toHaveText(["$0.01 / 次", "$0.02 / 次"]);
+      await expect(search).toContainText("价格变化");
       await expect(search).not.toContainText("单位变化");
       await dialog.getByRole("button", { name: "取消", exact: true }).click();
       expect(await cost("e2e-price-one", "After cancel")).toBe(before);
       await first.getByRole("button", { name: "核对并更新" }).click();
       await dialog.getByRole("button", { name: "确认更新价格" }).click();
       await expect(section.getByRole("status")).toHaveText("已更新 1 个部署的价格。");
-      expect(await cost("e2e-price-one", "After confirm")).toBeCloseTo(before * 2, 10);
+      expect(await cost("e2e-price-one", "After confirm", 0.02)).toBeCloseTo(before * 2, 10);
       const staleBatch = await page.request.post(GATEWAY + "/price/deployments/apply", {
         headers,
         data: { items: originalItems },
@@ -203,6 +218,11 @@ export function registerSC111() {
       expect(staleBatch.status(), await staleBatch.text()).toBe(409);
       expect(await cost("e2e-price-two", "Unselected deployment")).toBe(before);
       await page.getByRole("button", { name: "English", exact: true }).click();
+      await stableGoto(page, "/price-data");
+      await page.getByRole("button", { name: "Add model", exact: true }).click();
+      const addModelEnglish = page.getByRole("dialog", { name: "Add model", exact: true });
+      await expect(addModelEnglish.getByText("Per image, per second, or per request.", { exact: true })).toBeVisible();
+      await addModelEnglish.getByRole("button", { name: "Cancel", exact: true }).click();
       await page.getByRole("tab", { name: "Deployment price updates", exact: true }).click();
       const english = page.getByRole("region", { name: "Deployment price updates", exact: true });
       await expect(english).toContainText("Market data updates daily");
@@ -210,10 +230,12 @@ export function registerSC111() {
       await english.getByRole("button", { name: "Review selected prices (1)", exact: true }).click();
       const confirm = page.getByRole("dialog", { name: "Confirm prices for 1 deployments" });
       await expect(confirm).toContainText("This replaces this deployment’s manually configured prices.");
-      await expect(confirm.getByRole("row", { name: /^Web search/ }).getByRole("cell")).toHaveText(["$0.01 / request", "$0.02 / request"]);
+      const searchEnglish = confirm.getByRole("row", { name: /^Web search/ });
+      await expect(searchEnglish.getByRole("cell")).toHaveText(["$0.01 / request", "$0.02 / request"]);
+      await expect(searchEnglish).toContainText("Price changed");
       await confirm.getByRole("button", { name: "Confirm price update", exact: true }).click();
       await expect(english.getByRole("status")).toHaveText("Updated prices for 1 deployments.");
-      expect(await cost("e2e-price-two", "Batch confirmed")).toBeCloseTo(before * 2, 10);
+      expect(await cost("e2e-price-two", "Batch confirmed", 0.02)).toBeCloseTo(before * 2, 10);
       await page.getByRole("button", { name: "中文", exact: true }).click();
     } finally {
       for (const id of ids)
