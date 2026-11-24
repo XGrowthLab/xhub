@@ -81,3 +81,81 @@ func TestQuotaAndRatesScope(t *testing.T) {
 		}
 	}
 }
+
+// TestQuotaSnapshotSingleRead 验证真实 PostgreSQL 单次读取的节点、父子关系、额度、周期及速率与管理端一致。
+// 参数 t 提供隔离 schema；修改团队限额后复读应立即生效，模拟历史多团队数据时必须拒绝，由 testDB 清理全部数据。
+func TestQuotaSnapshotSingleRead(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	org, err := db.CreateOrg(ctx, Actor{}, "snapshot", quotaLimit(250))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpm, tpm := 17, 301
+	team, err := db.CreateTeam(ctx, Actor{}, TeamInput{OrganizationID: org.ID, Name: "primary", RPMLimit: &rpm, TPMLimit: &tpm})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := db.CreateTeam(ctx, Actor{}, TeamInput{OrganizationID: org.ID, Name: "sibling", MaxBudget: quotaLimit(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := db.CreateUser(ctx, Actor{}, UserInput{Email: "snapshot@example.invalid", Password: "password123", TeamID: team.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := db.CreateKey(ctx, Actor{}, KeyInput{OwnerType: OwnerPersonal, UserID: user.ID, MaxBudget: quotaLimit(14)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := db.Engine.Exec("UPDATE users SET budget_period_start = ?, spend = 1.25 WHERE id = ?", start, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	s := db.session(ctx)
+	defer s.Close()
+	want, err := quotaTree(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := &pendingSQLHook{}
+	db.Engine.AddHook(hook)
+	for _, subject := range []struct{ kind, id string }{{"key", key.ID}, {"user", user.ID}} {
+		before := hook.count.Load()
+		got, err := quotaTreeFor(s, subject.kind, subject.id)
+		if err != nil || len(got) != len(want) || hook.count.Load()-before != 1 {
+			t.Fatalf("%s 额度树应一次读全同组织节点：nodes=%d/%d sql=%d err=%v", subject.kind, len(got), len(want), hook.count.Load()-before, err)
+		}
+		for id, expected := range want {
+			if got[id] == nil {
+				t.Fatalf("额度树缺少节点 %s", id)
+			}
+			actual, reference := *got[id], *expected
+			if len(actual.Children) != len(reference.Children) {
+				t.Fatalf("%s 的直属子节点数错误：%d/%d", id, len(actual.Children), len(reference.Children))
+			}
+			actual.Children, reference.Children = nil, nil
+			if !reflect.DeepEqual(actual, reference) {
+				t.Fatalf("%s 的额度、速率、周期或父级不一致：got=%+v want=%+v", id, actual, reference)
+			}
+		}
+	}
+	if _, err := db.Engine.Exec("UPDATE teams SET max_budget = 0 WHERE id = ?", team.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CheckSoftBudgetBalance(ctx, "key", key.ID, nil); !errors.Is(err, ErrBudgetUnavailable) {
+		t.Fatalf("下一次出站必须读取修改后的团队预算，实际错误 %v", err)
+	}
+	// 仅在本测试的独立 schema 中构造升级前可能遗留的双重归属，两个入口都应拒绝。
+	if _, err := db.Engine.Exec("ALTER TABLE team_members DROP CONSTRAINT team_members_user_id_key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Engine.Exec("INSERT INTO team_members(team_id, user_id) VALUES (?, ?)", sibling.ID, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, subject := range []struct{ kind, id string }{{"user", user.ID}, {"key", key.ID}} {
+		if _, err := quotaTreeFor(s, subject.kind, subject.id); !errors.Is(err, ErrMultipleTeams) {
+			t.Fatalf("%s 多团队归属必须拒绝：%v", subject.kind, err)
+		}
+	}
+}

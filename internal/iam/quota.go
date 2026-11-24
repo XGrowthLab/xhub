@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"math"
 	"time"
@@ -22,13 +23,15 @@ var ErrMultipleTeams = errors.New("a person may belong to only one team")
 
 // quotaNode 是额度树节点；null 共享父级，固定额度保留未消费部分，历史消费留在父级。
 type quotaNode struct {
-	ID, Parent, Kind string
-	HotID            string
-	RPM, TPM         *int
-	Limit            *float64
-	Spend            float64
-	PeriodStart      *time.Time
-	Children         []*quotaNode
+	ID           string `xorm:"'id'"`
+	Parent, Kind string
+	HotID        string
+	RPM          *int     `xorm:"'rpm_limit'"`
+	TPM          *int     `xorm:"'tpm_limit'"`
+	Limit        *float64 `xorm:"'max_budget'"`
+	Spend        float64
+	PeriodStart  *time.Time
+	Children     []*quotaNode `xorm:"-"`
 }
 
 // quotaUnused 计算组织、团队、个人仍需由父级保留的金额；Key 仅校验单项金额，不预留。参数 n 是树节点；返回未消费保留金额或非法分配错误。
@@ -64,93 +67,26 @@ func quotaUnused(n *quotaNode) (float64, error) {
 	return remaining, nil
 }
 
-// quotaTree 读取当前事务的额度归属；参数 s 是会话，返回节点索引或数据库错误。
-// 调用：分配校验、运行时检查；所有密钥只能沿用户唯一团队消费，项目是额外上限。
+// quotaTree 从会话 s 读取全局额度树，返回节点索引或数据库错误，供管理端校验分配使用。
+// 所有密钥沿用户的唯一团队消费，项目另设上限；请求准入使用 quotaTreeFor 限定读取范围。
 func quotaTree(s *xorm.Session) (map[string]*quotaNode, error) {
-	return quotaTreeFor(s, "", "")
-}
-
-// quotaTreeFor 读取管理校验的完整树，或运行时主体所属组织的额度树。
-// 参数 s 为数据库会话，kind/id 为空时供管理事务校验，否则仅支持 user/key；返回已链接节点或归属错误。
-// 保留同组织兄弟及后代的固定额度，团队外个人只读取自己；不缓存跨请求配置，不读取无关组织热消费。
-func quotaTreeFor(s *xorm.Session, kind, id string) (map[string]*quotaNode, error) {
 	nodes := map[string]*quotaNode{}
 	var orgs []Organization
 	var teams []Team
 	var users []User
 	var keys []Key
 	var members []TeamMembership
-	userID, orgID := "", ""
-	if kind != "" {
-		userID = id
-		if kind == "key" {
-			var key Key
-			ok, err := s.ID(id).Get(&key)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return nil, ErrNotFound
-			}
-			if key.UserID == nil || *key.UserID == "" {
-				return nil, ErrInvalid
-			}
-			userID = *key.UserID
-		} else if kind != "user" {
-			return nil, ErrInvalid
-		}
-		if err := s.Where("user_id = ?", userID).Find(&members); err != nil {
-			return nil, err
-		}
-		if len(members) > 1 {
-			return nil, ErrMultipleTeams
-		}
-		if len(members) == 1 {
-			var team Team
-			ok, err := s.ID(members[0].TeamID).Get(&team)
-			if err != nil {
-				return nil, err
-			}
-			if !ok || team.OrganizationID == "" {
-				return nil, ErrInvalid
-			}
-			orgID = team.OrganizationID
-		}
-	}
-	if kind != "" {
-		s.Where("id = ?", orgID)
-	}
 	if err := s.Find(&orgs); err != nil {
 		return nil, err
-	}
-	if kind != "" {
-		s.Where("organization_id = ?", orgID)
 	}
 	if err := s.Find(&teams); err != nil {
 		return nil, err
 	}
-	// 成员查询按组织界定用户，随后读取这些用户的全部归属，以拒绝跨组织的多团队脏数据。
-	userFilter := "id = ?"
-	userArg := userID
-	if orgID != "" {
-		userFilter = "id IN (SELECT user_id FROM team_members WHERE team_id IN (SELECT id FROM teams WHERE organization_id = ?))"
-		userArg = orgID
-	}
-	if kind != "" {
-		s.Where(userFilter, userArg)
-	}
 	if err := s.Find(&users); err != nil {
 		return nil, err
 	}
-	if kind != "" {
-		s.Where("user_id IN (SELECT id FROM users WHERE "+userFilter+")", userArg)
-	}
 	if err := s.Find(&keys); err != nil {
 		return nil, err
-	}
-	members = nil
-	if kind != "" {
-		s.Where("user_id IN (SELECT id FROM users WHERE "+userFilter+")", userArg)
 	}
 	if err := s.Find(&members); err != nil {
 		return nil, err
@@ -185,12 +121,61 @@ func quotaTreeFor(s *xorm.Session, kind, id string) (map[string]*quotaNode, erro
 		}
 		nodes["key:"+k.ID] = &quotaNode{ID: k.ID, Kind: "key", HotID: k.ID, Parent: parent, Limit: k.MaxBudget, Spend: k.Spend, RPM: k.RPMLimit, TPM: k.TPMLimit}
 	}
+	return linkQuotaNodes(nodes), nil
+}
+
+// scopedQuotaSQL 只投影运行时额度与速率字段，在一次数据库读取中取得主体和同组织的兄弟节点。
+//
+//go:embed quota_scoped.sql
+var scopedQuotaSQL string
+
+// quotaTreeFor 在一个数据库语句快照内读取 user/key 所属组织的额度树，供预算、限流和预占使用。
+// s 是调用方会话，每次调用均重新读取。无团队用户只取本人；归属缺失、非法或多团队均返回原错误。
+// 空 kind 沿用管理端完整额度树，用于组织分配校验。
+func quotaTreeFor(s *xorm.Session, kind, id string) (map[string]*quotaNode, error) {
+	if kind == "" {
+		return quotaTree(s)
+	}
+	if kind != "user" && kind != "key" {
+		return nil, ErrInvalid
+	}
+	var rows []quotaNode
+	if err := s.SQL(scopedQuotaSQL, kind, id).Find(&rows); err != nil {
+		return nil, err
+	}
+	nodes := make(map[string]*quotaNode, len(rows))
+	for i := range rows {
+		n := &rows[i]
+		if n.Kind == "scope" {
+			// 定位结果单独返回；无团队是合法归属，不能和失效密钥混为一谈。
+			switch n.Parent {
+			case "missing":
+				return nil, ErrNotFound
+			case "multiple":
+				return nil, ErrMultipleTeams
+			case "":
+				continue
+			default:
+				return nil, ErrInvalid
+			}
+		}
+		if n.Kind == "key" {
+			n.HotID = n.ID
+		}
+		nodes[n.Kind+":"+n.ID] = n
+	}
+	return linkQuotaNodes(nodes), nil
+}
+
+// linkQuotaNodes 把新读取的节点挂到直属父级，返回同一索引，供管理端和运行时共用。
+// nodes 必须尚未链接，未知或不唯一的父级不挂接，后续按原规则验证归属。
+func linkQuotaNodes(nodes map[string]*quotaNode) map[string]*quotaNode {
 	for _, n := range nodes {
 		if p := nodes[n.Parent]; p != nil {
 			p.Children = append(p.Children, n)
 		}
 	}
-	return nodes, nil
+	return nodes
 }
 
 // validateQuota 校验指定节点及祖先。参数 kind/id 标识修改对象；返回分配错误，事务调用方负责回滚。
