@@ -23,7 +23,24 @@ Use a **fresh PostgreSQL database**.
 
 *Figure 1: Entry points and service responsibilities. Browsers use the console; applications call the gateway directly. See the configuration below for connections.*
 
-Clone the repository and build the gateway and console locally:
+### Install on Linux with version checks
+
+Use Linux with systemd, Python 3.10 or later, and the build and Docker dependencies listed above.
+
+```bash
+git clone https://github.com/qiniu/xhub.git
+cd xhub
+bash deploy/build.sh
+sudo python3 -B deploy/install.py
+```
+
+The installer starts the locally built gateway and console along with PostgreSQL and Redis. It stores the deployment in `/opt/xhub` and starts the systemd update service. Published ports bind to loopback. Change the initial administrator password before opening external access.
+
+Open **Administrator settings → Version updates** to check for releases. Stable is the default. In-console image switching requires a matching release image pair and access to the image registry. To start from a published x86-64 release, authenticate root Docker to GHCR and run `sudo python3 -B deploy/install.py --release` on a fresh host. If only prereleases exist, `--release` uses the latest prerelease for the initial install. Add `--beta` to follow prereleases too. See the [version update guide](development/en/version-updates.md) for an existing or customized deployment.
+
+### Build the Compose images from source
+
+For Docker Desktop or application development, you can run the Compose stack with the locally built images. On Linux, the installer above also starts the version update service.
 
 ```bash
 git clone https://github.com/qiniu/xhub.git

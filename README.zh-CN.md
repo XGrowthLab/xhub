@@ -152,28 +152,18 @@ flowchart LR
 
 ## Docker 安装与使用
 
-### 1. 准备环境
+### 1. 在 Linux 安装
 
-安装 [Docker Desktop](https://docs.docker.com/desktop/)（macOS/Windows），或 [Docker Engine](https://docs.docker.com/engine/install/) 与 [Compose 插件](https://docs.docker.com/compose/install/linux/)（Linux），启动 Docker 后检查：
-
-```bash
-docker version
-docker compose version
-```
-
-当前部署方式是在主机上构建，再打包为 Docker 镜像，因此还需要 **Git、Go 1.25、Node.js ≥24.14.1、npm ≥11.10.0**，以及可读取的系统 CA bundle。构建脚本会检测 Debian/Ubuntu、RHEL、macOS 和 Alpine 的常见路径；其它位置可通过 `XHUB_CA_CERT_FILE` 指定。构建脚本需要 Bash 环境；Windows 用户请在 WSL2 Linux 环境中安装上述工具并启用 Docker Desktop 的 WSL 集成。脚本支持 amd64/arm64，从 npmmirror 下载 Linux Node.js；完整要求见[安装指南](docs/getting-started.zh-CN.md)。
-
-### 2. 构建并启动
+在使用 systemd 的 Linux 主机上安装 [Docker Engine 与 Compose v2](https://docs.docker.com/compose/install/linux/)、Git、Go 1.25、Node.js 24.14.1+、npm 11.10+ 和 Python 3.10+。
 
 ```bash
 git clone https://github.com/qiniu/xhub.git
 cd xhub
 bash deploy/build.sh
-docker compose up -d --no-build
-docker compose ps
+sudo python3 -B deploy/install.py
 ```
 
-构建脚本生成本地 `xhub-gateway` 与 `xhub-console` 镜像。Compose 启动网关、控制台、PostgreSQL 和 Redis；PostgreSQL 数据保存在 `xhub-pg` 命名卷中。初次部署使用全新的数据库。
+安装命令启动 Compose 和主机执行器。「版本更新」默认开启，使用正式版渠道。已有 GHCR 镜像读取权限的用户可以用 `deploy/install.py --release` 从成套发布镜像起步，后续在界面执行切换。初次部署使用全新的数据库。macOS、Windows 和源码构建见[源码构建 Compose 镜像](docs/getting-started.zh-CN.md#源码构建-compose-镜像)。
 
 | 服务 | 用途与地址 |
 | --- | --- |
@@ -182,7 +172,7 @@ docker compose ps
 | PostgreSQL | 主机端口 `5433`，保存配置、身份与用量 |
 | Redis | Compose 内部服务，共享运行状态 |
 
-### 3. 登录并接入第一个模型
+### 2. 登录并接入第一个模型
 
 本地初始管理员为 `admin@xhub.local` / `admin-pass-1234`。登录后修改密码，再完成以下配置：
 
@@ -193,31 +183,9 @@ docker compose ps
 
 新安装默认没有模型部署。完整操作见[客户使用与管理手册](docs/user-guide.zh-CN.md)。
 
-### 4. 日常使用与更新
+### 3. 日常使用与更新
 
-```bash
-# 查看网关和控制台日志
-docker compose logs -f gateway console
-
-# 重启应用服务
-docker compose restart gateway console
-
-# 停止服务，保留 PostgreSQL 数据卷
-docker compose down
-
-# 再次启动
-docker compose up -d --no-build
-```
-
-更新前备份数据库，在仓库目录拉取新版本、重新构建并重建应用容器：
-
-```bash
-git pull --ff-only
-bash deploy/build.sh
-docker compose up -d --no-build --force-recreate gateway console
-```
-
-企业服务器部署时，在构建前设置 `NEXT_PUBLIC_BASE_URL` 为浏览器可访问的网关地址，并将 Compose 中的 `XHUB_PUBLIC_ORIGIN` 设置为同一公开 API 地址；控制台容器的 `XHUB_GATEWAY_ORIGIN` 保持为可访问网关的内部地址。初始化管理员等网关配置位于 `configs/config.docker.yaml`，修改后需重新构建镜像。初始密码配置只用于创建尚不存在的账号，已有账号通过控制台修改密码。详细配置见[部署配置](docs/getting-started.zh-CN.md#部署配置)。
+打开「管理员设置 → 版本更新」检查新版本。查看发布说明并备份数据库后，由平台管理员确认切换。已有实例接入、Docker 命令和回退操作见[版本更新指南](docs/development/zh-CN/version-updates.md)。
 
 ## 从源码运行
 
