@@ -91,6 +91,10 @@ type replayFailure struct {
 type Spool struct {
 	mu     sync.Mutex
 	writes mutationQueue
+	// probeMu 保护锁外探针的生命周期。Close 先取得它，再关闭根目录和进程锁。
+	probeMu    sync.Mutex
+	probePath  string
+	faultEpoch atomic.Uint64
 	// admissionTicket 在等待 mu 前分配。probedThrough 只覆盖开始实写探针前已经取票的调用。
 	admissionTicket atomic.Uint64
 	probedThrough   uint64
@@ -217,6 +221,13 @@ func Open(config Config) (*Spool, error) {
 		s.Close()
 		return nil, err
 	}
+	// 当前实例独占一个探针名，运行时扫描可跳过它。旧实例的探针已由上面的启动恢复清理。
+	suffix, err := token()
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	s.probePath = ".probe-live-" + suffix
 	return s, nil
 }
 
@@ -225,6 +236,8 @@ func (s *Spool) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -344,7 +357,7 @@ func (s *Spool) scanLocked(recover bool) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == ".lock" || name == ".spool-format" || name == "quarantine" {
+		if name == s.probePath || name == ".lock" || name == ".spool-format" || name == "quarantine" {
 			continue
 		}
 		temporary := strings.HasPrefix(name, ".pending-") && strings.HasSuffix(name, ".tmp")
@@ -425,7 +438,7 @@ func (s *Spool) statusLocked() (Status, error) {
 		return result, err
 	}
 	for _, entry := range entries {
-		if entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
+		if entry.Name() == s.probePath || entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
 			continue
 		}
 		info, err := entry.Info()
@@ -463,7 +476,7 @@ func (s *Spool) statusLocked() (Status, error) {
 // 已排队的准入不能沿用中途读写失败之前的探针，即使后一次写入恢复了队列状态。
 func (s *Spool) finishLocked(result *error) {
 	if *result != nil {
-		s.probedThrough = 0
+		s.invalidateProbeLocked()
 	}
 	s.mu.Unlock()
 }
@@ -491,14 +504,19 @@ func (s *Spool) ReserveForAttempt(callID string) error {
 	return s.reserve(callID, true, s.probeWritableLocked)
 }
 
-// reserve 为 callID 申请空间；renew 为真时替换上次普通尝试的预留，probe 在锁内验证可持久写入。
+// reserve 为 callID 申请空间；renew 为真时替换上次普通尝试的预留。普通路径用 probe 在锁内验证磁盘；新尝试遇到账单锁争用时可提前取得本次实写证明。
 // 每个请求先取票，随后逐个检查权限与容量；只有在其取票后才开始并已成功的探针可以共享。
 func (s *Spool) reserve(callID string, renew bool, probe func() error) (err error) {
 	if callID == "" {
 		return ErrUnavailable
 	}
 	ticket := s.admissionTicket.Add(1)
-	s.mu.Lock()
+	var earlyErr error
+	if renew {
+		earlyErr = s.lockForAttempt(s.probeFile)
+	} else {
+		s.mu.Lock()
+	}
 	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
@@ -509,6 +527,10 @@ func (s *Spool) reserve(callID string, renew bool, probe func() error) (err erro
 		}
 		// 重试必须先归还普通预留再按当前容量、权限及可写性准入；校验失败也不能留下旧槽。
 		delete(s.reserved, callID)
+	}
+	if earlyErr != nil {
+		s.lastErr = earlyErr
+		return earlyErr
 	}
 	status, err := s.statusLocked()
 	if err != nil {
@@ -539,6 +561,37 @@ func (s *Spool) reserve(callID string, renew bool, probe func() error) (err erro
 	return nil
 }
 
+// invalidateProbeLocked 由持有 mu 的失败操作调用，使共享探针和同时在锁外进行的探针失效。
+func (s *Spool) invalidateProbeLocked() {
+	s.probedThrough = 0
+	s.faultEpoch.Add(1)
+}
+
+// lockForAttempt 在调用方取票后取得目录锁；probe 用专用文件名执行实写，返回其错误。返回时调用方始终持有 mu。
+// 若已有账单操作持锁，至多一个请求利用等待时间验证同一磁盘。探针开始后到达的请求仍需新证明；
+// 期间发生任何队列错误都放弃成功结果，由 reserve 在锁内重测。容量、隔离和权限始终在锁内重新核对。
+func (s *Spool) lockForAttempt(probe func(string) error) error {
+	if s.mu.TryLock() {
+		return nil
+	}
+	if !s.probeMu.TryLock() {
+		s.mu.Lock()
+		return nil
+	}
+	epoch := s.faultEpoch.Load()
+	through := s.admissionTicket.Load()
+	err := probe(s.probePath)
+	s.probeMu.Unlock()
+	s.mu.Lock()
+	if err != nil {
+		// 在途同步交付可能沿用原预留；即使调用方无需新槽，也不能让其他等待者沿用故障前的证明。
+		s.invalidateProbeLocked()
+	} else if epoch == s.faultEpoch.Load() {
+		s.probedThrough = max(s.probedThrough, through)
+	}
+	return err
+}
+
 // probeWritableLocked 建立临时探针，写入后同步其数据和根目录，再删除探针，以验证当前卷可写。
 // 由 reserve 在互斥锁内调用；任一步骤失败都返回错误，不发布本次探针的取票截止点。
 func (s *Spool) probeWritableLocked() error {
@@ -546,7 +599,12 @@ func (s *Spool) probeWritableLocked() error {
 	if err != nil {
 		return err
 	}
-	name := ".probe-" + suffix
+	return s.probeFile(".probe-" + suffix)
+}
+
+// probeFile 验证根目录中指定的独占探针名可创建、写入、同步并删除，返回任一步骤的错误。
+// 常规探针由 mu 保护，争用时的专用探针由 probeMu 保护；调用期间目录句柄保持有效。
+func (s *Spool) probeFile(name string) error {
 	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err

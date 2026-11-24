@@ -130,6 +130,10 @@ func verifyConcurrentChatBills(t *testing.T) {
 	if pending, err := h.gw.HasPendingLocalUsage(t.Context()); err != nil || pending {
 		t.Errorf("成功结算后磁盘仍有待处理账单: pending=%v err=%v", pending, err)
 	}
+	// 监控有意忽略当前实例的活动探针；直接检查本测试独占的目录，避免遗漏真实文件泄漏。
+	if names, err := filepath.Glob(filepath.Join(os.Getenv("XHUB_USAGE_SPOOL_DIR"), ".probe-*")); err != nil || len(names) != 0 {
+		t.Errorf("并发请求全部完成后仍有准入探针: names=%v err=%v", names, err)
+	}
 }
 
 // TestUsageSpoolDatabaseDisconnect 验证上游已接收后数据库断开仍可恢复完整账单，正文存储失败则明确标记。

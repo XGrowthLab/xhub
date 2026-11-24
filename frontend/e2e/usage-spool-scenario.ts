@@ -1,6 +1,6 @@
 import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
@@ -20,7 +20,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
     const headers = { Authorization: "Bearer " + bearer };
     const control = JSON.parse(readFileSync(join(process.env.E2E_RUN_DIR!, "enterprise-fixture.json"), "utf8")).control;
     const model = "spool-browser-recovery-" + Date.now();
-    const orphanProbe = join(process.env.E2E_RUN_DIR!, "usage-spool", ".probe-" + model);
+    const orphanProbe = join(process.env.E2E_RUN_DIR!, "usage-spool", ".probe-live-" + model);
     let modelID = "";
     let guardID = "";
     let injected = false;
@@ -237,6 +237,8 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         expect(info.status()).toBe(200);
         return Number((await info.json()).user_info.spend) - startingSpend;
       }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
+      // 最终账单和个人费用已经可见，浏览器压力结束后，独占夹具目录中的实写探针也应收尽。
+      await expect.poll(() => readdirSync(join(process.env.E2E_RUN_DIR!, "usage-spool")).filter(name => name.startsWith(".probe-"))).toEqual([]);
     } finally {
       rmSync(orphanProbe, { force: true });
       if (injected)

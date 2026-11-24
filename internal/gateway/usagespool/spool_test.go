@@ -1244,3 +1244,95 @@ func TestReplayAdmissionMustCoverSnapshot(t *testing.T) {
 		})
 	}
 }
+
+// TestContendedAdmissionProof 用受控探针制造争用，同时在目录锁中扫描、注入错误或发放新票。
+// 验证活动探针不参与重放及容量计算，仅有效期间已取票的请求可共享成功证明；夹具回收队列和目录。
+func TestContendedAdmissionProof(t *testing.T) {
+	for _, mode := range []string{"success", "intervening-fault", "probe-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			s.admissionTicket.Add(1)
+			started, resume := make(chan struct{}), make(chan struct{})
+			result := make(chan error, 1)
+			s.mu.Lock()
+			go func() {
+				err := s.lockForAttempt(func(name string) error {
+					close(started)
+					<-resume
+					if mode == "probe-failure" {
+						return ErrUnavailable
+					}
+					return s.probeFile(name)
+				})
+				s.mu.Unlock()
+				result <- err
+			}()
+			<-started
+			s.admissionTicket.Add(1)
+			if mode == "intervening-fault" {
+				s.invalidateProbeLocked()
+			}
+			// 精确复现另一个重放者在创建探针与删除探针之间观察目录的窗口。
+			path := filepath.Join(s.config.Dir, s.probePath)
+			if err := os.WriteFile(path, []byte("probe"), 0600); err != nil {
+				t.Error(err)
+			}
+			if err := s.scanLocked(true); err != nil {
+				t.Error(err)
+			}
+			if state, err := s.statusLocked(); err != nil || state.Pending != 0 || state.Bytes != 0 {
+				t.Errorf("活动探针进入了账单容量: %+v %v", state, err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Errorf("重放误删了仍活动的探针: %v", err)
+			}
+			close(resume)
+			s.mu.Unlock()
+			err := <-result
+			want := uint64(0)
+			if mode == "success" {
+				want = 1
+			}
+			if (mode == "probe-failure" && !errors.Is(err, ErrUnavailable)) || (mode != "probe-failure" && err != nil) || s.probedThrough != want {
+				t.Fatalf("争用探针错误结果或取票边界: err=%v through=%d want=%d", err, s.probedThrough, want)
+			}
+		})
+	}
+}
+
+// TestContendedProbeClose 在一个锁外探针仍使用根目录时并发关闭队列，验证 Close 等待探针结束，
+// 且旧进程残留的同名格式文件在重新取得独占锁后清理。临时卷由测试框架回收。
+func TestContendedProbeClose(t *testing.T) {
+	s := openSpool(t, Config{})
+	started, resume := make(chan struct{}), make(chan struct{})
+	s.mu.Lock()
+	probed := make(chan error, 1)
+	go func() {
+		err := s.lockForAttempt(func(name string) error {
+			close(started)
+			<-resume
+			return s.probeFile(name)
+		})
+		s.mu.Unlock()
+		probed <- err
+	}()
+	<-started
+	s.mu.Unlock()
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	close(resume)
+	if err := <-probed; err != nil {
+		t.Fatalf("关闭破坏了正在使用根目录的探针: %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.config.Dir, s.probePath)
+	if err := os.WriteFile(path, []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openSpool(t, s.config)
+	if _, err := os.Stat(path); !os.IsNotExist(err) || reopened.probePath == s.probePath {
+		t.Fatalf("重启后未清理前一实例的探针: %v", err)
+	}
+}
