@@ -6,6 +6,7 @@ import {listSSO, type SSOConfiguration} from "@/lib/http/enterprise";
 import DirectoryManagement from "./DirectoryManagement";
 import IntegrationOverview from "./IntegrationOverview";
 import LoggingSettings from "./LoggingSettings/LoggingSettings";
+import VersionUpdates from "./VersionUpdates";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -119,6 +120,9 @@ export default function DirectorySettings() {
             <TabsTrigger value="logs" className="flex-none">{t("enterprise.tabs.logs")}</TabsTrigger>
           </div>
         </div>
+        <div className="flex h-9 self-end border-s ps-3">
+          <TabsTrigger value="versions" className="flex-none">{t("versionUpdates.title")}</TabsTrigger>
+        </div>
       </TabsList>
     </div>
     {/* 保留页签实例与归属快照；一次性凭据仅存在 SCIM 弹窗内存，关闭即清除。 */}
@@ -169,6 +173,7 @@ export default function DirectorySettings() {
     </li>)}</ul>
     </TabsContent>
     <TabsContent value="logs" keepMounted className="space-y-6"><IntegrationOverview /><LoggingSettings /></TabsContent>
+    <TabsContent value="versions"><VersionUpdates /></TabsContent>
     </Tabs>
     <Dialog open={ssoSetup} onOpenChange={setSSOSetup}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"><DialogTitle>{t("enterprise.configureSSO")}</DialogTitle><DialogDescription>{t("enterprise.ssoDescription")}</DialogDescription>{ssoSetup && <EnterpriseConfiguration sso organizations={organizations} embedded onSaved={(saved)=>{setSSORows((items)=>[...items,{connection_id:String(saved.connection_id),name:String(saved.name),enabled:!!saved.enabled}]);setSSOSetup(false);}}/>}</DialogContent></Dialog>
     <Dialog open={!!deleting} onOpenChange={(open) => {if (!open && !busy) setDeleting(null);}}><DialogContent><DialogTitle>{t("directory.deleteName", {name:deleting?.name ?? ""})}</DialogTitle><DialogDescription>{t("directory.deleteHint")}</DialogDescription>{deleteError && <p role="alert" className="text-sm text-destructive">{t("directory.error")}</p>}<div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => setDeleting(null)}>{t("directory.cancel")}</Button><Button variant="destructive" disabled={busy} onClick={remove}>{t("directory.confirmDelete")}</Button></div></DialogContent></Dialog>

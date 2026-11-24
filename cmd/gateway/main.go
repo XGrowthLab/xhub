@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 	_ "time/tzdata"
 
@@ -109,7 +111,9 @@ func main() {
 	srv := gateway.New(cfg, st, db)
 	util.Info("xhub listening on %s", *addr)
 	// 数据面和管理面都挂在这一个 Gin 引擎上。只留数据面会让 /key/generate 变成 404。
-	if err := srv.Run(*addr); err != nil {
+	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.RunContext(shutdown, *addr); err != nil {
 		util.Error("gateway: %v", err)
 		os.Exit(1)
 	}

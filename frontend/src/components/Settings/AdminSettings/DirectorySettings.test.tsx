@@ -3,17 +3,19 @@ import { fireEvent, render, screen, waitFor, cleanup, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import * as directory from "@/lib/http/directory";
+import { versionUpdateStatus } from "@/lib/http/versionUpdates";
 import DirectorySettings from "./DirectorySettings";
 import * as enterprise from "@/lib/http/enterprise";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/http/directory");
 vi.mock("@/lib/http/enterprise");
+vi.mock("@/lib/http/versionUpdates");
 vi.mock("./LoggingSettings/LoggingSettings", () => ({ default: () => null }));
 
 describe("DirectorySettings", () => {
   beforeEach(() => { vi.resetAllMocks(); window.localStorage.clear(); document.cookie = "xhub_locale=; max-age=0; path=/"; vi.mocked(directory.listDirectoryConnections).mockResolvedValue([]); vi.mocked(directory.listDirectoryOrganizations).mockResolvedValue([{organization_id:"org-1",organization_alias:"Company"}]); vi.mocked(directory.listDirectoryTeams).mockResolvedValue([]); vi.mocked(directory.enterprisePublicOrigin).mockImplementation((raw) => raw === "https://console.example.com" ? raw : ""); });
-  // 为三个页签提供未配置归档和标准 OIDC 404；读取不涉及外部服务，afterEach 清理组件。
+  // 为企业设置提供未配置归档和标准 OIDC 404；读取不涉及外部服务，afterEach 清理组件。
   beforeEach(() => { vi.mocked(enterprise.listSSO).mockResolvedValue([]); vi.mocked(enterprise.readEnterprise).mockResolvedValue({configuration:null, counts:{}, events:[]}); });
   afterEach(cleanup);
 
@@ -97,8 +99,9 @@ describe("DirectorySettings", () => {
     expect(screen.queryByText("database failure")).not.toBeInTheDocument();
   });
 
-  // 前置为无目录连接的中文页面；验证默认 SSO 空态引导、页签隔离和日志入口，清理组件及模拟接口。
+  // 前置为无目录连接、未启用更新的中文页面；验证配置隔离和新页签的键盘导航，卸载时清理轮询。
   it("空态引导创建目录且配置按页签隔离", async () => {
+    vi.mocked(versionUpdateStatus).mockResolvedValue({ enabled: false });
     const user = userEvent.setup();
     render(<I18nProvider initialLocale="zh-CN"><DirectorySettings /></I18nProvider>);
     expect(screen.getByRole("tab", {name: "单点登录设置"})).toHaveAttribute("aria-selected", "true");
@@ -109,15 +112,18 @@ describe("DirectorySettings", () => {
     expect(screen.getByLabelText("单点登录名称")).toBeVisible();
     expect(screen.queryByLabelText("目录名称")).not.toBeInTheDocument();
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button",{name:"关闭"}));
-    fireEvent.click(screen.getByRole("tab", {name: "日志设置"}));
+    await user.click(screen.getByRole("tab", { name: "日志设置" }));
+    expect(screen.getByRole("tabpanel", { name: "日志设置" })).toBeVisible();
     expect(screen.getByRole("region", {name: "七牛 Kodo 计费日志归档"})).toBeVisible();
     expect(screen.queryByLabelText("XHub 公开访问地址")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("tab", {name: "日志设置"}));
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "版本更新" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "版本更新" })).toBeVisible();
+    expect(await screen.findByText("此实例尚未启用主机更新执行器。")).toBeVisible();
     await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("tab", {name: "单点登录设置"})).toHaveFocus();
     await user.keyboard("{End}");
-    expect(screen.getByRole("tab", {name: "日志设置"})).toHaveFocus();
-    expect(screen.getByRole("tabpanel", {name: "日志设置"})).toBeVisible();
+    expect(screen.getByRole("tab", { name: "版本更新" })).toHaveFocus();
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", {name: "单点登录设置"})).toHaveFocus();
   });

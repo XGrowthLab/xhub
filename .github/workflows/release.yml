@@ -93,6 +93,8 @@ jobs:
           npx vitest run --project component src/components/common_components/BudgetReconciliation.test.tsx src/components/templates/key_info_view.test.tsx
           npx vitest run --project unit src/lib/enterpriseSSO.test.ts src/lib/http/enterprise.test.ts
           npx vitest run --project component src/components/Settings/AdminSettings/EnterpriseConfiguration.test.tsx src/components/Settings/AdminSettings/EnterpriseConfiguration.saml.test.tsx src/components/Settings/AdminSettings/SAMLRefresh.test.tsx src/components/Settings/AdminSettings/IntegrationOverview.test.tsx
+          npx vitest run --project component src/components/Settings/AdminSettings/VersionUpdates.test.tsx
+          npx vitest run --project unit src/lib/http/versionUpdates.test.ts
       - run: npx playwright install --with-deps chromium
         working-directory: frontend
       # 真实登录、密钥轮换、推理及旧库升级后的日志/用量/监控；使用专属 Redis 和本地上游，运行器清理资源。
@@ -115,6 +117,14 @@ jobs:
           XHUB_COMPACT_HISTORY: canary
           XHUB_COMPACT_HISTORY_USER_IDS: history-canary-en,history-canary-zh-cn
           # 该步骤同样只运行可靠性子集，不能要求覆盖全部业务清单。
+          E2E_FULL_COVERAGE: '0'
+      - name: Host update state and manifest tests
+        run: python3 -B -m unittest deploy.test_update_agent deploy.test_publish_release -v
+      - name: Version update browser regression
+        run: python3 -B e2e/version_update_fixture.py
+        env:
+          E2E_RUN_DIR: ${{ github.workspace }}/.e2e/release-version-update
+          E2E_BUILD_DIR: .next-version-update
           E2E_FULL_COVERAGE: '0'
       - uses: actions/upload-artifact@v4
         if: always()
@@ -140,6 +150,10 @@ jobs:
             .e2e/release-agent-reliability/scenario-coverage.json
             .e2e/release-agent-reliability/html/
             .e2e/release-agent-reliability/test-results/
+            .e2e/release-version-update/results.json
+            .e2e/release-version-update/junit.xml
+            .e2e/release-version-update/cleanup-status.json
+            .e2e/release-version-update/test-results/
           if-no-files-found: ignore
       - run: docker compose down -v
         if: always()
@@ -173,23 +187,36 @@ jobs:
           fi
           repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
+      - name: Plan tagged release
+        id: release_plan
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        # 写入输出前先完整查询 Release。查询失败时整个发布作业失败。
+        run: python3 -B deploy/publish_release.py plan >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           go-version-file: go.mod
       - uses: actions/setup-node@v4
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         working-directory: frontend
       - run: npm run build
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         working-directory: frontend
         env:
           NEXT_TELEMETRY_DISABLED: '1'
           XHUB_GATEWAY_ORIGIN: http://gateway:4000
       # tracingRoot 是仓库根目录，保留 standalone 的 frontend 子目录和 docs 资源。
       - name: Prepare runtime artifacts
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         run: |
           set -euo pipefail
           mkdir -p bin/console/frontend/.next
@@ -200,13 +227,22 @@ jobs:
           cp -a frontend/.next/static bin/console/frontend/.next/static
           cp -a frontend/public bin/console/frontend/public
       - uses: docker/setup-buildx-action@v3
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
       - uses: docker/login-action@v3
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.registry == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute database compatibility
+        id: compatibility
+        run: |
+          set -euo pipefail
+          fingerprint=$(python3 deploy/update_manifest.py fingerprint)
+          printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v5
         id: gateway
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           images: ghcr.io/${{ steps.version.outputs.repository }}-gateway
           tags: |
@@ -216,6 +252,7 @@ jobs:
           flavor: latest=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
       - uses: docker/metadata-action@v5
         id: console
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           images: ghcr.io/${{ steps.version.outputs.repository }}-console
           tags: |
@@ -225,6 +262,7 @@ jobs:
           flavor: latest=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
       - uses: docker/build-push-action@v6
         id: gateway_image
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           context: .
           file: Dockerfile
@@ -232,36 +270,33 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.gateway.outputs.tags }}
-          labels: ${{ steps.gateway.outputs.labels }}
+          labels: |
+            ${{ steps.gateway.outputs.labels }}
+            io.xhub.database-compatibility=${{ steps.compatibility.outputs.fingerprint }}
           cache-from: type=gha,scope=gateway
           cache-to: type=gha,mode=max,scope=gateway
       - uses: docker/build-push-action@v6
         id: console_image
+        if: github.ref_type != 'tag' || steps.release_plan.outputs.build == 'true'
         with:
           context: .
           file: deploy/Dockerfile.release
           platforms: linux/amd64
           push: true
           tags: ${{ steps.console.outputs.tags }}
-          labels: ${{ steps.console.outputs.labels }}
+          labels: |
+            ${{ steps.console.outputs.labels }}
+            io.xhub.database-compatibility=${{ steps.compatibility.outputs.fingerprint }}
           cache-from: type=gha,scope=console
           cache-to: type=gha,mode=max,scope=console
-      # 两个镜像发布成功才创建版本；重跑更新附件，不重复创建 Release。
+      # 仅新标签会构建镜像。既有版本只校验固定摘要或补齐缺失附件。
       - name: Publish GitHub Release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}
-          REPOSITORY: ${{ steps.version.outputs.repository }}
           GATEWAY_DIGEST: ${{ steps.gateway_image.outputs.digest }}
           CONSOLE_DIGEST: ${{ steps.console_image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          printf 'ghcr.io/%s-gateway@%s\nghcr.io/%s-console@%s\n' "$REPOSITORY" "$GATEWAY_DIGEST" "$REPOSITORY" "$CONSOLE_DIGEST" > docker-images.txt
-          prerelease=()
-          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease --latest=false); fi
-          if ! gh release view "$VERSION" >/dev/null 2>&1; then
-            # Bash 3.2 在 nounset 下将空数组视为未定义；只在有预发布参数时展开，避免本机验证误失败。
-            gh release create "$VERSION" --verify-tag --title "$VERSION" --generate-notes ${prerelease[@]+"${prerelease[@]}"}
-          fi
-          gh release upload "$VERSION" docker-images.txt --clobber
+          RELEASE_SHA: ${{ github.sha }}
+          DATABASE_COMPATIBILITY: ${{ steps.compatibility.outputs.fingerprint }}
+        run: python3 -B deploy/publish_release.py publish

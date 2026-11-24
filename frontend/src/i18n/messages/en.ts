@@ -15,6 +15,51 @@ import { routeTemplatesEn } from "./routeTemplates.en";
 import { cacheAdminEn } from "./cacheAdmin.en";
 
 export const en = {
+  versionUpdates: {
+    "title": "Version updates",
+    "description": "Check releases, update the gateway and console, or restore the previous version.",
+    "loading": "Reading the current version…",
+    "disabled": "The host update service is not enabled for this installation.",
+    "current": "Current version",
+    "channel": "Update channel",
+    "beta": "Beta channel",
+    "stable": "Stable channel",
+    "previous": "Previous version",
+    "unknown": "Unknown",
+    "none": "None",
+    "bootstrap": "Install a matching pair of update-enabled images on the host before updating from this page.",
+    "currentRelease": "There is no newer version in this channel.",
+    "target": "Target version",
+    "available": "Update to {version} available",
+    "prerelease": "Prerelease",
+    "notes": "View release notes",
+    "incompatible": "The database compatibility identifiers differ. Follow the release instructions to upgrade on the host.",
+    "check": "Check for updates",
+    "apply": "Update now",
+    "rollback": "Roll back",
+    "confirmApply": "Update to {version}",
+    "confirmRollback": "Roll back to {version}",
+    "confirmDescription": "The gateway and console will restart. A single gateway may be briefly unavailable. Reopen this page to check progress.",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "success": "Operation complete. Current version {version}.",
+    "unavailable": "The update service is temporarily unavailable. Checking the status again.",
+    "conflict": "Another operation is running or the selected version changed. Check the current status.",
+    "stage": {
+      "checking": "Checking for releases…",
+      "pulling": "Preparing and verifying images…",
+      "switching": "Switching services and checking health…",
+      "recovering": "Restoring the previous version…"
+    },
+    "errors": {
+      "interrupted": "The last operation was interrupted. The original version was kept or restored.",
+      "rolled_back": "The new version failed its health checks. The original version was restored.",
+      "recovery_required": "The original version could not be restored. Check the deployment on the host.",
+      "check_failed": "Could not check for updates. Check the release source and the running images.",
+      "prepare_failed": "Could not prepare the images. Check the registry, disk space, and current deployment.",
+      "invalid_target": "The version or current deployment changed. Check for updates again."
+    }
+  },
   searchPricing: {
     usageMissing: "The upstream did not report the number of searches, so this request cannot be priced completely.",
     usageInvalid: "The upstream reported invalid or conflicting search counts, so this request cannot be priced completely.",
