@@ -49,6 +49,9 @@ func commitResponsesHistory(h dpcontract.Adapted, plan dpcontract.RoutePlan, dep
 	return nil
 }
 
+// 小正文的出站准备很短，额外的探针与目录锁交接会增加首字延迟。只为至少 512 KiB 的流式请求重叠这段 I/O。
+const streamBudgetProbeMinBytes = 512 << 10
+
 // Serve 执行一次统一推理请求，将调用方协议适配成部署登记的上游协议，并把结果转换回来。
 // 参数 h 提供身份、路由、凭据、缓存、护栏与记账能力；w 接收 HTTP 响应；r 提供上下文、头和只读取一次的 JSON 正文；op 是目录操作名，如 chat、responses、embedding。
 // 返回值：无；所有成功、拒绝和失败结果直接写入 w。网关统一推理入口调用本方法。
@@ -147,7 +150,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		}
 		// 流式调用不读取响应缓存。护栏通过后先启动一次真实磁盘探针，让它与重编码、选路和协议准备重叠。
 		// 槽位、已发布账单及所有预算仍在实际出站前检查；解析拒绝或空候选不占用预留。
-		if streaming, _ := body["stream"].(bool); streaming {
+		if streaming, _ := body["stream"].(bool); streaming && len(raw) >= streamBudgetProbeMinBytes {
 			if probe, ok := h.(dpcontract.StreamBudgetProbeHost); ok {
 				r = probe.WithStreamBudgetProbe(r, callID)
 			}

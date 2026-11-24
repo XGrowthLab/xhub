@@ -283,7 +283,11 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	for _, key := range []string{scope.key, scope.session} {
 		// 已通过身份校验的流式请求可以提前刷盘；与非流式一样，故障必须在付费出站前明确拒绝。
 		for _, stream := range []bool{false, true} {
-			body := chatRequest("spool-admission", "Verify durable admission.")
+			prompt := "Verify durable admission."
+			if stream {
+				prompt = strings.Repeat("A", 512<<10)
+			}
+			body := chatRequest("spool-admission", prompt)
 			body["stream"] = stream
 			r := h.do(http.MethodPost, "/v1/chat/completions", key, body)
 			if r.status != 503 || !strings.Contains(string(r.body), "billing_storage_unavailable") {

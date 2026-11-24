@@ -158,7 +158,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
               model,
               stream,
               ...(stream && { stream_options: { include_usage: true } }),
-              messages: [{ role: "user", content: `Verify concurrent billing after recovery, request ${index}.` }],
+              messages: [{ role: "user", content: index === 1 ? "A".repeat(512 * 1024) : `Verify concurrent billing after recovery, request ${index}.` }],
             },
           });
           expect(reply.status(), await reply.text()).toBe(200);
@@ -215,7 +215,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       await Promise.all([false, true].map(async (stream) => {
         const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
           headers,
-          data: { model, stream, messages: [{ role: "user", content: "Check admission while settlement is pending." }] },
+          data: { model, stream, messages: [{ role: "user", content: stream ? "A".repeat(512 * 1024) : "Check admission while settlement is pending." }] },
         });
         expect(refused.status(), await refused.text()).toBe(503);
         expect((await refused.json()).error.type).toBe("billing_storage_pending");
