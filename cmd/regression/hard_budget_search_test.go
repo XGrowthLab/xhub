@@ -30,12 +30,12 @@ func searchTokenItem(id, action string) map[string]any {
 }
 
 // TestModelContractSearchSettlement 验证标准/旁路同步流及modern/preview搜索不被硬预占阻断，完整实测 token 和搜索次数落账。
-// 前置独立PG和本地上游；含正常多工具与超过请求cap的供应商实际输出，结束自动清理schema/服务器，不调用付费模型。
+// 前置独立 PG 和本地上游，覆盖 Grok、DeepSeek 两种计数与超过请求 cap 的实测输出；harness 回收 schema 和服务器。
 func TestModelContractSearchSettlement(t *testing.T) {
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	for _, path := range []string{"/v1/responses", "/bypass/openai/v1/responses"} {
 		for _, stream := range []bool{false, true} {
-			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history", "additional"} {
+			for _, mode := range []string{"modern", "preview", "zero", "over-cap", "history", "additional", "grok", "deepseek-native"} {
 				t.Run(fmt.Sprintf("%s/stream=%v/%s", path, stream, mode), func(t *testing.T) {
 					var calls atomic.Int32
 					received := make(chan map[string]any, 1)
@@ -49,7 +49,25 @@ func TestModelContractSearchSettlement(t *testing.T) {
 					if mode == "over-cap" {
 						ct = 9000
 					}
-					terminal, _ := json.Marshal(map[string]any{"id": "resp_test", "object": "response", "status": "completed", "output": output, "usage": map[string]any{"input_tokens": 8, "output_tokens": ct, "searches": searches, "tool_usage": map[string]any{"web_search": searches}, "tool_usage_details": map[string]any{"web_search": map[string]any{"search_engine": searches}}, "web_search_calls": searches, "num_server_side_tools_used": searches, "server_side_tool_usage_details": map[string]any{"web_search_calls": searches}, "context_details": map[string]any{"fixture": true}}})
+					usage := map[string]any{"input_tokens": 8, "output_tokens": ct}
+					usageField := "web_search_calls"
+					switch mode {
+					case "grok":
+						usage["num_server_side_tools_used"] = searches + 3
+						usage["server_side_tool_usage_details"] = map[string]any{"web_search_calls": searches, "x_search_calls": 3}
+					case "deepseek-native":
+						usageField = "tool_search"
+						usage["server_tool_use"] = map[string]any{"tool_search": searches, "tool_fetch": 3}
+					default:
+						usage["searches"] = searches
+						usage["tool_usage"] = map[string]any{"web_search": searches}
+						usage["tool_usage_details"] = map[string]any{"web_search": map[string]any{"search_engine": searches}}
+						usage["web_search_calls"] = searches
+						usage["num_server_side_tools_used"] = searches
+						usage["server_side_tool_usage_details"] = map[string]any{"web_search_calls": searches}
+						usage["context_details"] = map[string]any{"fixture": true}
+					}
+					terminal, _ := json.Marshal(map[string]any{"id": "resp_test", "object": "response", "status": "completed", "output": output, "usage": usage})
 					raw := string(terminal)
 					if stream {
 						raw = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":" + raw + "}\n\n"
@@ -116,12 +134,16 @@ func TestModelContractSearchSettlement(t *testing.T) {
 					if len(holds) != 0 || !nearlyEqual(key.Spend, want) {
 						t.Fatalf("搜索账单或占用错误 spend=%g want=%g holds=%+v", key.Spend, want, holds)
 					}
-					log := h.ok("GET", "/spend/logs/ui/"+got.header("X-Litellm-Call-Id"), admin, nil).text()
-					if !strings.Contains(log, "tokens_and_search") || !strings.Contains(log, "search_metered") {
-						t.Fatalf("日志未记录费用范围 %s", log)
+					log := h.ok("GET", "/spend/logs/ui/"+got.header("X-Litellm-Call-Id"), admin, nil)
+					if !strings.Contains(log.text(), "tokens_and_search") || !strings.Contains(log.text(), "search_metered") {
+						t.Fatalf("日志未记录费用范围 %s", log.text())
 					}
-					if searches > 0 && (!strings.Contains(got.text(), "web_search_calls") || !strings.Contains(log, "web_search_calls")) {
-						t.Fatal("搜索原始usage在响应或日志中丢失")
+					if searches > 0 && (!strings.Contains(got.text(), usageField) || !strings.Contains(log.text(), usageField)) {
+						t.Fatalf("搜索原始计数 %s 在响应或日志中丢失", usageField)
+					}
+					bill := log.json()["metadata"].(map[string]any)["cost_breakdown"].(map[string]any)
+					if bill["usage"].(map[string]any)["Searches"] != float64(searches) || searches > 0 && bill["tool_usage_cost"] != float64(searches) {
+						t.Fatalf("日志未独立记录实测搜索次数和费用: %+v", bill)
 					}
 					if !strings.Contains(got.text(), "SEARCH_OK") {
 						t.Fatal("客户端未获得文本")
@@ -226,18 +248,36 @@ func TestSearchTokenOnlyAdmission(t *testing.T) {
 	}
 }
 
-// TestModelContractSearchUnknownUsage 验证缺失或冲突token用量不能伪报免费，也不产生新硬预算占用。
+// TestModelContractSearchUnknownUsage 验证缺失或冲突用量、没有明确搜索单价时不伪报免费，也不产生费用或新硬预算占用。
 // 标准和旁路同步/流走真实后台，本地上游返回不完整账单；独立数据库及服务器由harness清理。
 func TestModelContractSearchUnknownUsage(t *testing.T) {
 	t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 	for _, path := range []string{"/v1/responses", "/bypass/openai/v1/responses"} {
 		for _, stream := range []bool{false, true} {
-			for _, mode := range []string{"missing", "conflict", "search-missing", "search-conflict"} {
+			for _, mode := range []string{"missing", "conflict", "search-missing", "search-conflict", "search-price-missing"} {
 				t.Run(fmt.Sprintf("%s/%v/%s", path, stream, mode), func(t *testing.T) {
 					usage := map[string]any{"input_tokens": 8}
-					if mode == "conflict" {
+					reason := "pricing_unavailable"
+					switch mode {
+					case "missing":
+						usage["searches"] = 0
+					case "conflict":
+						usage["searches"] = 0
 						usage["output_tokens"] = 4
 						usage["prompt_tokens"] = 9
+					case "search-missing":
+						usage["output_tokens"] = 4
+						usage["num_server_side_tools_used"] = 1
+						reason = "search_usage_missing"
+					case "search-conflict":
+						usage["output_tokens"] = 4
+						usage["searches"] = 0
+						usage["server_side_tool_usage_details"] = map[string]any{"web_search_calls": 1}
+						reason = "search_usage_invalid"
+					case "search-price-missing":
+						usage["output_tokens"] = 4
+						usage["server_side_tool_usage_details"] = map[string]any{"web_search_calls": 1}
+						reason = "search_price_missing"
 					}
 					terminal, _ := json.Marshal(map[string]any{"id": "resp_unknown", "status": "completed", "output": []any{}, "usage": usage})
 					raw := string(terminal)
@@ -253,14 +293,26 @@ func TestModelContractSearchUnknownUsage(t *testing.T) {
 					}))
 					t.Cleanup(up.Close)
 					dep := searchTokenDeployment(up.URL)
+					if mode == "search-price-missing" {
+						delete(dep.LiteLLMParams, "search_context_cost_per_query")
+					}
 					h := newHarness(t, dep)
 					admin := h.adminSession()
 					owner := h.openScope(t, admin, dep.ModelName)
 					h.setKeyBudget(t, admin, owner.key, 1)
 					got := h.ok("POST", path, owner.key, map[string]any{"model": dep.ModelName, "input": "Search for Go.", "stream": stream, "tools": []any{map[string]any{"type": "web_search"}}})
-					log := h.ok("GET", "/spend/logs/ui/"+got.header("X-Litellm-Call-Id"), admin, nil).text()
-					if !strings.Contains(log, "unpriced") {
-						t.Fatalf("缺失/冲突token被伪装已定价 %s", log)
+					log := h.ok("GET", "/spend/logs/ui/"+got.header("X-Litellm-Call-Id"), admin, nil)
+					bill := log.json()["metadata"].(map[string]any)["cost_breakdown"].(map[string]any)
+					billed := bill["usage"].(map[string]any)
+					if bill["pricing_status"] != "unpriced" || billed["PricingBlocked"] != reason || bill["total_cost"] != float64(0) {
+						t.Fatalf("日志缺少明确的未定价原因 %s: %+v", reason, bill)
+					}
+					if mode == "search-price-missing" && billed["Searches"] != float64(1) {
+						t.Fatalf("缺价错误丢失可信搜索次数: %+v", billed)
+					}
+					key, err := h.db.GetKey(t.Context(), owner.keyID)
+					if err != nil || key.Spend != 0 {
+						t.Fatalf("不可定价用量意外扣费: key=%+v err=%v", key, err)
 					}
 					holds, err := h.db.PendingKeyBudget(t.Context(), owner.keyID)
 					if err != nil || len(holds) != 0 {

@@ -17,6 +17,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/gateway/billing"
 	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
@@ -243,6 +244,9 @@ func pricingFailureCode(err error) string {
 	if err == nil {
 		return ""
 	}
+	if errors.Is(err, llmusage.ErrSearchUsageInvalid) || errors.Is(err, llmusage.ErrSearchUsageConflict) {
+		return "search_usage_invalid"
+	}
 	switch err.Error() {
 	case "measured cache reads have no reserved price":
 		return "cache_read_price_missing"
@@ -252,8 +256,6 @@ func pricingFailureCode(err error) string {
 		return "search_usage_missing"
 	case "measured searches have no confirmed price":
 		return "search_price_missing"
-	case "search usage is invalid or inconsistent", "search usage container is invalid", "search usage is missing":
-		return "search_usage_invalid"
 	default:
 		return "pricing_unavailable"
 	}

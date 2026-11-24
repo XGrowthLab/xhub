@@ -13,6 +13,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/config"
 	"github.com/sunqirui1987/xhub/internal/gateway/usagespool"
 	"github.com/sunqirui1987/xhub/internal/iam"
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 )
 
 // TestBudgetAttemptLifecycle 验证所有协议按余额放行，不改正文、不注入输出上限，取消请求不发送。
@@ -120,7 +121,7 @@ func TestPricingFailureCode(t *testing.T) {
 		{nil, ""}, {fmt.Errorf("measured cache reads have no reserved price"), "cache_read_price_missing"},
 		{fmt.Errorf("measured cache writes have no reserved price"), "cache_write_price_missing"},
 		{fmt.Errorf("measured search usage is missing"), "search_usage_missing"},
-		{fmt.Errorf("search usage is invalid or inconsistent"), "search_usage_invalid"},
+		{llmusage.ErrSearchUsageInvalid, "search_usage_invalid"}, {fmt.Errorf("stream settlement: %w", llmusage.ErrSearchUsageConflict), "search_usage_invalid"},
 		{fmt.Errorf("measured searches have no confirmed price"), "search_price_missing"},
 		{fmt.Errorf("private configuration value"), "pricing_unavailable"},
 	} {

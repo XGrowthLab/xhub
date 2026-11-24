@@ -27,6 +27,10 @@ class ArkUpstreamTest(unittest.TestCase):
         body = {"model": "budget-search-browser-unit", "input": "Search for Go.", "tools": [{"type": "web_search"}]}
         result = self.request("/v1/responses", body)
         self.assertEqual(result["output"][0]["action"]["type"], "search")
+        self.assertEqual(result["output"][1]["content"][0]["annotations"][0]["url"], "https://go.dev/")
+        self.assertEqual(result["usage"]["server_side_tool_usage_details"]["web_search_calls"], 1)
+        self.assertEqual(result["usage"]["num_server_side_tools_used"], 3)
+        self.assertNotIn("searches", result["usage"])
         with urlopen(Request(self.base + "/v1/responses", data=json.dumps({**body, "stream": True}).encode()), timeout=2) as response:
             self.assertIn(b"response.completed", response.read())
         for wrong in ({**body, "max_tool_calls": 2}, {**body, "tools": []}):

@@ -637,6 +637,9 @@ func TestStrictBudgetRawUsageValidation(t *testing.T) {
 		{name: "reasoning exceeds completion", raw: map[string]any{"prompt_tokens": 10, "completion_tokens": 1, "completion_tokens_details": map[string]any{"reasoning_tokens": 2}}},
 		{name: "unreserved audio", raw: map[string]any{"prompt_tokens": 10, "completion_tokens": 1, "prompt_tokens_details": map[string]any{"audio_tokens": 1}}},
 		{name: "unreserved server search", raw: map[string]any{"prompt_tokens": 10, "completion_tokens": 1, "server_tool_use": map[string]any{"web_search_requests": 1}}},
+		{name: "unreserved nested web search", raw: map[string]any{"input_tokens": 10, "output_tokens": 1, "server_side_tool_usage_details": map[string]any{"web_search_calls": 1}}},
+		{name: "unreserved native tool search", raw: map[string]any{"input_tokens": 10, "output_tokens": 1, "server_tool_use": map[string]any{"tool_search": 1}}},
+		{name: "nested search zero", valid: true, raw: map[string]any{"input_tokens": 10, "output_tokens": 1, "server_side_tool_usage_details": map[string]any{"web_search_calls": 0}}},
 		{name: "cache string", raw: map[string]any{"prompt_tokens": 10, "completion_tokens": 1, "cache_creation_input_tokens": "2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

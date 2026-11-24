@@ -177,3 +177,41 @@ func setCacheUsageAlias(usage map[string]any, path string, value int) {
 	}
 	usage[path] = value
 }
+
+// TestDialogueSearchUsageCumulative 验证供应商搜索用量跨帧更新与错误保留。
+// 仅构造原生 SSE 的内存快照，检查更换别名、缺省字段、同帧冲突和倒退，无外部资源。
+func TestDialogueSearchUsageCumulative(t *testing.T) {
+	first := map[string]any{"input_tokens": 8, "output_tokens": 2, "server_side_tool_usage_details": map[string]any{"web_search_calls": 1, "x_search_calls": 2}}
+	partial := map[string]any{"server_side_tool_usage_details": map[string]any{"x_search_calls": 3}}
+	state := MergeDialogueUsage(nil, first)
+	state = MergeDialogueUsage(state, partial)
+	if got := catalog.NormalizeUsage(state).Searches; got != 1 {
+		t.Fatalf("只更新其他工具抹掉了实测搜索次数: %d", got)
+	}
+	state = MergeDialogueUsage(state, map[string]any{"server_tool_use": map[string]any{"tool_search": 3}})
+	if got := catalog.NormalizeUsage(state); got.Searches != 3 || got.PricingBlocked != "" {
+		t.Fatalf("更换计数别名后累计用量错误: %+v", got)
+	}
+	if !reflect.DeepEqual(state["server_side_tool_usage_details"], map[string]any{"x_search_calls": 3}) ||
+		!reflect.DeepEqual(first["server_side_tool_usage_details"], map[string]any{"web_search_calls": 1, "x_search_calls": 2}) {
+		t.Fatalf("旧别名清理破坏工具明细或原帧: state=%+v first=%+v", state, first)
+	}
+	for _, tc := range []struct {
+		name   string
+		frame  map[string]any
+		reason string
+	}{
+		{"decreasing", map[string]any{"server_side_tool_usage_details": map[string]any{"web_search_calls": 0}}, "upstream_usage_conflict"},
+		{"conflicting", map[string]any{"searches": 4, "server_side_tool_usage_details": map[string]any{"web_search_calls": 5}}, "upstream_usage_conflict"},
+		{"invalid", map[string]any{"server_side_tool_usage_details": map[string]any{"web_search_calls": nil}}, "upstream_usage_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := MergeDialogueUsage(nil, state)
+			merged = MergeDialogueUsage(merged, tc.frame)
+			merged = MergeDialogueUsage(merged, map[string]any{"searches": 6, "pricing_blocked": ""})
+			if got := NormalizeDialogueUsage(merged)["pricing_blocked"]; got != tc.reason {
+				t.Fatalf("后续正常帧掩盖了不可信搜索计量: got=%v want=%s", got, tc.reason)
+			}
+		})
+	}
+}

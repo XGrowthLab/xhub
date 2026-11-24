@@ -8,6 +8,7 @@ import (
 
 	"github.com/sunqirui1987/xhub/internal/catalog"
 	"github.com/sunqirui1987/xhub/internal/config"
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 )
 
 // SoftPricePlan 冻结实际出站部署和目录价格，结算时使用实际token，不需要输入窗口或预占金额。
@@ -104,7 +105,7 @@ func (p SoftPricePlan) Charge(raw map[string]any) (catalog.Charge, error) {
 		return catalog.Charge{}, fmt.Errorf("model pricing is unavailable")
 	}
 	u := SearchTokenUsage(raw)
-	searches, searchReported, searchErr := SearchUsage(raw)
+	searches, searchReported, searchErr := llmusage.ParseSearchCount(raw)
 	if searchErr != nil {
 		return catalog.Charge{}, searchErr
 	}

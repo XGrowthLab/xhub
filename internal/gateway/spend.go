@@ -105,10 +105,9 @@ func (s *Server) quoteSpend(callID, alias, depID string, usage map[string]any, s
 	billed := catalog.NormalizeUsage(usage)
 	tokenOnly := s.tokenOnlyBudget(callID)
 	if tokenOnly {
+		searches := billed.Searches
 		billed = billing.SearchTokenUsage(usage)
-		if searches, present, err := billing.SearchUsage(usage); err == nil && present {
-			billed.Searches = searches
-		}
+		billed.Searches = searches
 	}
 	total, input, output, priced, charge := billing.CallCost(s, alias, depID, billed, start)
 	softActive := false

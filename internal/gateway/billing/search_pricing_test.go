@@ -31,34 +31,6 @@ func TestWebSearchRequested(t *testing.T) {
 	}
 }
 
-// TestSearchUsage 验证上游明确报告的总数、等价别名、缺失、非法值及冲突；输入为内存数据，不计算或推测用量。
-func TestSearchUsage(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		raw          map[string]any
-		count        int
-		present, bad bool
-	}{
-		{"fenno", map[string]any{"tool_usage": map[string]any{"web_search": 2}, "tool_usage_details": map[string]any{"web_search": map[string]any{"search_engine": 2}}}, 2, true, false},
-		{"zero", map[string]any{"searches": 0}, 0, true, false},
-		{"same aliases", map[string]any{"search_count": 2, "server_tool_use": map[string]any{"web_search_requests": 2}}, 2, true, false},
-		{"not reported", map[string]any{"input_tokens": 1}, 0, false, false},
-		{"only breakdown", map[string]any{"tool_usage_details": map[string]any{"web_search": map[string]any{"search_engine": 2}}}, 0, false, false},
-		{"conflict", map[string]any{"searches": 1, "tool_usage": map[string]any{"web_search": 2}}, 0, false, true},
-		{"negative", map[string]any{"search_count": -1}, 0, false, true},
-		{"fraction", map[string]any{"search_count": .5}, 0, false, true},
-		{"string", map[string]any{"search_count": "2"}, 0, false, true},
-		{"container", map[string]any{"tool_usage": "invalid"}, 0, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n, present, err := SearchUsage(tc.raw)
-			if n != tc.count || present != tc.present || (err != nil) != tc.bad {
-				t.Fatalf("搜索计数错误 count=%d present=%v err=%v", n, present, err)
-			}
-		})
-	}
-}
-
 // TestSoftSearchPricing 验证按实际搜索总数与冻结报价计费，而非按响应工具项数或最新目录猜价。
 // 分别覆盖计费、零次、无报价、缺失和矛盾；独立内存部署，无资源或生产数据需清理。
 func TestSoftSearchPricing(t *testing.T) {
@@ -76,7 +48,9 @@ func TestSoftSearchPricing(t *testing.T) {
 		bad  bool
 	}{
 		{map[string]any{"input_tokens": 10, "output_tokens": 2, "tool_usage": map[string]any{"web_search": 2}}, .020014, false},
-		{map[string]any{"input_tokens": 10, "output_tokens": 2, "searches": 0}, .000014, false},
+		{map[string]any{"input_tokens": 10, "output_tokens": 2, "server_side_tool_usage_details": map[string]any{"web_search_calls": 2}, "num_server_side_tools_used": 5}, .020014, false},
+		{map[string]any{"input_tokens": 10, "output_tokens": 2, "server_tool_use": map[string]any{"tool_search": 2, "tool_fetch": 3}}, .020014, false},
+		{map[string]any{"input_tokens": 10, "output_tokens": 2, "server_side_tool_usage_details": map[string]any{"web_search_calls": 0, "x_search_calls": 3}}, .000014, false},
 		{map[string]any{"input_tokens": 10, "output_tokens": 2}, 0, true},
 		{map[string]any{"input_tokens": 10, "output_tokens": 2, "searches": 1, "tool_usage": map[string]any{"web_search": 2}}, 0, true},
 	} {
@@ -84,6 +58,11 @@ func TestSoftSearchPricing(t *testing.T) {
 		if (err != nil) != tc.bad || !tc.bad && math.Abs(charge.Total-tc.want) > 1e-12 {
 			t.Fatalf("搜索费用错误: %+v want=%g err=%v", charge, tc.want, err)
 		}
+	}
+	dep.LiteLLMParams["search_context_cost_per_query"] = 0.0
+	charge, err := NewSoftPricePlan(dep, time.Now()).WithSearchRequest(true).Charge(map[string]any{"input_tokens": 10, "output_tokens": 2, "server_tool_use": map[string]any{"tool_search": 2}})
+	if err != nil || math.Abs(charge.Total-.000014) > 1e-12 {
+		t.Fatalf("明确免费搜索应只收 token 费用: %+v err=%v", charge, err)
 	}
 	delete(dep.LiteLLMParams, "search_context_cost_per_query")
 	if _, err := NewSoftPricePlan(dep, time.Now()).WithSearchRequest(true).Charge(map[string]any{"input_tokens": 1, "output_tokens": 1, "searches": 1}); err == nil {

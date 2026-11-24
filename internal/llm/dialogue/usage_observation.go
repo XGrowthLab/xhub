@@ -3,19 +3,23 @@ package dialogue
 import (
 	"math"
 	"strings"
+
+	llmusage "github.com/sunqirui1987/xhub/internal/llm/usage"
 )
 
-// dialogueUsageAliases 列出同一个实测计数的平级或嵌套别名；只用于检测同帧矛盾和替换旧帧快照。
+// dialogueTokenUsageAliases 列出同一个实测计数的平级或嵌套别名；只用于检测同帧矛盾和替换旧帧快照。
 // 缓存读取是否包含于输入总量仍由原始字段表达，此表不转换该语义，也不把 TTL 分桶当作总量别名。
-var dialogueUsageAliases = [][]string{
+var dialogueTokenUsageAliases = [][]string{
 	{"prompt_tokens", "input_tokens"},
 	{"completion_tokens", "output_tokens"},
 	{"prompt_tokens_details.text_tokens", "input_tokens_details.text_tokens"},
 	{"prompt_tokens_details.image_tokens", "input_tokens_details.image_tokens"},
 	{"cache_creation_input_tokens", "cache_write_tokens"},
 	{"cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens"},
-	{"searches", "search_count", "web_search_requests", "tool_usage.web_search", "server_tool_use.web_search_requests"},
 }
+
+// dialogueUsageAliases 用于累计帧按已观测的计量维度替换旧别名。
+var dialogueUsageAliases = append(dialogueTokenUsageAliases, llmusage.SearchCountPaths())
 
 // MergeDialogueUsage 合并一帧原始实测用量，并保留任何已观察到的矛盾或非法计数。
 // 参数 previous 为本次请求累积对象（可为空），incoming 为当前帧；返回累积对象，更新计数但不转换别名。
@@ -30,8 +34,10 @@ func MergeDialogueUsage(previous, incoming map[string]any) map[string]any {
 		blocked = DialogueUsageProblem(incoming)
 	}
 	// 搜索用量是累计次数，后续帧倒退会低计费；缺字段不覆盖已经观测到的次数。
-	if old, ok := dialogueSearchObserved(previous); ok {
-		if next, present := dialogueSearchObserved(incoming); present && next < old && blocked == "" {
+	if blocked == "" {
+		old, oldPresent, _ := llmusage.ParseSearchCount(previous)
+		next, nextPresent, _ := llmusage.ParseSearchCount(incoming)
+		if oldPresent && nextPresent && next < old {
 			blocked = "upstream_usage_conflict"
 		}
 	}
@@ -54,7 +60,7 @@ func MergeDialogueUsage(previous, incoming map[string]any) map[string]any {
 		}
 	}
 	for key, value := range incoming {
-		if strings.HasSuffix(key, "_tokens_details") || key == "tool_usage" || key == "server_tool_use" {
+		if strings.HasSuffix(key, "_tokens_details") || key == "tool_usage" || key == "server_tool_use" || key == "server_side_tool_usage_details" {
 			if value == nil {
 				continue
 			}
@@ -86,7 +92,20 @@ func MergeDialogueUsage(previous, incoming map[string]any) map[string]any {
 // 递归检查明细，避免非法值被后续帧覆盖后失去证据。
 // 原始流观测、同步归一化和硬额度结算共同调用；只检查已观察事实，不要求完整 usage，不修改输入。
 func DialogueUsageProblem(usage map[string]any) string {
-	for _, group := range dialogueUsageAliases {
+	_, _, err := llmusage.ParseSearchCount(usage)
+	switch err {
+	case llmusage.ErrSearchUsageInvalid:
+		return "upstream_usage_invalid"
+	case llmusage.ErrSearchUsageConflict:
+		return "upstream_usage_conflict"
+	}
+	return dialogueTokenUsageProblem(usage)
+}
+
+// dialogueTokenUsageProblem 检查部分用量帧及其明细的 token 类型与别名；返回原因码或空串。
+// 由 DialogueUsageProblem 调用，不改写输入；对话协议的计量明细必须为对象。
+func dialogueTokenUsageProblem(usage map[string]any) string {
+	for _, group := range dialogueTokenUsageAliases {
 		var first float64
 		seen := false
 		for _, path := range group {
@@ -108,36 +127,24 @@ func DialogueUsageProblem(usage map[string]any) string {
 		if value == nil {
 			continue
 		}
-		if strings.HasSuffix(key, "_tokens_details") || key == "tool_usage" || key == "server_tool_use" {
+		if strings.HasSuffix(key, "_tokens_details") {
 			if _, ok := value.(map[string]any); !ok {
 				return "upstream_usage_invalid"
 			}
 		}
-		searchCount := key == "searches" || key == "search_count" || key == "web_search_requests" || key == "web_search" && dialogueMap(value) == nil
-		if strings.HasSuffix(key, "_tokens") || searchCount {
+		if strings.HasSuffix(key, "_tokens") {
 			n, ok := dialogueNumber(value)
-			if !ok || n < 0 || n != math.Trunc(n) || searchCount && n > math.MaxInt32 {
+			if !ok || n < 0 || n != math.Trunc(n) {
 				return "upstream_usage_invalid"
 			}
 		}
 		if nested, ok := value.(map[string]any); ok {
-			if problem := DialogueUsageProblem(nested); problem != "" {
+			if problem := dialogueTokenUsageProblem(nested); problem != "" {
 				return problem
 			}
 		}
 	}
 	return ""
-}
-
-// dialogueSearchObserved 读取已观测的搜索累计次数；usage 为单次请求的部分或完整用量。
-// 流合并调用；只用于检测计数倒退，不把缺失值当成零、不计算价格或修改输入。
-func dialogueSearchObserved(usage map[string]any) (float64, bool) {
-	for _, path := range []string{"searches", "search_count", "web_search_requests", "tool_usage.web_search", "server_tool_use.web_search_requests"} {
-		if value := dialogueUsageAlias(usage, path); value != nil {
-			return dialogueNumber(value)
-		}
-	}
-	return 0, false
 }
 
 // dialogueUsageAlias 读取固定路径中的计数；参数为用量对象与平级或一层嵌套路径，返回原值，缺失/null 返回 nil。
