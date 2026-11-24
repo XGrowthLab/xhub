@@ -1,10 +1,11 @@
 import React from "react";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { I18nProvider, translate } from "@/i18n";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -297,6 +298,33 @@ test("cancels a settings draft without leaving the current tab", async () => {
   expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
   await user.click(screen.getByRole("button", { name: "Edit Settings" }));
   expect(await screen.findByRole("textbox", { name: "Organization Name" })).toHaveValue(savedName);
+});
+
+/** 前置为可编辑的组织设置弹窗，验证从弹窗内切换语言后原样保留元数据草稿；测试卸载后不提交更改。 */
+test("switches the edit dialog language without changing the metadata draft", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  const user = userEvent.setup();
+  renderWithProviders(
+    <I18nProvider initialLocale="en">
+      <OrganizationInfoView
+        organizationId="org_123"
+        onClose={() => {}}
+        accessToken="test-token"
+        is_org_admin={false}
+        is_proxy_admin={true}
+        userModels={[]}
+        editOrg={true}
+      />
+    </I18nProvider>,
+  );
+  const draft = '{"note":"保留原文"}';
+  const dialog = within(await screen.findByRole("dialog", { name: "Organization Settings" }));
+  fireEvent.change(dialog.getByRole("textbox", { name: "Metadata" }), { target: { value: draft } });
+  await user.click(dialog.getByRole("button", { name: "中文", exact: true }));
+  expect(dialog.getByRole("heading", { name: translate("zh-CN", "Organization Settings") })).toBeVisible();
+  expect(dialog.getByRole("textbox", { name: translate("zh-CN", "Metadata") })).toHaveValue(draft);
+  await user.click(dialog.getByRole("button", { name: "English", exact: true }));
+  expect(dialog.getByRole("textbox", { name: "Metadata" })).toHaveValue(draft);
 });
 
 /** 零速率上限显式显示为零；前置两个以零配置的限流字段，检查概览和设置的键值语义，测试框架清理。 */

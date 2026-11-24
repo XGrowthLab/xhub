@@ -63,13 +63,15 @@ export function DirectoryFacts({ fields }: { fields: readonly { label: string; v
   );
 }
 
-/** 共享账户、团队和组织的编辑容器；关闭只回调调用方，保留当前列表和页签。长表单可独立滚动。 */
-export function DirectoryEditDialog({ open, title, onClose, children, busy = false }: {
+/** 共享账户、团队和组织的编辑容器。headerActions 放置弹窗内可操作的控件。
+ * 关闭只回调调用方，保留当前列表和页签。长表单可独立滚动。 */
+export function DirectoryEditDialog({ open, title, onClose, children, busy = false, headerActions }: {
   open: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
   busy?: boolean;
+  headerActions?: ReactNode;
 }) {
   return (
     <Dialog open={open} disablePointerDismissal={busy} onOpenChange={(next) => !next && !busy && onClose()}>
@@ -77,8 +79,9 @@ export function DirectoryEditDialog({ open, title, onClose, children, busy = fal
         className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
         showCloseButton={!busy}
       >
-        <DialogHeader className="shrink-0 border-b px-4 py-4 pr-12 sm:px-6 sm:pr-14">
+        <DialogHeader className="shrink-0 flex-row flex-wrap items-center justify-between border-b px-4 py-4 pr-12 sm:px-6 sm:pr-14">
           <DialogTitle className="text-lg font-semibold tracking-tight">{title}</DialogTitle>
+          {headerActions}
         </DialogHeader>
         <div className="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4 sm:p-6">{children}</div>
       </DialogContent>

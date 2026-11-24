@@ -54,14 +54,16 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    await page.getByRole("button",{name:name,exact:true}).click();
    await expect(page).toHaveURL(new RegExp("org="+orgID));
    await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(settings.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every30d")),{exact:true})).toBeVisible();
+   // 设置页用独立的字段名和字段值展示周期，概览仍可显示简写。
+   await expect(settings.getByText(tr("Reset Budget"),{exact:true})).toBeVisible();
+   await expect(settings.getByText(tr("organizationBudget.every30d"),{exact:true})).toBeVisible();
    await page.getByRole("button",{name:tr("Edit Settings"),exact:true}).click();
    await page.getByRole("combobox",{name:tr("Reset Budget"),exact:true}).click();
    await page.getByRole("option",{name:tr("organizationBudget.every7d"),exact:true}).click();
    const saved=page.waitForResponse(r=>r.url().endsWith("/organization/update")&&r.request().method()==="PATCH");
    await page.getByRole("button",{name:tr("Save Changes"),exact:true}).click();expect((await saved).status()).toBe(200);
    await page.reload();await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(settings.getByText(tr("Reset: {value0}").replace("{value0}",tr("organizationBudget.every7d")),{exact:true})).toBeVisible();
+   await expect(settings.getByText(tr("organizationBudget.every7d"),{exact:true})).toBeVisible();
    teamID=(await create("/team/new",{organization_id:orgID,team_alias:name})).team_id;
    // 双语名称通过实际项目弹窗验证，并读回网关持久化结果；项目必须先于依赖的团队清理。
    await stableGoto(page, "/projects");
@@ -117,7 +119,7 @@ export function registerOrganizationManagementScenario(locale: "en" | "zh-CN") {
    await page.getByRole("button",{name:tr("Save Changes"),exact:true}).click();
    const cancelled=await cancellation;expect(cancelled.status()).toBe(200);expect((await cancelled.json()).budget_reset_at).toBeNull();
    await page.reload();await page.getByRole("tab",{name:tr("Settings"),exact:true}).click();
-   await expect(settings.getByText(translate(locale,"Reset: {value0}",{value0:tr("No reset")}),{exact:true})).toBeVisible();
+   await expect(settings.getByText(tr("No reset"),{exact:true})).toBeVisible();
    await page.getByRole("tab",{name:tr("Organization administrators"),exact:true}).click();
    const removed=page.waitForResponse(r=>r.url().endsWith("/organization/member_delete"));
    await page.getByTestId("delete-member").click();expect((await removed).status()).toBe(200);

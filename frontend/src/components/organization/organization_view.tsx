@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
@@ -118,7 +119,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     else setIsEditing(false);
   };
   const editDialog = (
-    <DirectoryEditDialog open={editorOnly || isEditing} title={t("Organization Settings")} onClose={closeEditor}>
+    <DirectoryEditDialog
+      open={editorOnly || isEditing}
+      title={t("Organization Settings")}
+      headerActions={<LanguageSwitcher />}
+      onClose={closeEditor}
+    >
       {loading || !orgData ? (
         <p role={loading ? "status" : "alert"} className="text-sm text-muted-foreground">
           {t(loading ? "Loading..." : "Organization not found")}
