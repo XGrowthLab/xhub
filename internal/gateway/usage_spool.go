@@ -78,26 +78,27 @@ func (s *Server) CloseUsageSpool() error {
 	return s.usageSpool.Close()
 }
 
-// admitUsageSpool 在上游付费发送前为本次call预留本机容量，返回是否继续；失败写503及明确存储错误类型。
+// admitUsageSpool 在上游付费发送前为本次call预留本机容量，返回这次分配时已发布的待结账单数及是否继续；失败写 503。
 // 覆盖硬额度、无限额和搜索软额度，不能等收到付费结果后才发现配置/容量已不可用。
-func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID string) bool {
+func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID string) (int, bool) {
 	if !s.usageSpoolEnabled {
-		return true
+		return 0, true
 	}
+	var pending int
 	err := s.usageSpoolErr
 	if err == nil && s.usageSpool == nil {
 		err = usagespool.ErrUnavailable
 	}
 	if err == nil {
-		err = s.usageSpool.ReserveForAttempt(callID)
+		pending, err = s.usageSpool.ReserveForAttemptWithBacklog(callID)
 	}
 	if err == nil {
-		return true
+		return pending, true
 	}
 	util.Error("usage spool admission denied call_id=%q: %v", callID, err)
 	w.Header().Set("X-XHub-Usage-Persistence", "unavailable")
 	util.WriteTypedError(w, r.URL.Path, http.StatusServiceUnavailable, "billing_storage_unavailable", "billing storage is unavailable; retry after recovery")
-	return false
+	return 0, false
 }
 
 // FlushLocalUsage 重放本机完整账单，供周期/显式Flush及启动恢复调用；返回错误便于可观察诊断。

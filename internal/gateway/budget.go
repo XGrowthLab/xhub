@@ -61,23 +61,18 @@ func billingPendingCause(err error) string {
 func (s *Server) PrepareBudgetAttempt(w http.ResponseWriter, r *http.Request, p *auth.Principal, callID string, dep config.ModelEntry, protocol string, body []byte, start time.Time) ([]byte, bool) {
 	// 每次重新冻结价格。首次尝试直接进入磁盘准入，旧尝试的普通槽由队列在同一次加锁时处理。
 	s.clearBudgetPrice(callID)
-	if !s.admitUsageSpool(w, r, callID) {
+	pendingBills, admitted := s.admitUsageSpool(w, r, callID)
+	if !admitted {
 		return nil, false
 	}
 	for _, name := range []string{"X-XHub-Budget-State", "X-XHub-Billing-Scope", "X-XHub-Budget-Guarantee", "X-XHub-Tool-Costs", "X-XHub-Max-Output-Tokens", "X-XHub-Max-Tool-Calls", "X-XHub-Budget-Input-Bound", "X-XHub-Budget-Reserved", "X-XHub-Budget-Reservation-Id"} {
 		w.Header().Del(name)
 	}
 	// 尚未持久化的账单不能被当成余额；沿用磁盘队列故障保护，不影响已经放行的调用。
-	if s.usageSpool != nil {
-		stage := "spool_status"
-		state, err := s.usageSpool.Status()
-		// 在途同步标记保留容量但尚无最终账单，不能让每次准入反复解析全部在途文件。
-		if err == nil && state.Replayable > 0 {
-			stage = "spool_replay"
-			err = s.flushLocalUsage(r.Context(), true)
-		}
-		if err != nil {
-			util.Error("billing admission pending stage=%s cause=%s", stage, billingPendingCause(err))
+	// 预留槽位时已在目录锁下观察可重放的账单。只要看到证据，仍须等待该批结清才能查询余额。
+	if pendingBills > 0 {
+		if err := s.flushLocalUsage(r.Context(), true); err != nil {
+			util.Error("billing admission pending stage=spool_replay cause=%s", billingPendingCause(err))
 			util.WriteTypedError(w, r.URL.Path, 503, "billing_storage_pending", "pending token charges must settle before another request")
 			return nil, false
 		}

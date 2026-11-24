@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestUsageSpoolConfiguration 验证省略配置保持兼容，显式错误容量及超出 1–64 的合并上限均被拒绝；环境由t.Setenv恢复，无外部依赖。
@@ -60,15 +61,44 @@ func TestUsageSpoolAdmissionFailure(t *testing.T) {
 	s.initializeUsageSpool()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/v1/responses", nil)
-	if s.admitUsageSpool(w, r, "call") || w.Code != 503 || !strings.Contains(w.Body.String(), "billing_storage_unavailable") {
+	if _, admitted := s.admitUsageSpool(w, r, "call"); admitted || w.Code != 503 || !strings.Contains(w.Body.String(), "billing_storage_unavailable") {
 		t.Fatal("初始化失败静默绕过持久化准入")
 	}
 	if err := s.CloseUsageSpool(); err != nil {
 		t.Fatal(err)
 	}
 	s.usageSpoolEnabled = false
-	if !s.admitUsageSpool(httptest.NewRecorder(), r, "call") {
+	if pending, admitted := s.admitUsageSpool(httptest.NewRecorder(), r, "call"); !admitted || pending != 0 {
 		t.Fatal("未配置队列不应改变兼容路径")
+	}
+}
+
+// TestUsageSpoolAdmissionBacklog 通过网关准入入口预留真实临时磁盘，验证带回旧账数量、满队列的 503 和结清后的再次放行。
+// 所有账单使用合成请求 ID，不访问供应商；测试结束后关闭队列并删除整个私有目录。
+func TestUsageSpoolAdmissionBacklog(t *testing.T) {
+	spool, err := usagespool.Open(usagespool.Config{Dir: filepath.Join(t.TempDir(), "spool"), MaxEntries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = spool.Close() })
+	server := &Server{usageSpool: spool, usageSpoolEnabled: true}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	owed := iam.UsageRecord{RequestID: "older-charge", TS: time.Now(), Cost: 1}
+	if err := spool.Put(owed); err != nil {
+		t.Fatalf("创建待结账单失败: %v", err)
+	}
+	if n, ok := server.admitUsageSpool(httptest.NewRecorder(), request, "first"); !ok || n != 1 {
+		t.Fatalf("新请求必须看到此前已发布的账单: admitted=%v pending=%d", ok, n)
+	}
+	w := httptest.NewRecorder()
+	if _, ok := server.admitUsageSpool(w, request, "full"); ok || w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "billing_storage_unavailable") {
+		t.Fatalf("容量已满时未返回存储拒绝: admitted=%v status=%d", ok, w.Code)
+	}
+	if err := spool.Acknowledge(owed); err != nil {
+		t.Fatalf("确认旧账失败: %v", err)
+	}
+	if n, ok := server.admitUsageSpool(httptest.NewRecorder(), request, "resumed"); !ok || n != 0 {
+		t.Fatalf("已结清的旧账不应再次阻塞准入: admitted=%v pending=%d", ok, n)
 	}
 }
 

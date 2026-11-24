@@ -6,7 +6,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从日志详情和监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
  * 恢复前在独占目录构造探针残留，确认真实账单和监控消费均只增加一次。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
@@ -238,6 +238,16 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         expect(info.status()).toBe(200);
         return Number((await info.json()).user_info.spend) - startingSpend;
       }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
+      // 从真实日志页面定位整批交错调用中的最后一个流式请求，验证用户看到的是它自己的模型账单。
+      const lastStreamID = concurrentIDs[concurrentIDs.length - 1];
+      await stableGoto(page, "/logs");
+      await logsPanel.getByPlaceholder(searchLabel, { exact: true }).fill(lastStreamID);
+      const streamRow = logsPanel.getByRole("row").filter({ hasText: lastStreamID });
+      await expect(streamRow).toHaveCount(1);
+      await streamRow.click();
+      const detail = page.getByRole("dialog");
+      await expect(detail).toContainText(model);
+      await expect(detail).toContainText(lastStreamID);
       // 最终账单和个人费用已经可见，浏览器压力结束后，独占夹具目录中的实写探针也应收尽。
       await expect.poll(() => readdirSync(join(process.env.E2E_RUN_DIR!, "usage-spool")).filter(name => name.startsWith(".probe-"))).toEqual([]);
     } finally {

@@ -264,7 +264,8 @@ func token() (string, error) {
 	return hex.EncodeToString(random[:]), nil
 }
 
-// syncDirectoryLocked 同步目录项变更，参数为根目录内相对名；持mu调用，返回打开/fsync/关闭错误。
+// syncDirectoryLocked 同步根目录内的相对目录，返回打开、同步或关闭错误。
+// 账单发布者持有 mu；准入专用探针持有 probeMu，二者均保证同步期间根目录句柄有效。
 func (s *Spool) syncDirectoryLocked(name string) error {
 	dir, err := s.root.Open(name)
 	if err != nil {
@@ -497,70 +498,99 @@ func (s *Spool) Status() (status Status, err error) {
 // 并发在途与待结算共同受字节/条数限制；磁盘满、权限错误、隔离证据时拒绝，调用结束必须Release。
 // 预留限制本队列并发容量，不承诺抵抗外部进程在准入后耗尽磁盘或硬件故障。
 func (s *Spool) Reserve(callID string) error {
-	return s.reserve(callID, false, s.probeWritableLocked)
+	return s.reserve(callID, false, s.probeFile, nil)
 }
 
 // ReserveForAttempt 为网关的本次出站尝试预留账单空间。callID 贯穿重试和回退，返回与 Reserve 相同的准入错误。
 // 新请求直接取票；已有普通预留在同一把锁内重新校验，仍在交付中的同步账单继续占用其终态空间。
 func (s *Spool) ReserveForAttempt(callID string) error {
-	return s.reserve(callID, true, s.probeWritableLocked)
+	return s.reserve(callID, true, s.probeFile, nil)
 }
 
-// reserve 为 callID 申请空间；renew 为真时替换上次普通尝试的预留。普通路径用 probe 在锁内验证磁盘；新尝试遇到账单锁争用时可提前取得本次实写证明。
-// 每个请求先取票，随后逐个检查权限与容量；只有在其取票后才开始并已成功的探针可以共享。
-func (s *Spool) reserve(callID string, renew bool, probe func() error) (err error) {
+// ReserveForAttemptWithBacklog 为网关请求预留容量，同时返回此刻已经发布、需要在预算校验前结清的账单数。
+// callID 标识本次请求；正常准入直接复用分配槽位时持锁读取的快照。复用在途交付槽位时仍需读取当前目录。
+// 返回错误时调用方拒绝准入；该快照只覆盖本次观察点，后来才发布的账单由后续准入或后台恢复处理。
+func (s *Spool) ReserveForAttemptWithBacklog(callID string) (int, error) {
+	var pending int
+	err := s.reserve(callID, true, s.probeFile, &pending)
+	return pending, err
+}
+
+// reserve 为 callID 申请空间；renew 为真时替换普通尝试的预留，允许实写探针与其他账单的发布或确认并行。
+// probe 接收探针文件名，空名表示在目录锁内生成独占临时文件。返回错误时不占用旧尝试的普通槽。
+// pending 非空时带回已发布的待结账单数。每个请求先取票，随后逐个检查权限与容量；只有在其取票后才开始并已成功的探针可以共享。
+func (s *Spool) reserve(callID string, renew bool, probe func(string) error, pending *int) (err error) {
 	if callID == "" {
 		return ErrUnavailable
 	}
 	ticket := s.admissionTicket.Add(1)
 	var earlyErr error
 	if renew {
-		earlyErr = s.lockForAttempt(s.probeFile)
+		earlyErr = s.lockForAttempt(probe)
 	} else {
 		s.mu.Lock()
 	}
 	defer s.finishLocked(&err)
-	if s.closed {
-		return ErrUnavailable
-	}
-	if s.reserved[callID] {
-		if !renew || s.activeDelivery[basename(callID)] {
-			return nil
+	preparedOutside := false
+	for {
+		if s.closed {
+			return ErrUnavailable
 		}
-		// 重试必须先归还普通预留再按当前容量、权限及可写性准入；校验失败也不能留下旧槽。
-		delete(s.reserved, callID)
-	}
-	if earlyErr != nil {
-		s.lastErr = earlyErr
-		return earlyErr
-	}
-	status, err := s.statusLocked()
-	if err != nil {
-		return err
-	}
-	if status.Quarantined > 0 {
-		return ErrCorrupt
-	}
-	if status.Pending+status.Reserved >= s.config.MaxEntries || status.Bytes+status.ReservedBytes+s.config.MaxRecordBytes > s.config.MaxBytes {
-		return ErrFull
-	}
-	info, err := s.root.Stat(".")
-	if err != nil || info.Mode().Perm() != 0700 {
-		return ErrUnavailable
-	}
-	if ticket > s.probedThrough || s.lastErr != nil {
-		// 取票截止点必须先于写入。即使另一个调用在本次 fsync 返回前到达，
-		// 只要探针已经开始，它仍需下一个实际探针，不能复用先前或空闲期的结果。
-		through := s.admissionTicket.Load()
-		if err := probe(); err != nil {
-			s.lastErr = err
+		if s.reserved[callID] {
+			if !renew || s.activeDelivery[basename(callID)] {
+				if pending != nil {
+					state, err := s.statusLocked()
+					*pending = state.Replayable
+					return err
+				}
+				return nil
+			}
+			// 重试必须先归还普通预留再按当前容量、权限及可写性准入；校验失败也不能留下旧槽。
+			delete(s.reserved, callID)
+		}
+		if earlyErr != nil {
+			s.lastErr = earlyErr
+			return earlyErr
+		}
+		status, err := s.statusLocked()
+		if err != nil {
 			return err
 		}
-		s.lastErr = nil
-		s.probedThrough = through
+		if status.Quarantined > 0 {
+			return ErrCorrupt
+		}
+		if status.Pending+status.Reserved >= s.config.MaxEntries || status.Bytes+status.ReservedBytes+s.config.MaxRecordBytes > s.config.MaxBytes {
+			return ErrFull
+		}
+		info, err := s.root.Stat(".")
+		if err != nil || info.Mode().Perm() != 0700 {
+			return ErrUnavailable
+		}
+		if ticket > s.probedThrough || s.lastErr != nil {
+			// 已有足够形成一批结算的在途或待处理记录时，锁外探针让这批账单能及时发布或确认。
+			// 轻载时持锁完成一次探针，省去第二次目录扫描；已有锁争用仍由 lockForAttempt 优先重叠写盘。
+			if renew && !preparedOutside && status.Reserved+status.Pending >= s.config.GroupSize && s.probeMu.TryLock() {
+				preparedOutside = true
+				s.mu.Unlock()
+				earlyErr = s.probeAndLock(probe)
+				continue
+			}
+			// 锁外证明被故障作废或已有其他探针时，在锁内补验。新票不能复用已开始的探针。
+			through := s.admissionTicket.Load()
+			if err := probe(""); err != nil {
+				s.lastErr = err
+				return err
+			}
+			s.lastErr = nil
+			s.probedThrough = through
+		}
+		// 只有成功准入才带回待结数，取最后一次目录扫描，与分配槽位处在同一个临界区。
+		if pending != nil {
+			*pending = status.Replayable
+		}
+		s.reserved[callID] = true
+		return nil
 	}
-	s.reserved[callID] = true
-	return nil
 }
 
 // invalidateProbeLocked 由持有 mu 的失败操作调用，使共享探针和同时在锁外进行的探针失效。
@@ -580,6 +610,12 @@ func (s *Spool) lockForAttempt(probe func(string) error) error {
 		s.mu.Lock()
 		return nil
 	}
+	return s.probeAndLock(probe)
+}
+
+// probeAndLock 供已取得 probeMu、未持有 mu 的准入调用。probe 使用本实例专属的临时文件，
+// 返回该次真实写盘的错误。退出时释放 probeMu 并持有 mu；仅当中途没有队列故障时才发布取票截止点。
+func (s *Spool) probeAndLock(probe func(string) error) error {
 	epoch := s.faultEpoch.Load()
 	through := s.admissionTicket.Load()
 	err := probe(s.probePath)
@@ -594,19 +630,17 @@ func (s *Spool) lockForAttempt(probe func(string) error) error {
 	return err
 }
 
-// probeWritableLocked 建立临时探针，写入后同步其数据和根目录，再删除探针，以验证当前卷可写。
-// 由 reserve 在互斥锁内调用；任一步骤失败都返回错误，不发布本次探针的取票截止点。
-func (s *Spool) probeWritableLocked() error {
-	suffix, err := token()
-	if err != nil {
-		return err
-	}
-	return s.probeFile(".probe-" + suffix)
-}
-
-// probeFile 验证根目录中指定的独占探针名可创建、写入、同步并删除，返回任一步骤的错误。
-// 常规探针由 mu 保护，争用时的专用探针由 probeMu 保护；调用期间目录句柄保持有效。
+// probeFile 验证根目录中的探针可独占创建、写入、同步并删除，返回任一步骤的错误。
+// 持有目录锁的调用传空字符串以生成临时文件名；锁外调用持有 probeMu，使用实例专用文件名。
+// 两种路径都保持目录句柄有效，且都要求文件与父目录同步成功。
 func (s *Spool) probeFile(name string) error {
+	if name == "" {
+		suffix, err := token()
+		if err != nil {
+			return err
+		}
+		name = ".probe-" + suffix
+	}
 	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -620,7 +654,7 @@ func (s *Spool) probeFile(name string) error {
 	return errors.Join(writeErr, syncErr, closeErr, removeErr)
 }
 
-// syncProbe 仅供准入探针并行同步仍有目录项的文件与其父目录。调用方持有队列锁并保持文件打开。
+// syncProbe 仅供准入探针并行同步仍有目录项的文件与其父目录。调用方在两次同步完成前保持文件和目录句柄打开。
 // 两个参数分别执行文件同步和目录同步；等待二者结束，返回合并的错误，任一失败都不能放行。
 func syncProbe(syncFile, syncDir func() error) error {
 	fileDone := make(chan error, 1)

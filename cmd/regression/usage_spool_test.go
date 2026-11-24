@@ -18,7 +18,7 @@ import (
 )
 
 // TestUsageSpoolConcurrentChatBilling 使用工单中的压测客户端，验证启用磁盘队列时普通 Chat 与 SSE 均能并发完成。
-// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对每笔用量、五层费用及重放幂等。
+// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对并发后的新会话、每笔用量、五层费用及重放幂等。
 // t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
 func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
 	for _, size := range []string{"1", "16"} {
@@ -82,6 +82,13 @@ func verifyConcurrentChatBills(t *testing.T) {
 			}
 		}
 	}
+	// 客户端刚读完最后一批流时，旧账可能还在确认。新会话必须能准入，而且其账单 ID 仍能与上游回执逐一对应。
+	follow := h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest(model, "Confirm the next conversation after the streaming burst."))
+	followID := follow.header("x-litellm-call-id")
+	if followID == "" {
+		t.Fatal("流量高峰后的新会话缺少可核对的账单 ID")
+	}
+	succeeded++
 	// SSE 客户端可先收到结束帧；等所有处理器退出再连续刷账，确保检查的是持久终态。
 	h.server.Close()
 	h.flushSpend()
@@ -104,6 +111,9 @@ func verifyConcurrentChatBills(t *testing.T) {
 		if event.Streamed {
 			streamBills++
 		}
+	}
+	if !ids[followID] {
+		t.Fatalf("流量高峰后的新会话账单缺失: %s", followID)
 	}
 	// 同用户的独立调用可能共用结算事务。监控金额须逐笔保持与真实 NUMERIC 账本完全相等。
 	var monitorMatches bool
