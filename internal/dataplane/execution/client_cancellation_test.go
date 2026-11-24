@@ -107,6 +107,12 @@ func TestClientCancellationClassification(t *testing.T) {
 type canceledNativeHost struct {
 	*fallbackNativeHost
 	status, bills int
+	savedResponse string
+}
+
+// RememberExchange 捕获断连前实际收到的正文，以核对成功读取和取消交错的日志；内存中仅保留本次测试内容。
+func (h *canceledNativeHost) RememberExchange(_ string, _ *http.Request, _, response []byte) {
+	h.savedResponse = string(response)
 }
 
 // RecordSpend 记录原生入口最终HTTP分类和次数；其余参数仅满足宿主契约，无外部结算。
@@ -160,6 +166,49 @@ func TestNativeClientCancellationClassification(t *testing.T) {
 			if up == nil || up.Endpoint != "/v1/chat/completions" || up.StatusCode != 0 ||
 				up.Failure == nil || up.Failure.Phase != "upstream_request" || up.Failure.Kind != kind || up.Failure.TransportError == "" {
 				t.Fatalf("原生失败未保存出站诊断: %+v", up)
+			}
+		})
+	}
+}
+
+// TestNativeCancellationKeepsObservedError 验证收到完整的供应商 503 错误后发生取消，仍落一次 499 及原始错误。
+// 参数 t 为测试上下文；分别覆盖 EOF 和取消读错，任何继续重试均判失败；内存树和上下文由测试回收。
+func TestNativeCancellationKeepsObservedError(t *testing.T) {
+	for _, terminal := range []error{io.EOF, context.Canceled} {
+		t.Run(terminal.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			const raw = "{ \"error\": {\"message\": \"Supplier response retained\"} }\n"
+			attempts := 0
+			client := &http.Client{Transport: auditRoundTripper(func(*http.Request) (*http.Response, error) {
+				attempts++
+				return &http.Response{
+					StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(&cancellationBody{data: raw, cancel: cancel, err: terminal}),
+				}, nil
+			})}
+			deployment := Deployment("cancel", "cancel", "test", "https://example.invalid/v1", "bypass_openai_chat", nil)
+			models := []config.ModelEntry{deployment}
+			settings := router.BuiltinSettings()
+			settings.Settings["retry_policy"] = map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3}
+			host := &canceledNativeHost{fallbackNativeHost: &fallbackNativeHost{logicHost: &logicHost{
+				cfg: &config.Config{}, client: client, models: models,
+			}, policy: settings}}
+			req := chatRequest(t, "cancel", false).WithContext(ctx)
+			req.URL.Path = "/bypass/openai/v1/chat/completions"
+			hit, ok := providerregistry.Match(req.Method, req.URL.Path)
+			if !ok {
+				t.Fatal("未匹配测试透传路径")
+			}
+			rec := httptest.NewRecorder()
+			ServeBypass(host, rec, req, hit)
+			if attempts != 1 || host.bills != 1 || host.status != 499 || host.savedResponse != raw || rec.Body.Len() != 0 || len(host.notes) == 0 {
+				t.Fatalf("已收到的错误被丢弃或错误重试: attempts=%d status=%d bills=%d", attempts, host.status, host.bills)
+			}
+			up := host.notes[len(host.notes)-1].Upstream
+			if up == nil || up.StatusCode != 503 || up.Error == nil || up.Failure == nil ||
+				up.Failure.Kind != "request_canceled" || up.Failure.Phase != "response_transfer" {
+				t.Fatalf("未保留取消阶段和原始供应商错误: %+v", up)
 			}
 		})
 	}

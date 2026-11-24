@@ -138,6 +138,9 @@ export function registerClientScenario(locale: Locale) {
         await expect(diagnostic).toContainText(tr("logDiagnostics.clientWriteError"));
       } else {
         await expect(diagnostic).toContainText("request_canceled");
+        await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+          translate(locale, "logDiagnostics.canceledDuringUpstreamResponse", { status: 200 }),
+        );
       }
       await expect(diagnostic).toContainText(tr("logDiagnostics.cancelUnknown"));
       await expect(diagnostic).toContainText(tr("logDiagnostics.noUpstreamError"));

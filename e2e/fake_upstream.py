@@ -335,6 +335,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.shutdown(socket.SHUT_WR)
             elif "Return an empty 502." in contents:
                 self._response(502, b"", "text/plain")
+            elif "Read complete error then disconnect." in contents:
+                vendor_error = b'{ "type": "error", "error": { "type": "overloaded_error", "message": "Provider saturated" }, "request_id": "req-vendor-502" }\n'
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Request-Id", "req-vendor-502")
+                self.send_header("Content-Length", str(len(vendor_error) + 100))
+                self.end_headers()
+                self.wfile.write(vendor_error)
+                self.close_connection = True
             elif "End the stream early." in contents:
                 self._response(200, b'event: ping\ndata: {"type":"ping"}\n\n', "text/event-stream")
             elif "Trigger empty response." in contents:

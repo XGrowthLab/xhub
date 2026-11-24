@@ -200,6 +200,28 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	var status int
 	var selectedID string
 	tried := false
+	// recordCanceled 按原始入站取消记录 499。cause 是本次传输错误；完整错误正文仍走既有正文捕获策略。
+	// 两个出站取消分支共用；不写回已断开的连接，不使用上游用量结算。
+	recordCanceled := func(cause error, errorBody []byte) {
+		if response.Diagnostics == nil {
+			response.Diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
+		}
+		phase := "upstream_request"
+		if response.Diagnostics.StatusCode != 0 {
+			phase = "response_transfer"
+		}
+		response.Diagnostics.Failure = dpdiagnostics.ObserveFailure(r.Context(), phase, cause, time.Since(start))
+		response.Diagnostics.Failure.Kind = "request_canceled"
+		if len(errorBody) == 0 {
+			errorBody = []byte("request connection canceled; initiator unknown")
+		}
+		h.RememberExchange(callID, r, raw, errorBody)
+		note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
+		applyStreamTiming(&note, response, start)
+		note.Upstream = response.Diagnostics
+		h.AnnotateCall(callID, note)
+		h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, 499, selectedID)
+	}
 	originalHit := hit
 	for len(pool) > 0 {
 		kind := "general"
@@ -279,6 +301,16 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				dep = candidate
 				selectedID = router.CooldownID(rawDep)
 				if err != nil {
+					// 检查入站上下文，不能检查上面已释放的尝试上下文。取消记 499 且不发起重试。
+					failure := classifyBypassFailure(r.Context().Err(), response.Streamed, replayDialogue)
+					if failure == bypassCanceled {
+						var errorBody []byte
+						if status >= 400 && response.Diagnostics != nil && response.Diagnostics.Error != nil && json.Valid(respBody) {
+							errorBody = respBody
+						}
+						recordCanceled(err, errorBody)
+						return
+					}
 					if response.Diagnostics == nil {
 						response.Diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
 					}
@@ -287,19 +319,6 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						phase = "response_transfer"
 					}
 					response.Diagnostics.Failure = dpdiagnostics.ObserveFailure(r.Context(), phase, err, time.Since(start))
-					// 原生入口同样区分客户端取消与供应商超时：只检查入站上下文，
-					// 不能检查上面已释放的尝试上下文；取消记499并停止重试，不污染共享冷却。
-					failure := classifyBypassFailure(r.Context().Err(), response.Streamed, replayDialogue)
-					if failure == bypassCanceled {
-						response.Diagnostics.Failure.Kind = "request_canceled"
-						h.RememberExchange(callID, r, raw, []byte("request connection canceled; initiator unknown"))
-						note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
-						applyStreamTiming(&note, response, start)
-						note.Upstream = response.Diagnostics
-						h.AnnotateCall(callID, note)
-						h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, 499, selectedID)
-						return
-					}
 					if failure == bypassStarted {
 						if errors.Is(err, dpstream.ErrClientWrite) {
 							// 流已提交后写入失败不证明上游故障，也不能据此推断用户主动停止。
@@ -354,7 +373,9 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					if status >= 500 && !replayDialogue {
 						goto forwarded
 					}
-					if r.Context().Err() != nil {
+					if cause := r.Context().Err(); cause != nil {
+						// 上游错误已有完整响应但重试前连接断开时，诊断仍属于本次请求。
+						recordCanceled(cause, respBody)
 						return
 					}
 					continue

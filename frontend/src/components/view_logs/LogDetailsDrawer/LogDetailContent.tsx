@@ -79,6 +79,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
   const errorDetails = hasError ? fullErrorDetails(logEntry) : "";
   const errorSummary = hasError ? logErrorSummary(logEntry, (status) => t("logsUX.upstreamEmptyErrorBody", { status })) : "";
   const errorInfo = hasError ? metadata.error_information : null;
+  const upstream = metadata.upstream_response;
+  const cancellation = Number(metadata.http_status) === 499 ? upstream?.failure : undefined;
+  const observedError = cancellation && upstream?.error ? logErrorSummary({ response: upstream.error }) : "";
   const isClassifier =
     metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
     ["completion", "acompletion", "responses", "aresponses"].includes(logEntry.call_type);
@@ -134,6 +137,15 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
           <div>
             <div className="font-medium text-destructive">{t(logOutcomeKey(logEntry))}</div>
             {metadata.http_status != null && <div>{t("HTTP Status")}: {metadata.http_status}</div>}
+            {cancellation?.phase === "upstream_request" && upstream?.status_code === 0 && (
+              <p>{t("logDiagnostics.canceledWaitingForUpstream")}</p>
+            )}
+            {cancellation?.phase === "response_transfer" && Number(upstream?.status_code) > 0 && (
+              <p>{t("logDiagnostics.canceledDuringUpstreamResponse", { status: upstream.status_code })}</p>
+            )}
+            {observedError && (
+              <p className="break-words"><strong>{t("logDiagnostics.upstreamError")}</strong> · {observedError}</p>
+            )}
             {errorInfo ? <ErrorDescription errorInfo={errorInfo} /> : errorSummary && <p className="mt-1 break-words">{errorSummary}</p>}
             {(!errorSummary || errorSummary === "upstream request failed") && !errorInfo && (
               <p className="text-muted-foreground">{t("logsUX.causeUnknown")}</p>

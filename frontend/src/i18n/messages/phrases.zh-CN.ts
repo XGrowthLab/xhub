@@ -83,6 +83,8 @@ export const zhPhrases: Record<string, string> = {
   "logDiagnostics.rejectedField": "字段",
   "logDiagnostics.targetProtocol": "目标协议",
   "logDiagnostics.cancelUnknown": "请求连接已取消，触发来源未知；这不能证明用户手动停止生成。",
+  "logDiagnostics.canceledWaitingForUpstream": "等待上游时连接中断，尚未收到上游 HTTP 响应。",
+  "logDiagnostics.canceledDuringUpstreamResponse": "收到上游 HTTP {status} 后，连接在传输响应时中断。",
   "logDiagnostics.clientWriteError": "向客户端写入响应失败，连接中断原因未知；这不能证明用户手动停止，也不能据此认定上游异常。",
   "logDiagnostics.upstreamError": "已观测到的上游错误",
   "logDiagnostics.bodyOmitted": "请求正文未读取完整，未保存正文；已保留读取字节数、大小上限和错误原因。",

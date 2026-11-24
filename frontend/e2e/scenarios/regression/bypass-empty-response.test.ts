@@ -28,7 +28,7 @@ test("empty native response fails without replay and leaves confirmed billing in
           method: "POST", headers: { "x-api-key": secret, "anthropic-version": "2023-06-01", "content-type": "application/json" },
           body: JSON.stringify({ model: name, messages: [{ role: "user", content }], max_tokens: 32, stream }),
         });
-        return { status: response.status, id: response.headers.get("x-litellm-call-id"), body: await response.text() };
+        return { status: response.status, id: response.headers.get("x-litellm-call-id"), vendorId: response.headers.get("request-id"), body: await response.text() };
       };
       return {
         failed: await send("Trigger empty response."),
@@ -36,6 +36,7 @@ test("empty native response fails without replay and leaves confirmed billing in
         disconnected: await send("Disconnect before response."),
         emptyError: await send("Return an empty 502."),
         interruptedStream: await send("End the stream early.", true),
+        interruptedError: await send("Read complete error then disconnect."),
       };
     }, { secret: key.key, name });
     expect(result.failed.status, result.failed.body).toBe(502);
@@ -48,7 +49,10 @@ test("empty native response fails without replay and leaves confirmed billing in
     expect(result.disconnected.body).toContain("upstream request failed");
     expect(result.emptyError).toMatchObject({ status: 502, body: "" });
     expect(result.interruptedStream).toMatchObject({ status: 200, body: expect.stringContaining("event: ping") });
-    expect(await count() - before).toBe(5);
+    expect(result.interruptedError.status).toBe(502);
+    expect(result.interruptedError.vendorId).toBe("req-vendor-502");
+    expect(result.interruptedError.body).toBe('{ "type": "error", "error": { "type": "overloaded_error", "message": "Provider saturated" }, "request_id": "req-vendor-502" }\n');
+    expect(await count() - before).toBe(6);
     const detail = async (id: string | null) => {
       expect(id).toBeTruthy();
       const response = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
@@ -61,6 +65,7 @@ test("empty native response fails without replay and leaves confirmed billing in
       endpoint: "/v1/messages", status_code: 0, failure: { phase: "upstream_request", transport_error: expect.stringContaining("EOF") },
     });
     await expect.poll(async () => (await detail(result.emptyError.id))?.error).toContain("upstream returned HTTP 502 without an error body");
+    await expect.poll(async () => (await detail(result.interruptedError.id))?.error).toContain("Provider saturated");
     await expect.poll(async () => (await detail(result.interruptedStream.id))?.metadata).toMatchObject({
       http_status: 502, upstream_response: { status_code: 200, failure: { phase: "response_transfer" } },
     });
@@ -84,6 +89,9 @@ test("empty native response fails without replay and leaves confirmed billing in
     await page.keyboard.press("Escape");
     await stableGoto(page, "/logs?log_id=" + result.interruptedStream.id);
     await expect(dialog.getByRole("alert")).toContainText("native stream ended without successful completion");
+    await page.keyboard.press("Escape");
+    await stableGoto(page, "/logs?log_id=" + result.interruptedError.id);
+    await expect(dialog.getByRole("alert")).toContainText("Provider saturated");
   } finally {
     if (token) expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [token] } })).status()).toBe(200);
     if (deployment) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: deployment } })).status()).toBe(200);
