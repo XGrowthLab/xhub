@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { ChevronDown, PlayCircle, Save, BookOpen, Copy, Check } from "lucide-react";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { Guardrail } from "@/components/guardrails/types";
+import { cn } from "@/lib/cva.config";
 
 interface Props {
   accessToken: string | null;
@@ -17,10 +18,11 @@ interface Props {
   onSuccess: () => void;
   onClose: () => void;
   readOnly?: boolean;
+  inDialog?: boolean;
 }
 /**
  * 用途：展示本地关键词/RE2 规则表单，切换规则时重新初始化输入。
- * 参数：props：访问令牌、可选规则、只读状态、保存成功和关闭回调。
+ * 参数：props：访问令牌、可选规则、只读状态、弹窗布局、保存成功和关闭回调。
  * 返回：React 表单。
  * 调用：本地护栏弹窗和详情页。
  * 测试：后端 engine_test.go 校验规则语义；LocalGuardrailEditor.integration.test.tsx。
@@ -32,12 +34,19 @@ export function LocalGuardrailEditor(props: Props) {
 
 /**
  * 用途：管理关键词、正则、动作与三态消息范围；调试直接执行当前未保存规则；只读规则使用已保存配置。
- * 参数：Props：已有规则、权限及生命周期回调。
- * 返回：React 表单；YAML 规则只读，显示后端实际执行结果。
+ * 参数：Props：已有规则、权限、弹窗布局及生命周期回调。
+ * 返回：React 表单；弹窗仅滚动编辑内容以保留操作栏，YAML 规则只读。
  * 调用：LocalGuardrailEditor。
  * 测试：后端 engine_test.go 校验规则语义；LocalGuardrailEditor.integration.test.tsx。
  */
-function LocalGuardrailForm({ accessToken, rule, onSuccess, onClose, readOnly: explicitlyReadOnly = false }: Props) {
+function LocalGuardrailForm({
+  accessToken,
+  rule,
+  onSuccess,
+  onClose,
+  readOnly: explicitlyReadOnly = false,
+  inDialog = false,
+}: Props) {
   const t = useT();
   const p: Partial<Guardrail["litellm_params"]> = rule?.litellm_params ?? {};
   const [name, setName] = useState(rule?.guardrail_name ?? "");
@@ -113,7 +122,7 @@ function LocalGuardrailForm({ accessToken, rule, onSuccess, onClose, readOnly: e
   function changeTemplate(value: string) {
     setTemplate(value);
     if (value === "custom") return;
-    setWords(value === "block" ? "内部密钥\n机密资料" : "");
+    setWords(value === "block" ? "internal secret\nconfidential information" : "");
     const templatePatterns: Record<string, string> = {
       phone: "1[3-9][0-9]{9}",
       email: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
@@ -202,275 +211,277 @@ function LocalGuardrailForm({ accessToken, rule, onSuccess, onClose, readOnly: e
     }
   }
   return (
-    <div className="min-w-0 space-y-6">
-      {readOnly && (
-        <p className="rounded-lg bg-muted p-3 text-sm">
-          {rule?.guardrail_definition_location === "config"
-            ? t("该护栏来自 YAML，请在配置文件中编辑。")
-            : t("当前账号只有查看权限。")}
-        </p>
-      )}
-      <fieldset
-        disabled={busy || readOnly}
-        className="grid gap-5 border-b pb-6 sm:grid-cols-2 lg:grid-cols-[1fr_1.25fr_1fr_auto]"
-      >
-        <label className="space-y-2 text-sm font-medium text-muted-foreground">
-          <span>{t("护栏名称")}</span>
-          <Input
-            value={name}
-            placeholder="e.g. sensitive-data"
-            onChange={(e) => setName(e.target.value)}
-            className="text-foreground"
-          />
-        </label>
-        <GuardrailModeSelect disabled={busy || readOnly} />
-        <label className="space-y-2 text-sm font-medium text-muted-foreground">
-          <span>{t("模板")}</span>
-          <select
-            aria-label={t("模板")}
-            value={template}
-            onChange={(e) => changeTemplate(e.target.value)}
-            className="h-10 w-full rounded-md border bg-background px-3 text-foreground"
-          >
-            <option value="custom">{t("自定义规则")}</option>
-            <option value="block">{t("关键词拦截模板")}</option>
-            <option value="phone">{t("手机号脱敏模板")}</option>
-            <option value="email">{t("邮箱脱敏模板")}</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-3 sm:pt-7">
-          <span className="text-sm text-muted-foreground">{t("默认启用")}</span>
-          <Switch
-            checked={defaultOn}
-            onCheckedChange={setDefaultOn}
-            aria-label={t("默认启用（客户端不能关闭）")}
-            disabled={busy || readOnly}
-          />
-        </label>
-      </fieldset>
-      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_310px] xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 space-y-4">
-          <fieldset disabled={busy || readOnly} className="rounded-xl border bg-card p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold">{t("匹配规则")}</h3>
-              <span className="text-xs text-muted-foreground">{t("任一规则命中即执行动作")}</span>
-            </div>
-            <div className="grid gap-5 sm:grid-cols-2">
-              <label className="space-y-2 text-sm">
-                <span className="font-medium">{t("关键词（每行一个）")}</span>
-                <Textarea
-                  aria-label={t("关键词（每行一个）")}
-                  value={words}
-                  onChange={(e) => changeRuleText(e.target.value, setWords)}
-                  placeholder={t("例如：内部密钥")}
-                  className="min-h-52 resize-y font-mono text-sm"
-                />
-                <span className="block text-xs text-muted-foreground">{t("按文本包含匹配，忽略大小写。")}</span>
-              </label>
-              <label className="space-y-2 text-sm">
-                <span className="font-medium">{t("正则表达式（每行一个，可选）")}</span>
-                <Textarea
-                  aria-label={t("正则表达式（每行一个，可选）")}
-                  value={patterns}
-                  onChange={(e) => changeRuleText(e.target.value, setPatterns)}
-                  placeholder={t("例如：1[3-9][0-9]{9}")}
-                  spellCheck={false}
-                  className="min-h-52 resize-y font-mono text-sm"
-                />
-                <span className="block text-xs text-muted-foreground">{t("使用 Go RE2，保存和测试时校验语法。")}</span>
-              </label>
-            </div>
-            <div className="mt-5 grid gap-4 border-t pt-4 sm:grid-cols-2">
-              <label className="space-y-2 text-sm">
-                <span className="font-medium">{t("命中后的动作")}</span>
-                <select
-                  value={action}
-                  onChange={(e) => {
-                    setAction(e.target.value);
-                    setResult("");
-                  }}
-                  className="h-10 w-full rounded-md border bg-background px-3"
-                >
-                  <option value="block">{t("拦截请求")}</option>
-                  <option value="redact">{t("脱敏后继续")}</option>
-                </select>
-              </label>
-              {action === "redact" && (
+    <div className={cn("min-w-0", inDialog ? "flex min-h-0 flex-col" : "space-y-5")}>
+      <div className={cn("@container min-w-0 space-y-5", inDialog && "min-h-0 overflow-y-auto px-4 pb-5 sm:px-6")}>
+        {readOnly && (
+          <p className="rounded-lg bg-muted p-3 text-sm">
+            {rule?.guardrail_definition_location === "config"
+              ? t("该护栏来自 YAML，请在配置文件中编辑。")
+              : t("当前账号只有查看权限。")}
+          </p>
+        )}
+        <fieldset
+          disabled={busy || readOnly}
+          className="grid min-w-0 gap-4 border-b pb-5 @lg:grid-cols-2 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)_auto]"
+        >
+          <label className="space-y-2 text-sm font-medium text-muted-foreground">
+            <span>{t("护栏名称")}</span>
+            <Input
+              value={name}
+              placeholder="sensitive-data"
+              onChange={(e) => setName(e.target.value)}
+              className="text-foreground"
+            />
+          </label>
+          <GuardrailModeSelect disabled={busy || readOnly} />
+          <label className="space-y-2 text-sm font-medium text-muted-foreground">
+            <span>{t("模板")}</span>
+            <select
+              aria-label={t("模板")}
+              value={template}
+              onChange={(e) => changeTemplate(e.target.value)}
+              className="h-10 w-full rounded-md border bg-background px-3 text-foreground"
+            >
+              <option value="custom">{t("自定义规则")}</option>
+              <option value="block">{t("关键词拦截模板")}</option>
+              <option value="phone">{t("手机号脱敏模板")}</option>
+              <option value="email">{t("邮箱脱敏模板")}</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-3 @lg:pt-7">
+            <span className="text-sm text-muted-foreground">{t("默认启用")}</span>
+            <Switch
+              checked={defaultOn}
+              onCheckedChange={setDefaultOn}
+              aria-label={t("默认启用（客户端不能关闭）")}
+              disabled={busy || readOnly}
+            />
+          </label>
+        </fieldset>
+        <div className="grid min-w-0 gap-5 @3xl:grid-cols-[minmax(0,1fr)_clamp(16rem,30%,19rem)]">
+          <div className="min-w-0 space-y-4">
+            <fieldset disabled={busy || readOnly} className="min-w-0 rounded-xl border bg-card p-4 @md:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold">{t("匹配规则")}</h3>
+                <span className="text-xs text-muted-foreground">{t("任一规则命中即执行动作")}</span>
+              </div>
+              <div className="grid gap-4 @2xl:grid-cols-2">
                 <label className="space-y-2 text-sm">
-                  <span className="font-medium">{t("替换文本")}</span>
-                  <Input
-                    value={replacement}
+                  <span className="font-medium">{t("关键词（每行一个）")}</span>
+                  <Textarea
+                    aria-label={t("关键词（每行一个）")}
+                    value={words}
+                    onChange={(e) => changeRuleText(e.target.value, setWords)}
+                    placeholder={t("例如：内部密钥")}
+                    className="min-h-32 resize-y @3xl:min-h-40 font-mono text-sm"
+                  />
+                  <span className="block text-xs text-muted-foreground">{t("按文本包含匹配，忽略大小写。")}</span>
+                </label>
+                <label className="space-y-2 text-sm">
+                  <span className="font-medium">{t("正则表达式（每行一个，可选）")}</span>
+                  <Textarea
+                    aria-label={t("正则表达式（每行一个，可选）")}
+                    value={patterns}
+                    onChange={(e) => changeRuleText(e.target.value, setPatterns)}
+                    placeholder={t("例如：1[3-9][0-9]{9}")}
+                    spellCheck={false}
+                    className="min-h-32 resize-y @3xl:min-h-40 font-mono text-sm"
+                  />
+                  <span className="block text-xs text-muted-foreground">{t("使用 Go RE2，保存和测试时校验语法。")}</span>
+                </label>
+              </div>
+              <div className="mt-5 grid gap-4 border-t pt-4 @lg:grid-cols-2">
+                <label className="space-y-2 text-sm">
+                  <span className="font-medium">{t("命中后的动作")}</span>
+                  <select
+                    value={action}
                     onChange={(e) => {
-                      setReplacement(e.target.value);
+                      setAction(e.target.value);
                       setResult("");
                     }}
-                  />
-                </label>
-              )}
-            </div>
-          </fieldset>
-          <details open className="group rounded-xl border bg-card">
-            <summary className="flex cursor-pointer list-none items-center gap-2 p-4 font-semibold">
-              <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
-              <PlayCircle className="size-4" />
-              {t("测试你的护栏")}
-            </summary>
-            <div className="space-y-3 px-4 pb-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label htmlFor="local-guardrail-test" className="text-sm font-medium text-muted-foreground">
-                  {t("测试文本")}
-                </label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => setText("联系我：13800138000，邮箱 demo@example.com，内容包含内部密钥。")}
-                >
-                  {t("加载请求示例")}
-                </Button>
-              </div>
-              <p className="text-xs leading-5 text-muted-foreground">
-                {readOnly
-                  ? t("测试已保存的规则；输入包含关键词与普通文本，确认拦截或替换结果。")
-                  : t("直接测试当前规则，无需先保存。")}
-              </p>
-              <Textarea
-                id="local-guardrail-test"
-                value={text}
-                onChange={(e) => {
-                  setText(e.target.value);
-                  setResult("");
-                }}
-                disabled={busy}
-                className="min-h-28"
-              />
-              <Button
-                variant="outline"
-                disabled={busy || !accessToken || (!readOnly && !words.trim() && !patterns.trim())}
-                onClick={test}
-              >
-                <PlayCircle className="size-4" />
-                {t("测试当前规则")}
-              </Button>
-              {result && (
-                <pre
-                  aria-label={t("测试结果")}
-                  className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 font-mono text-xs"
-                >
-                  {result}
-                </pre>
-              )}
-            </div>
-          </details>
-          <details className="group rounded-xl border bg-card">
-            <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-medium">
-              {t("高级设置")}
-              <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
-            </summary>
-            <fieldset disabled={busy || readOnly} className="grid gap-4 px-4 pb-4 sm:grid-cols-3">
-              <label className="space-y-2 text-sm">
-                <span>{t("执行优先级（0–10000）")}</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={10000}
-                  value={priority}
-                  onChange={(e) => setPriority(Number(e.target.value))}
-                />
-              </label>
-              {(
-                [
-                  [t("系统消息"), skipSystem, setSkipSystem],
-                  [t("工具消息"), skipTool, setSkipTool],
-                ] as const
-              ).map(([label, value, set]) => (
-                <label className="space-y-2 text-sm" key={label}>
-                  <span>{t("跳过{label}", { label })}</span>
-                  <select
-                    value={value}
-                    onChange={(e) => set(e.target.value)}
                     className="h-10 w-full rounded-md border bg-background px-3"
                   >
-                    <option value="inherit">{t("使用全局默认")}</option>
-                    <option value="true">{t("跳过")}</option>
-                    <option value="false">{t("检查")}</option>
+                    <option value="block">{t("拦截请求")}</option>
+                    <option value="redact">{t("脱敏后继续")}</option>
                   </select>
                 </label>
-              ))}
-              <label className="space-y-2 text-sm sm:col-span-3">
-                <span>{t("说明")}</span>
-                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} />
-              </label>
+                {action === "redact" && (
+                  <label className="space-y-2 text-sm">
+                    <span className="font-medium">{t("替换文本")}</span>
+                    <Input
+                      value={replacement}
+                      onChange={(e) => {
+                        setReplacement(e.target.value);
+                        setResult("");
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
             </fieldset>
-          </details>
-        </div>
-        <aside aria-label={t("规则参考")} className="min-w-0 space-y-4 lg:border-l lg:pl-6">
-          <h3 className="flex items-center gap-2 font-semibold">
-            <BookOpen className="size-4" />
-            {t("规则参考")}
-          </h3>
-          <p className="text-sm text-muted-foreground">{t("点击示例复制正则表达式。")}</p>
-          <details open className="group rounded-xl border">
-            <summary className="flex cursor-pointer list-none items-center justify-between p-3 text-sm font-medium">
-              {t("常用正则")}
-              <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
-            </summary>
-            <div className="space-y-2 px-3 pb-3">
-              {[
-                [t("手机号"), "1[3-9][0-9]{9}"],
-                [t("邮箱"), "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"],
-                [t("IPv4 格式"), "[0-9]{1,3}(\\.[0-9]{1,3}){3}"],
-              ].map(([label, pattern]) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={() => void copyPattern(pattern)}
-                  aria-label={t("复制 {signature} 示例", { signature: label })}
-                  className="w-full rounded-lg bg-muted/50 p-3 text-left transition hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring"
+            <details open className="group rounded-xl border bg-card">
+              <summary className="flex cursor-pointer list-none items-center gap-2 p-4 font-semibold">
+                <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
+                <PlayCircle className="size-4" />
+                {t("测试你的护栏")}
+              </summary>
+              <div className="space-y-3 px-4 pb-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="local-guardrail-test" className="text-sm font-medium text-muted-foreground">
+                    {t("测试文本")}
+                  </label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setText("Contact me at 13800138000 or demo@example.com. This message contains an internal secret.")}
+                  >
+                    {t("加载请求示例")}
+                  </Button>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {readOnly
+                    ? t("测试已保存的规则；输入包含关键词与普通文本，确认拦截或替换结果。")
+                    : t("直接测试当前规则，无需先保存。")}
+                </p>
+                <Textarea
+                  id="local-guardrail-test"
+                  value={text}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    setResult("");
+                  }}
+                  disabled={busy}
+                  className="min-h-28"
+                />
+                <Button
+                  variant="outline"
+                  disabled={busy || !accessToken || (!readOnly && !words.trim() && !patterns.trim())}
+                  onClick={test}
                 >
-                  <span className="flex items-center justify-between text-sm font-medium">
-                    {label}
-                    {copied === pattern ? (
-                      <Check className="size-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="size-3.5 text-muted-foreground" />
-                    )}
-                  </span>
-                  <code className="mt-2 block break-all text-xs text-muted-foreground">{pattern}</code>
-                </button>
-              ))}
+                  <PlayCircle className="size-4" />
+                  {t("测试当前规则")}
+                </Button>
+                {result && (
+                  <pre
+                    aria-label={t("测试结果")}
+                    className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 font-mono text-xs"
+                  >
+                    {result}
+                  </pre>
+                )}
+              </div>
+            </details>
+            <details className="group rounded-xl border bg-card">
+              <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-medium">
+                {t("高级设置")}
+                <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
+              </summary>
+              <fieldset disabled={busy || readOnly} className="grid min-w-0 gap-4 px-4 pb-4 @2xl:grid-cols-3">
+                <label className="space-y-2 text-sm">
+                  <span>{t("执行优先级（0–10000）")}</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={priority}
+                    onChange={(e) => setPriority(Number(e.target.value))}
+                  />
+                </label>
+                {(
+                  [
+                    [t("系统消息"), skipSystem, setSkipSystem],
+                    [t("工具消息"), skipTool, setSkipTool],
+                  ] as const
+                ).map(([label, value, set]) => (
+                  <label className="space-y-2 text-sm" key={label}>
+                    <span>{t("跳过{label}", { label })}</span>
+                    <select
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      className="h-10 w-full rounded-md border bg-background px-3"
+                    >
+                      <option value="inherit">{t("使用全局默认")}</option>
+                      <option value="true">{t("跳过")}</option>
+                      <option value="false">{t("检查")}</option>
+                    </select>
+                  </label>
+                ))}
+                <label className="space-y-2 text-sm @2xl:col-span-3">
+                  <span>{t("说明")}</span>
+                  <Textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+                </label>
+              </fieldset>
+            </details>
+          </div>
+          <aside aria-label={t("规则参考")} className="min-w-0 space-y-4 @3xl:border-l @3xl:pl-5">
+            <h3 className="flex items-center gap-2 font-semibold">
+              <BookOpen className="size-4" />
+              {t("规则参考")}
+            </h3>
+            <p className="text-sm text-muted-foreground">{t("点击示例复制正则表达式。")}</p>
+            <details open className="group rounded-xl border">
+              <summary className="flex cursor-pointer list-none items-center justify-between p-3 text-sm font-medium">
+                {t("常用正则")}
+                <ChevronDown className="size-4 -rotate-90 group-open:rotate-0" />
+              </summary>
+              <div className="space-y-2 px-3 pb-3">
+                {[
+                  [t("手机号"), "1[3-9][0-9]{9}"],
+                  [t("邮箱"), "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"],
+                  [t("IPv4 格式"), "[0-9]{1,3}(\\.[0-9]{1,3}){3}"],
+                ].map(([label, pattern]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => void copyPattern(pattern)}
+                    aria-label={t("复制 {signature} 示例", { signature: label })}
+                    className="w-full rounded-lg bg-muted/50 p-3 text-left transition hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="flex items-center justify-between text-sm font-medium">
+                      {label}
+                      {copied === pattern ? (
+                        <Check className="size-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="size-3.5 text-muted-foreground" />
+                      )}
+                    </span>
+                    <code className="mt-2 block break-all text-xs text-muted-foreground">{pattern}</code>
+                  </button>
+                ))}
+              </div>
+            </details>
+            <div className="rounded-xl border p-4">
+              <h4 className="text-sm font-medium">{t("执行方式")}</h4>
+              <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                {t(
+                  "在请求发送给模型前检查文本。关键词忽略大小写；正则使用 Go RE2。按优先级从小到大执行，拦截后停止，脱敏后继续下一条护栏。",
+                )}
+              </p>
             </div>
-          </details>
-          <div className="rounded-xl border p-4">
-            <h4 className="text-sm font-medium">{t("执行方式")}</h4>
-            <p className="mt-2 text-xs leading-6 text-muted-foreground">
-              {t(
-                "在请求发送给模型前检查文本。关键词忽略大小写；正则使用 Go RE2。按优先级从小到大执行，拦截后停止，脱敏后继续下一条护栏。",
-              )}
+            <div className="rounded-xl border p-4">
+              <h4 className="text-sm font-medium">{t("匹配提示")}</h4>
+              <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                {t(
+                  "关键词和正则采用任一命中；不支持前后查找或反向引用。脱敏使用替换文本原样替换。示例用于格式匹配，不代替完整数据校验。",
+                )}
+              </p>
+            </div>
+            <p role="status" className="break-all text-xs text-muted-foreground">
+              {copyError && t("复制失败，请手动复制代码。")}
+              {copied && t("Copied to clipboard")}
             </p>
-          </div>
-          <div className="rounded-xl border p-4">
-            <h4 className="text-sm font-medium">{t("匹配提示")}</h4>
-            <p className="mt-2 text-xs leading-6 text-muted-foreground">
-              {t(
-                "关键词和正则采用任一命中；不支持前后查找或反向引用。脱敏使用替换文本原样替换。示例用于格式匹配，不代替完整数据校验。",
-              )}
-            </p>
-          </div>
-          <p role="status" className="break-all text-xs text-muted-foreground">
-            {copyError && t("复制失败，请手动复制代码。")}
-            {copied && t("Copied to clipboard")}
+          </aside>
+        </div>
+        {error && (
+          <p role="alert" className="whitespace-pre-wrap rounded-lg bg-destructive/5 p-3 text-sm text-destructive">
+            {error}
           </p>
-        </aside>
+        )}
       </div>
-      {error && (
-        <p role="alert" className="whitespace-pre-wrap rounded-lg bg-destructive/5 p-3 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+      <div className={cn("flex flex-wrap items-center justify-between gap-3 border-t", inDialog ? "shrink-0 px-4 py-3 sm:px-6" : "pt-4")}>
         <p className="text-xs text-muted-foreground">{t("测试与实际请求使用相同的匹配规则。")}</p>
-        <div className="flex gap-2">
+        <div className="ml-auto flex gap-2">
           <Button variant="outline" disabled={busy} onClick={onClose}>
             {t("Cancel")}
           </Button>
@@ -484,13 +495,13 @@ function LocalGuardrailForm({ accessToken, rule, onSuccess, onClose, readOnly: e
   );
 }
 /**
- * 用途：将本地表单放入标准弹窗，并仅在可见时展示。
+ * 用途：将本地表单放入限宽弹窗，保留标题和操作按钮，正文独立滚动。
  * 参数：visible：是否打开；其余 Props：表单属性。
  * 返回：React 弹窗或关闭状态。
  * 调用：GuardrailsPanel。
  * 测试：后端 engine_test.go 校验规则语义；LocalGuardrailEditor.integration.test.tsx。
  */
-export default function LocalGuardrailModal({ visible, ...props }: Props & { visible: boolean }) {
+export default function LocalGuardrailModal({ visible, ...props }: Omit<Props, "inDialog"> & { visible: boolean }) {
   const t = useT();
   return (
     <Dialog
@@ -499,12 +510,12 @@ export default function LocalGuardrailModal({ visible, ...props }: Props & { vis
         if (!open) props.onClose();
       }}
     >
-      <DialogContent className="max-h-[94vh] w-[calc(100vw-2rem)] max-w-none overflow-y-auto p-6 sm:max-w-[min(96vw,1600px)] sm:p-8">
-        <DialogHeader>
-          <DialogTitle className="text-xl font-semibold">{t("创建关键词 / 正则护栏")}</DialogTitle>
-          <DialogDescription>{t("配置敏感词拦截与文本脱敏，右侧提供规则说明和可复制示例。")}</DialogDescription>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(68rem,calc(100%-2rem))]">
+        <DialogHeader className="shrink-0 px-4 pt-5 pb-4 pr-12 sm:px-6 sm:pr-14">
+          <DialogTitle className="text-lg leading-tight font-semibold">{t("创建关键词 / 正则护栏")}</DialogTitle>
+          <DialogDescription>{t("pages.guardrails.localEditorDescription")}</DialogDescription>
         </DialogHeader>
-        {visible && <LocalGuardrailEditor {...props} />}
+        {visible && <LocalGuardrailEditor {...props} inDialog />}
       </DialogContent>
     </Dialog>
   );

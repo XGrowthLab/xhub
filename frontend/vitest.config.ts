@@ -30,7 +30,6 @@ const TEST_TS_FILES_THAT_RENDER_REACT: readonly string[] = [
 // 这些用例在引入统一 PR 质量门禁前已经失败。CI 仍运行其余全量 Vitest 用例并生成覆盖率；
 // 每修复一个历史失败就删除对应条目，新增失败不得进入该清单。
 const QUALITY_GATE_KNOWN_FAILURES: readonly string[] = [
-  "src/app/(dashboard)/route-templates/_components/RouteTemplatesPanel.test.tsx",
   "src/components/organisms/RegenerateKeyModal.integration.test.tsx",
   "src/components/templates/KeyInfoView.handleKeyUpdate.test.tsx",
   "src/components/view_logs/LogDetailsDrawer/InputCard.test.tsx",

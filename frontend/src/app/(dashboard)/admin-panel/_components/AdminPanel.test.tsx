@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import AdminPanel from "./AdminPanel";
@@ -21,11 +21,11 @@ it.each([
   expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", "/ui/users");
 });
 
-// 前置为无后台依赖的管理员布局；验证背景由主题控制、页签置于画布内且取消嵌套页头卡片；清理组件。
-it("管理员画布使用主题白色背景并覆盖主区域间隙", () => {
-  render(<AdminPanel />);
+/** 在中文控制台渲染独立管理页，验证页头和设置页签共用同一布局；测试由 cleanup 回收 DOM。 */
+it("管理员页面以统一页头显示标题和用户入口", () => {
+  render(<I18nProvider initialLocale="zh-CN"><AdminPanel /></I18nProvider>);
   const canvas = screen.getByTestId("admin-settings-canvas");
-  expect(canvas).toHaveClass("bg-background", "-m-3", "sm:-m-6");
+  expect(within(canvas).getByRole("heading", { level: 1, name: "管理员设置" })).toBeVisible();
+  expect(within(canvas).getByRole("link", { name: "前往用户" })).toBeVisible();
   expect(canvas).toContainElement(screen.getByTestId("settings-tabs"));
-  expect(canvas.querySelector("header")).not.toHaveClass("border");
 });

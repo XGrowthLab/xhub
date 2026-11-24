@@ -45,7 +45,8 @@ interface UsersTableProps {
   selectionEnabled: boolean;
   rowSelection: RowSelectionState;
   onRowSelectionChange: OnChangeFn<RowSelectionState>;
-  onUserClick: (userId: string, openInEditMode?: boolean) => void;
+  onUserClick: (userId: string) => void;
+  onEditUser?: (userId: string) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (user: UserInfo) => void;
 }
@@ -72,6 +73,7 @@ function EmptyState() {
   );
 }
 
+/** 展示服务端分页的用户列表；使用调用方提供的行导航及可选编辑回调，返回具备独立行操作的目录。 */
 export function UsersTable({
   data,
   rowCount,
@@ -90,6 +92,7 @@ export function UsersTable({
   rowSelection,
   onRowSelectionChange,
   onUserClick,
+  onEditUser,
   onDeleteUser,
   onResetPassword,
 }: UsersTableProps) {
@@ -101,11 +104,12 @@ export function UsersTable({
       possibleUIRoles,
       includeSelection: selectionEnabled,
       onUserClick,
+      onEditUser,
       onDeleteUser,
       onResetPassword,
     };
     return getUsersTableColumns(columnDeps);
-  }, [possibleUIRoles, selectionEnabled, onUserClick, onDeleteUser, onResetPassword]);
+  }, [possibleUIRoles, selectionEnabled, onUserClick, onEditUser, onDeleteUser, onResetPassword]);
 
   const roleOptions = useMemo(
     () =>

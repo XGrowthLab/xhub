@@ -17,12 +17,10 @@ import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails"
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole, isTeamAdminRole } from "@/utils/roles";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
 import { modelGroupHref } from "@/utils/entityLinks";
-import { Card } from "@/components/ui/card";
 import { Input as UIInput } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -38,11 +36,11 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { toast } from "@/lib/toast";
-import { CheckIcon, CopyIcon, Pencil, Save } from "lucide-react";
+import { Pencil, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
-import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
+import { DirectoryDetailHeader, DirectoryEditDialog, DirectoryFacts, DirectoryPanel } from "@/components/shared/DirectoryDetail";
 import {
   computeTeamModelBadges,
   TeamAccessGroupModelGrant,
@@ -280,6 +278,7 @@ export interface TeamInfoProps {
   is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
+  editorOnly?: boolean;
   premiumUser?: boolean;
 }
 
@@ -508,6 +507,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   is_org_admin = false,
   userModels,
   editTeam,
+  editorOnly = false,
   premiumUser = false,
   onUpdate,
 }) => {
@@ -535,7 +535,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
@@ -602,6 +601,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setIsEditing(true);
   };
 
+  /** 关闭团队编辑并丢弃草稿；列表和详情页签由调用方保留。 */
+  const closeEditor = () => {
+    if (editorOnly) onClose();
+    else setIsEditing(false);
+  };
+
   const applyKillSwitchToGuardrails = (checked: boolean) => {
     const current = form.getValues("guardrails") ?? [];
     const nonGlobals = current.filter((name) => !globalGuardrailNames.has(name));
@@ -619,17 +624,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const onTeamUpdateSubmit = (values: TeamUpdateFormValues) => handleTeamUpdate(mountedUpdateValues(values));
 
-  const fetchTeamInfo = async () => {
+  /** 加载团队权威快照；初次进入展示加载状态，保存后静默刷新以保留当前页签。 */
+  const fetchTeamInfo = async (showLoading = true) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       if (!accessToken) return;
       const response = await teamInfoCall(accessToken, teamId);
+      // 列表编辑在显示表单前填入权威数据，静默刷新时保留当前草稿。
+      if (editorOnly && showLoading && response.team_info) {
+        form.reset(toTeamFormValues(response.team_info, response.team_info.guardrails ?? []));
+      }
       setTeamData(response);
     } catch (error) {
       toast.fromError(t("Failed to load team information"));
       console.error("Error fetching team info:", error);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -810,8 +820,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       toast.success(t("Team settings updated successfully"));
-      setIsEditing(false);
-      fetchTeamInfo();
+      closeEditor();
+      if (editorOnly) onUpdate(teamData);
+      else void fetchTeamInfo(false);
       return;
     } catch (error) {
       console.error("Error updating team:", error);
@@ -821,78 +832,178 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
-  if (loading) {
-    return <div className="p-4">{t("Loading...")}</div>;
-  }
+  const editDialog = (
+    <DirectoryEditDialog open={editorOnly || isEditing} title={t("Team Settings")} onClose={closeEditor} busy={isTeamSaving}>
+      {loading || !teamData?.team_info ? (
+        <p role={loading ? "status" : "alert"} className="text-sm text-muted-foreground">
+          {t(loading ? "Loading..." : "Team not found")}
+        </p>
+      ) : !canEditTeam ? (
+        <p role="alert" className="text-sm text-muted-foreground">{t("directoryForm.editDenied")}</p>
+      ) : (editorOnly || isEditing) && (
+        <TooltipProvider>
+          <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
+            <FieldGroup className="gap-5">
+              <DirectoryFormSection section="identity">
+                <FormField control={form.control} name="team_alias" label={t("Team Name")}>
+                  {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
+                </FormField>
 
-  if (!teamData?.team_info) {
-    return <div className="p-4">{t("Team not found")}</div>;
+                <FormField control={form.control} name="team_description" label={t("Description")}>
+                  {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
+                </FormField>
+              </DirectoryFormSection>
+              <DirectoryFormSection section="access">
+                <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
+                  {({ value, onChange }) => (
+                    <RouteTemplateSelect
+                      accessToken={accessToken}
+                      value={value ?? ""}
+                      onChange={onChange}
+                      scope="team"
+                      scopeId={teamId}
+                    />
+                  )}
+                </FormField>
+
+                <FormField
+                  control={form.control}
+                  name="models"
+                  label={t("Models")}
+                  description={t(
+                    "directoryForm.teamModelHint",
+                  )}
+                >
+                  {({ id, value, onChange }) => (
+                    <ModelSelect
+                      id={id}
+                      value={value ?? []}
+                      onChange={onChange}
+                      teamID={teamId}
+                      organizationID={teamData?.team_info?.organization_id || undefined}
+                      options={{
+                        includeSpecialOptions: false,
+                        includeUserModels: !teamData?.team_info?.organization_id,
+                      }}
+                      context="team"
+                      dataTestId="models-select"
+                      disabled={!is_proxy_admin}
+                    />
+                  )}
+                </FormField>
+              </DirectoryFormSection>
+              <DirectoryFormSection section="limits">
+                <QuotaGuide scope="team" />
+
+                <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
+                  {({ ref, value, ...field }) => (
+                    <NumericalInput
+                      {...field}
+                      ref={ref}
+                      value={value ?? ""}
+                      step={0.01}
+                      precision={2}
+                      disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
+                    />
+                  )}
+                </FormField>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {(["rpm_limit", "tpm_limit"] as const).map((name) => (
+                    <FormField
+                      key={name}
+                      control={form.control}
+                      name={name}
+                      label={t(
+                        name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)",
+                      )}
+                    >
+                      {({ ref, value, ...field }) => (
+                        <NumericalInput
+                          {...field}
+                          ref={ref}
+                          value={value ?? ""}
+                          min={0}
+                          step={1}
+                          precision={0}
+                          placeholder={t("quotaGuide.rateBlank")}
+                          disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
+                        />
+                      )}
+                    </FormField>
+                  ))}
+                </div>
+              </DirectoryFormSection>
+              {is_proxy_admin ? (
+                <FormField
+                  control={form.control}
+                  name="blocked"
+                  className="rounded-xl border border-destructive/25 bg-destructive/5 p-4"
+                  label={t("Blocked")}
+                >
+                  {({ id, value, onChange }) => (
+                    <Switch id={id} checked={value === true} onCheckedChange={onChange} />
+                  )}
+                </FormField>
+              ) : null}
+            </FieldGroup>
+            <div className="mt-5 flex flex-wrap justify-end gap-2 border-t pt-4">
+              <Button type="button" variant="outline" onClick={closeEditor} disabled={isTeamSaving}>
+                {t("Cancel")}
+              </Button>
+              <Button type="submit" disabled={isTeamSaving}>
+                {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
+                {t("Save Changes")}
+              </Button>
+            </div>
+          </form>
+        </TooltipProvider>
+      )}
+    </DirectoryEditDialog>
+  );
+
+  if (editorOnly) return editDialog;
+  if (loading || !teamData?.team_info) {
+    return <p role={loading ? "status" : "alert"} className="text-sm text-muted-foreground">
+      {t(loading ? "Loading..." : "Team not found")}
+    </p>;
   }
 
   const { team_info: info } = teamData;
-
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
-  };
+  const models = computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details);
+  const budgetLabel = info.max_budget == null ? t("quotaGuide.blank") : "$" + formatNumberWithCommas(info.max_budget, 2);
 
   const tabItems = [
     {
       key: TEAM_INFO_TAB_KEYS.OVERVIEW,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW]),
       children: (
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          <Card className="block p-6">
-            <p>{t("Budget Status")}</p>
-            <div className="mt-2">
-              <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
-              <p className="text-muted-foreground">
-                {t("Budget cap: {value0}", {
-                  value0:
-                    info.max_budget === null ? t("quotaGuide.blank") : `$${formatNumberWithCommas(info.max_budget, 2)}`,
-                })}
-              </p>
-            </div>
-          </Card>
+        <div className="grid min-w-0 items-start gap-4 lg:grid-cols-2">
+          <DirectoryPanel title={t("Budget Status")}>
+            <p className="text-2xl font-semibold tabular-nums [overflow-wrap:anywhere]">{"$" + formatNumberWithCommas(info.spend, 2)}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{t("Budget cap: {value0}", { value0: budgetLabel })}</p>
+          </DirectoryPanel>
 
-          <Card className="block p-6">
-            <p>{t("Models")}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
-                (badge, index) => (
-                  <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
-                    <span>
-                      <StatusBadge
-                        tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
-                        label={badge.label}
-                        href={teamModelBadgeHref(badge)}
-                      />
-                    </span>
-                  </SimpleTooltip>
-                ),
-              )}
-            </div>
-          </Card>
+          <DirectoryPanel title={t("Models")}>
+            {models.length ? <div className="flex min-w-0 flex-wrap gap-2">
+              {models.map((badge, index) => (
+                <SimpleTooltip key={badge.kind + "-" + badge.label + "-" + index} content={badge.tooltip}>
+                  <span className="max-w-full [overflow-wrap:anywhere]">
+                    <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} href={teamModelBadgeHref(badge)} />
+                  </span>
+                </SimpleTooltip>
+              ))}
+            </div> : <p className="text-sm text-muted-foreground">{t("directoryForm.teamModelHint")}</p>}
+          </DirectoryPanel>
 
-          <Card className="block p-6">
-            <p>{t("Members")}</p>
-            <p className="mt-2 text-lg font-medium">{info.members_with_roles?.length ?? 0}</p>
-          </Card>
-
-          <Card className="block p-6">
-            <p className="font-semibold text-foreground">{t("Virtual Keys")}</p>
-            <p className="mt-2">{t("Total: {value0}", { value0: teamData.keys.length })}</p>
-          </Card>
-
-          <Card className="block p-6 sm:col-span-2">
-            <p>{t("Description")}</p>
-            <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{info.description || t("None")}</p>
-          </Card>
+          <DirectoryPanel title={t("Team Information")}>
+            <DirectoryFacts fields={[
+              { label: t("Members"), value: info.members_with_roles?.length ?? 0 },
+              { label: t("Virtual Keys"), value: t("Total: {value0}", { value0: teamData.keys.length }) },
+              { label: t("Status"), value: <Badge variant={info.blocked ? "destructive" : "secondary"}>{t(info.blocked ? "Blocked" : "Active")}</Badge> },
+              ...(info.description ? [{ label: t("Description"), value: <span className="whitespace-pre-wrap">{info.description}</span> }] : []),
+            ]} />
+          </DirectoryPanel>
         </div>
       ),
     },
@@ -919,237 +1030,51 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       key: TEAM_INFO_TAB_KEYS.SETTINGS,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS]),
       children: (
-        <Card className="block min-w-0 p-4 sm:p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-medium">{t("Team Settings")}</h3>
-            {canEditTeam && !isEditing && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                  startEditing();
-                }}
-              >
-                <Pencil />
-                {t("Edit Settings")}
-              </Button>
-            )}
-          </div>
-
-          {isEditing ? (
-            <TooltipProvider>
-              <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
-                <FieldGroup className="gap-5">
-                  <DirectoryFormSection section="identity">
-                    <FormField control={form.control} name="team_alias" label={t("Team Name")}>
-                      {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
-                    </FormField>
-
-                    <FormField control={form.control} name="team_description" label={t("Description")}>
-                      {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={3} />}
-                    </FormField>
-                  </DirectoryFormSection>
-                  <DirectoryFormSection section="access">
-                    <FormField control={form.control} name="route_template_id" label={t("pages.routeTemplates.title")}>
-                      {({ value, onChange }) => (
-                        <RouteTemplateSelect
-                          accessToken={accessToken}
-                          value={value ?? ""}
-                          onChange={onChange}
-                          scope="team"
-                          scopeId={teamId}
-                        />
-                      )}
-                    </FormField>
-
-                    <FormField
-                      control={form.control}
-                      name="models"
-                      label={t("Models")}
-                      description={t(
-                        "directoryForm.teamModelHint",
-                      )}
-                    >
-                      {({ id, value, onChange }) => (
-                        <ModelSelect
-                          id={id}
-                          value={value ?? []}
-                          onChange={onChange}
-                          teamID={teamId}
-                          organizationID={teamData?.team_info?.organization_id || undefined}
-                          options={{
-                            includeSpecialOptions: false,
-                            includeUserModels: !teamData?.team_info?.organization_id,
-                          }}
-                          context="team"
-                          dataTestId="models-select"
-                          disabled={!is_proxy_admin}
-                        />
-                      )}
-                    </FormField>
-                  </DirectoryFormSection>
-                  <DirectoryFormSection section="limits">
-                    <QuotaGuide scope="team" />
-
-                    <FormField control={form.control} name="max_budget" label={t("Max Budget (USD)")}>
-                      {({ ref, value, ...field }) => (
-                        <NumericalInput
-                          {...field}
-                          ref={ref}
-                          value={value ?? ""}
-                          step={0.01}
-                          precision={2}
-                          disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
-                        />
-                      )}
-                    </FormField>
-
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {(["rpm_limit", "tpm_limit"] as const).map((name) => (
-                        <FormField
-                          key={name}
-                          control={form.control}
-                          name={name}
-                          label={t(
-                            name === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)",
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              min={0}
-                              step={1}
-                              precision={0}
-                              placeholder={t("quotaGuide.rateBlank")}
-                              disabled={!(is_proxy_admin || is_org_admin || isOrgAdminForTeam)}
-                            />
-                          )}
-                        </FormField>
-                      ))}
-                    </div>
-                  </DirectoryFormSection>
-                  {is_proxy_admin ? (
-                    <FormField
-                      control={form.control}
-                      name="blocked"
-                      className="rounded-xl border border-destructive/25 bg-destructive/5 p-4"
-                      label={t("Blocked")}
-                    >
-                      {({ id, value, onChange }) => (
-                        <Switch id={id} checked={value === true} onCheckedChange={onChange} />
-                      )}
-                    </FormField>
-                  ) : null}
-                </FieldGroup>
-                <div className="mt-6 flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsEditing(false)}>
-                    {t("Cancel")}
-                  </Button>
-                  <Button type="submit" disabled={isTeamSaving}>
-                    {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
-                    {t("Save Changes")}
-                  </Button>
-                </div>
-              </form>
-            </TooltipProvider>
-          ) : (
-            <div className="grid min-w-0 gap-5 border-t pt-5 sm:grid-cols-2 [&>div>p]:mb-1 [&>div>p]:text-xs [&>div>p]:text-muted-foreground">
-              <div>
-                <p className="font-medium">{t("Team Name")}</p>
-                <div>{info.team_alias}</div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Description")}</p>
-                <div className="whitespace-pre-wrap text-muted-foreground">{info.description || t("None")}</div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Team ID")}</p>
-                <div className="break-all font-mono text-xs">{info.team_id}</div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Created At")}</p>
-                <div>{info.created_at ? <DateCell value={info.created_at} precision="datetime" /> : t("None")}</div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Models")}</p>
-                {info.models.length === 0 ? (
-                  <div className="text-muted-foreground">
-                    {t(
-                      "directoryForm.teamModelHint",
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {info.models.map((model, index) => (
-                      <BadgeLink key={index} href={modelGroupHref(model)}>
-                        {model}
-                      </BadgeLink>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div>
-                <p className="font-medium">{t("Team Budget")}</p>
-                <div>
-                  {t("Max Budget: {value0}", {
-                    value0:
-                      info.max_budget !== null
-                        ? `$${formatNumberWithCommas(info.max_budget, 4)}`
-                        : t("quotaGuide.blank"),
-                  })}
-                </div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Organization ID")}</p>
-                <div>{info.organization_id || t("None")}</div>
-              </div>
-              <div>
-                <p className="font-medium">{t("Status")}</p>
-                <Badge variant={info.blocked ? "destructive" : "secondary"}>
-                  {info.blocked ? t("Blocked") : t("Active")}
-                </Badge>
-              </div>
-            </div>
-          )}
-        </Card>
+        <div className="grid min-w-0 items-start gap-4 lg:grid-cols-2">
+          <DirectoryPanel title={t("Team Settings")}>
+            <DirectoryFacts fields={[
+              { label: t("Team Name"), value: info.team_alias },
+              { label: t("Team ID"), value: <code>{info.team_id}</code> },
+              { label: t("Created At"), value: info.created_at ? <DateCell value={info.created_at} precision="datetime" /> : t("None") },
+              { label: t("Organization ID"), value: <code>{info.organization_id || t("None")}</code> },
+              { label: t("Status"), value: <Badge variant={info.blocked ? "destructive" : "secondary"}>{t(info.blocked ? "Blocked" : "Active")}</Badge> },
+              { label: t("Description"), value: <span className="whitespace-pre-wrap text-muted-foreground">{info.description || t("None")}</span> },
+            ]} />
+          </DirectoryPanel>
+          <DirectoryPanel title={t("directoryForm.limits")}>
+            <DirectoryFacts fields={[
+              { label: t("Team Budget"), value: budgetLabel },
+              { label: t("Requests per minute Limit (RPM)"), value: info.rpm_limit ?? t("quotaGuide.rateBlank") },
+              { label: t("Tokens per minute Limit (TPM)"), value: info.tpm_limit ?? t("quotaGuide.rateBlank") },
+            ]} />
+          </DirectoryPanel>
+          <DirectoryPanel title={t("Models")}>
+            {info.models.length ? <div className="flex min-w-0 flex-wrap gap-2">
+              {info.models.map((model) => <BadgeLink key={model} href={modelGroupHref(model)} className="max-w-full whitespace-normal [overflow-wrap:anywhere]">{model}</BadgeLink>)}
+            </div> : <p className="text-sm text-muted-foreground">{t("directoryForm.teamModelHint")}</p>}
+          </DirectoryPanel>
+        </div>
       ),
     },
   ].filter((tab) => visibleTabs.includes(tab.key));
 
   return (
-    <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button variant="ghost" onClick={onClose} className="mb-4">
-            <ArrowLeftIcon className="h-4 w-4" />
-            {t("Back to Teams")}
-          </Button>
-          <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
-          <div className="flex items-center">
-            <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t("Copy team ID")}
-              onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-raised transition-all duration-200 ${
-                copiedStates["team-id"]
-                  ? "text-success bg-success/10 border-success/20"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              }`}
-            >
-              {copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            </Button>
-          </div>
-        </div>
-      </div>
+    <div className="mx-auto w-full min-w-0 max-w-[1600px] space-y-4">
+      <DirectoryDetailHeader title={info.team_alias} id={info.team_id}
+        backLabel={t("Back to Teams")} copyLabel={t("Copy team ID")} onBack={onClose}
+        actions={canEditTeam && (
+          <Button size="sm" onClick={() => {
+            setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
+            startEditing();
+          }}><Pencil />{t("Edit Settings")}</Button>
+        )}
+      />
+      {isEditing && editDialog}
 
-      <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
-        <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start gap-1 rounded-none border-b p-0">
+      <Tabs defaultValue={defaultTabKey} className="min-w-0 gap-3" onValueChange={onTabChange}>
+        <TabsList className="h-auto max-w-full flex-wrap justify-start">
           {tabItems.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+            <TabsTrigger key={key} value={key} className="flex-none px-3">
               {label}
             </TabsTrigger>
           ))}

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,12 @@ vi.mock("@/components/networking", () => ({
 vi.mock("./view_users/user_info_view", () => ({
   default: function UserInfoViewMock({ userId, startInEditMode }: { userId: string; startInEditMode?: boolean }) {
     return <div data-testid="user-info-view">{`detail:${userId}:${String(Boolean(startInEditMode))}`}</div>;
+  },
+}));
+
+vi.mock("./view_users/UserAccountEditDialog", () => ({
+  default: function MockEditor({ userId, onClose }: { userId: string; onClose: () => void }) {
+    return <section role="dialog" aria-label="Edit User"><p>{userId}</p><button onClick={onClose}>Cancel</button></section>;
   },
 }));
 
@@ -202,18 +208,33 @@ describe("ViewUserDashboard", () => {
     expect(screen.queryByText("test@example.com")).not.toBeInTheDocument();
   });
 
-  it("does not offer an edit action in the row menu", async () => {
+  /** 列表编辑取消后保留原目录；前置管理员和一条记录，确认弹窗打开、关闭且未进入详情，由测试框架清理。 */
+  it("opens the row editor without navigating and keeps the list on cancel", async () => {
     const user = userEvent.setup();
     renderDashboard();
-
-    await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
-    });
+    await screen.findByText("test@example.com");
 
     await user.click(screen.getByTestId("user-actions-user-1"));
-    expect(screen.queryByTestId("user-action-edit")).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: translate("en", "pages.users.editUser") }));
+    const dialog = screen.getByRole("dialog", { name: "Edit User" });
+    expect(dialog).toHaveTextContent("user-1");
+    expect(screen.queryByTestId("user-info-view")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("test@example.com")).toBeVisible();
+    expect(screen.queryByTestId("user-info-view")).not.toBeInTheDocument();
   });
 
+  /** 普通用户没有账户编辑入口；前置普通用户和同一行，验证编辑不可见，DOM 由测试框架清理。 */
+  it("does not offer the account editor to a regular user", async () => {
+    const user = userEvent.setup();
+    renderDashboard({ userRole: "Internal User" });
+    await screen.findByText("test@example.com");
+    await user.click(screen.getByTestId("user-actions-user-1"));
+    await screen.findByRole("menuitem", { name: translate("en", "pages.users.copyUserId") });
+    expect(screen.queryByRole("menuitem", { name: translate("en", "pages.users.editUser") })).not.toBeInTheDocument();
+  });
 
   /** 删除后重新读取真实列表形状；前置两行，连续删除后总数变为空；模拟查询和 DOM 由框架清理。 */
   it("refreshes the total after consecutive deletions", async () => {

@@ -18,7 +18,7 @@ func TestMarketEventHTTPRegression(t *testing.T) {
 	if _, err := h.db.Engine.Exec(`UPDATE users SET role='admin' WHERE id=?`, tenant.userID); err != nil {
 		t.Fatal(err)
 	}
-	price := 1
+	price, upper := 1, 99999999
 	fail := false
 	modelID := strings.Repeat("m", 1024)
 	largeDetail := strings.Repeat("x", (8<<20)+128)
@@ -27,7 +27,7 @@ func TestMarketEventHTTPRegression(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		rule := map[string]any{"details_v2": map[string]any{"text_input": map[string]any{"unit_name": "token", "unit_size": 1000, "unit_price_usd": price}}}
+		rule := map[string]any{"input_range": []int{0, upper}, "output_range": []int{0, upper}, "details_v2": map[string]any{"text_input": map[string]any{"unit_name": "token", "unit_size": 1000, "unit_price_usd": price}}}
 		if price == 2 {
 			rule["fixture_detail"] = largeDetail
 		}
@@ -53,6 +53,11 @@ func TestMarketEventHTTPRegression(t *testing.T) {
 		t.Fatal("无权刷新产生了事件")
 	}
 	h.ok("POST", "/reload/model_cost_map", admin, nil)
+	upper = -1
+	h.ok("POST", "/reload/model_cost_map", admin, nil)
+	if count() != 0 {
+		t.Fatal("只改开放上界的表示生成了变价消息")
+	}
 	price = 2
 	if _, err := h.db.Engine.Exec(`UPDATE users SET role='admin' WHERE id=?`, tenant.userID); err != nil {
 		t.Fatal(err)

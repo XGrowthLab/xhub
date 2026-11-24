@@ -1,5 +1,5 @@
 import { usageModelLabel } from "@/components/UsagePage/usageIdentityLabel";
-import { BarChart } from "@/components/shared/charts";
+import { UsageRankingBars } from "@/components/UsagePage/components/UsageRankingBars";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,7 +24,7 @@ interface TopModelViewProps {
 export const TOP_MODEL_LIMITS = [5, 10, 25, 50];
 
 /** 展示模型排行；参数为授权统计及条数回调，返回表格或图表，无后台写操作。
- * 条数与视图控件按组换行，避免窄卡片将标签压为竖排；图表按实际名称计算轴宽。 */
+ * 条数与视图控件按组换行，避免窄卡片将标签压为竖排；榜单标签和数值各占一侧，长名称不挤压数据区。 */
 export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
   const t = useT();
   const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
@@ -60,7 +60,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
-  const processedTopModels = topModels.slice(0, topModelsLimit).map((model) => ({ ...model, key: usageModelLabel(model.key) }));
+  const processedTopModels = topModels.slice(0, topModelsLimit);
 
   return (
     <>
@@ -94,21 +94,10 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         </Tabs>
       </div>
       {modelViewMode === "chart" ? (
-        <div className="relative max-h-[600px] overflow-y-auto">
-          <BarChart
-            className="mt-4 cursor-pointer hover:opacity-90"
-            style={{ height: Math.min(processedTopModels.length, topModelsLimit) * 52 }}
-            data={processedTopModels}
-            index="key"
-            categories={["spend"]}
-            colors={["cyan"]}
-            valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-            layout="vertical"
-            yAxisWidth="auto"
-            tickGap={5}
-            showLegend={false}
-          />
-        </div>
+        <UsageRankingBars
+          items={processedTopModels.map(model => ({ id: model.key, label: usageModelLabel(model.key), value: model.spend }))}
+          formatValue={value => "$" + formatNumberWithCommas(value, 2)}
+        />
       ) : (
         <DataTable columns={columns} data={processedTopModels} isLoading={false} maxBodyHeight={600} size="compact" />
       )}

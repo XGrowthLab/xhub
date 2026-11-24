@@ -1,18 +1,22 @@
 "use client";
 import { useT } from "@/i18n";
-import { Layers3 } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { protocolLabel, endpointLabel, type EndpointDescriptor, type EndpointTransport } from "@/components/add_model/endpointCatalog";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ModelFallbackEditor, { type FallbackPolicy } from "./ModelFallbackEditor";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { apiClient } from "@/components/networking";
-import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { usePriceCatalog } from "@/app/(dashboard)/hooks/models/usePriceCatalog";
 import { useModelDetailRouting } from "../detailNavigation";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { ModelAvatar } from "@/components/molecules/models/ModelAvatar";
 import { Input } from "@/components/ui/input";
 import ModelStatusToggle from "@/components/add_model/ModelStatusToggle";
 import {
+  catalogModelId,
+  catalogRows,
   effectivePricing,
   hasPrice,
   pricingRates,
@@ -53,6 +57,14 @@ function callType(info: Record<string, unknown>): string {
   return Array.isArray(info.endpoint_types) ? String(info.endpoint_types[0] ?? "") : "";
 }
 
+/** 从实际部署及其目录绑定读取展示头像，不受手工定价或连接协议影响；返回型号和可选头像元数据，目录缺失时保留型号。 */
+function deploymentArtwork(dep: EditorModel, rows: Record<string, CatalogRow>) {
+  const upstream = String(dep.litellm_params.model || dep.model_name);
+  const id = String(dep.model_info.base_model || (!rows[upstream] && catalogModelId(rows, upstream)) || upstream);
+  const entry = rows[id];
+  return { model: id, avatar: entry?.avatar, issuer: typeof entry?.issuer === "string" ? entry.issuer : undefined };
+}
+
 /** 展示完整部署表，多部署在原行编辑权重；参数为模型组、价格与保存回调。
  * 保存刷新目录，失败保留草稿；单部署仍有已保存分配时展示并允许修复，不调用供应商。
  */
@@ -61,6 +73,7 @@ function GroupDeployments({
   catalog,
   accessToken,
   rows,
+  rowArtwork,
   onSaved,
   openModel,
 }: {
@@ -68,6 +81,7 @@ function GroupDeployments({
   catalog?: ProtocolCatalog;
   accessToken: string;
   rows: Record<string, CatalogRow>;
+  rowArtwork?: ReturnType<typeof deploymentArtwork>[];
   onSaved: () => void;
   openModel: (id: string) => void;
 }) {
@@ -146,29 +160,41 @@ function GroupDeployments({
             </tr>
           </thead>
           <tbody>
-            {group.deployments.map((dep) => {
+            {group.deployments.map((dep, index) => {
               const id = dep.id;
               const transportId = callType(dep.model_info);
               const transport = catalog?.transports?.find((item) => item.id === transportId);
               const endpoints = Array.isArray(dep.model_info.endpoint_types) ? dep.model_info.endpoint_types.map(String) : [];
+              const endpointCount = t("providerGuideUI.endpointCount", { count: endpoints.length });
               return (
                 <tr key={id} className="border-t">
                   <td className="px-3 py-3 align-top">
-                    <p className="font-medium">{String(dep.litellm_params.litellm_credential_name || t("providerGuideUI.standalone"))}</p>
-                    <p className="mt-1 break-all text-xs text-muted-foreground">{String(dep.litellm_params.model)}</p>
+                    <div className="flex min-w-0 items-start gap-2.5">
+                      {rowArtwork && <ModelAvatar {...rowArtwork[index]} className="size-8" />}
+                      <div className="min-w-0">
+                        <p className="font-medium [overflow-wrap:anywhere]">{String(dep.litellm_params.litellm_credential_name || t("providerGuideUI.standalone"))}</p>
+                        <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{String(dep.litellm_params.model)}</p>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-3 py-3 align-top">
                     <p className="font-medium text-foreground">{transport ? protocolLabel(transport) : transportId || t("providerGuideUI.unspecifiedProtocol")}</p>
                     {endpoints.length ? (
-                      <details className="mt-1 text-xs text-muted-foreground">
-                        <summary className="cursor-pointer text-primary">{t("providerGuideUI.endpointCount", { count: endpoints.length })}</summary>
-                        <ul className="mt-2 space-y-1 border-s-2 border-primary/25 ps-3">
-                          {endpoints.map((id) => {
-                            const descriptor = catalog?.endpoint_types?.find((item) => item.id === id);
-                            return <li key={id}>{descriptor ? endpointLabel(descriptor) : id}</li>;
-                          })}
-                        </ul>
-                      </details>
+                      <Popover>
+                        <PopoverTrigger render={<Button type="button" variant="ghost" size="sm" className="mt-0.5 h-7 gap-1.5 px-1.5 text-xs text-primary" />}>
+                          {endpointCount}<ChevronDown className="size-3.5" aria-hidden="true" />
+                        </PopoverTrigger>
+                        {/* 弹出层在表格之外。展开完整路径时不参与列宽计算，也不会截断于表格的滚动容器。 */}
+                        <PopoverContent align="start" className="w-80 max-w-[calc(100dvw_-_2rem)] gap-2 p-3">
+                          <PopoverTitle>{endpointCount}</PopoverTitle>
+                          <ul className="max-h-60 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                            {endpoints.map((id, index) => {
+                              const descriptor = catalog?.endpoint_types?.find((item) => item.id === id);
+                              return <li key={`${id}:${index}`} className="rounded-md bg-muted/55 px-2.5 py-2 [overflow-wrap:anywhere]">{descriptor ? endpointLabel(descriptor) : id}</li>;
+                            })}
+                          </ul>
+                        </PopoverContent>
+                      </Popover>
                     ) : <p className="mt-1 text-xs text-muted-foreground">{t("providerGuideUI.noEndpoints")}</p>}
                   </td>
                   <td className="px-3 py-3 align-top">
@@ -241,9 +267,10 @@ export default function AllModelsPanel() {
         query: { page, size: 20, search },
       }),
   });
-  const { data: costMap } = useModelCostMap();
+  const { data: priceCatalog } = usePriceCatalog(accessToken);
   const { openModel } = useModelDetailRouting();
-  const rows = (costMap ?? {}) as Record<string, CatalogRow>;
+  // 与模型编辑弹窗读取同一版目录。目录包含模型头像，也保留已有的人工价格。
+  const rows = useMemo(() => catalogRows(priceCatalog?.models), [priceCatalog?.models]);
   return (
     <section className="space-y-5" aria-label={t("providerGuideUI.management")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -271,48 +298,58 @@ export default function AllModelsPanel() {
           <Button onClick={() => models.refetch()}>{t("providerGuideUI.reload")}</Button>
         </div>
       )}
-      {models.data?.data.map((group) => (
-        <section
-          key={group.model_name}
-          aria-label={t("providerGuideUI.publicGroup", { name: group.model_name })}
-          className="min-w-0 space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-5"
-        >
-          {/* 回退入口紧邻公开模型名，单部署也显示；点击后在弹窗中编辑，不展开模型卡片。 */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h3 className="flex items-center gap-2 break-all text-base font-semibold"><Layers3 className="size-4 shrink-0 text-primary" aria-hidden="true" />{group.model_name}</h3>
-              <p className="text-sm text-muted-foreground">
-                {t("providerGuideUI.deploymentCount", { count: group.deployments.length })}
-              </p>
+      {models.data?.data.map((group) => {
+        const artwork = group.deployments.map((dep) => deploymentArtwork(dep, rows));
+        const firstModel = artwork[0];
+        const mixedModels = artwork.some((item) => item.model !== firstModel?.model);
+        const avatar = mixedModels || !firstModel ? { model: group.model_name } : firstModel;
+        return (
+          <section
+            key={group.model_name}
+            aria-label={t("providerGuideUI.publicGroup", { name: group.model_name })}
+            className="min-w-0 space-y-4 rounded-xl border bg-card p-4 shadow-xs sm:p-5"
+          >
+            {/* 回退入口紧邻公开模型名，单部署也显示；点击后在弹窗中编辑，不展开模型卡片。 */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <ModelAvatar {...avatar} />
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold [overflow-wrap:anywhere]">{group.model_name}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {t("providerGuideUI.deploymentCount", { count: group.deployments.length })}
+                  </p>
+                </div>
+              </div>
+              {accessToken && (
+                <ModelFallbackEditor
+                  model={group.model_name}
+                  policy={group.fallback_policy}
+                  accessToken={accessToken}
+                  onSaved={() => {
+                    void queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+                  }}
+                />
+              )}
             </div>
+            {new Set(group.deployments.map((dep) => String(dep.litellm_params.model))).size > 1 && (
+              <p className="text-sm text-amber-700">{t("providerGuideUI.mixedUpstream")}</p>
+            )}
             {accessToken && (
-              <ModelFallbackEditor
-                model={group.model_name}
-                policy={group.fallback_policy}
+              <GroupDeployments
+                group={group}
+                catalog={catalog.data}
                 accessToken={accessToken}
+                rows={rows}
+                rowArtwork={mixedModels ? artwork : undefined}
+                openModel={openModel}
                 onSaved={() => {
                   void queryClient.invalidateQueries({ queryKey: ["models", "list"] });
                 }}
               />
             )}
-          </div>
-          {new Set(group.deployments.map((dep) => String(dep.litellm_params.model))).size > 1 && (
-            <p className="text-sm text-amber-700">{t("providerGuideUI.mixedUpstream")}</p>
-          )}
-          {accessToken && (
-            <GroupDeployments
-              group={group}
-              catalog={catalog.data}
-              accessToken={accessToken}
-              rows={rows}
-              openModel={openModel}
-              onSaved={() => {
-                void queryClient.invalidateQueries({ queryKey: ["models", "list"] });
-              }}
-            />
-          )}
-        </section>
-      ))}
+          </section>
+        );
+      })}
       {!models.isLoading && !models.isError && !models.data?.data.length && <p>{t("providerGuideUI.emptyModels")}</p>}
       <div className="flex items-center justify-between">
         <p>{t("providerGuideUI.page", { page, total: models.data?.total_pages ?? 1 })}</p>

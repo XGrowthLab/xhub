@@ -726,6 +726,24 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
+    /** 独立列表编辑读到服务端快照，取消不提交。前置管理员与已有团队，替身、表单和 DOM 由测试框架清理。 */
+    it("loads and cancels the standalone editor without saving", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ max_budget: 21 }));
+      renderWithProviders(<TeamInfoView {...defaultProps} onClose={onClose} editorOnly />);
+
+      const dialog = await screen.findByRole("dialog", { name: "Team Settings" });
+      const alias = await within(dialog).findByRole("textbox", { name: "Team Name" });
+      expect(alias).toHaveValue("Test Team");
+      await user.clear(alias);
+      await user.type(alias, "Draft team");
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(onClose).toHaveBeenCalledOnce();
+      expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+      expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+    });
+
     it("saves the name, description, models and budget for a platform administrator", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(

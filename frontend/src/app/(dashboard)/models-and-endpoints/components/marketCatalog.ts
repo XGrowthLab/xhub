@@ -1,3 +1,4 @@
+import { t as translate, type TFunction } from "@/i18n";
 import type { PriceCatalogRow } from "./priceCatalogRows";
 
 export const MODALITY_NAMES: Record<string, string> = {
@@ -44,19 +45,21 @@ export type MarketPrice = {
   tier: number;
   range: string;
 };
-/** 展开所有上下文档位和变体；参数为目录行，返回双币价格及原始档位，不合并不同范围，不将缺失价格当作免费。 */
-export function marketPrices(row: PriceCatalogRow): MarketPrice[] {
+/** 展开所有上下文档位和变体；参数为目录行和当前界面翻译函数，返回双币价格及原始档位，不合并范围或把缺失价格当成免费。 */
+export function marketPrices(row: PriceCatalogRow, t: TFunction = translate): MarketPrice[] {
   if (!Array.isArray(row.raw.pricing_rules_v2)) return [];
   return row.raw.pricing_rules_v2.flatMap((rule, tier) => {
     if (!rule || typeof rule !== "object") return [];
     const ranges = [rule.input_range, rule.output_range]
       .map((range, i) =>
         Array.isArray(range) && range.length === 2 && range.every((n) => typeof n === "number" && Number.isFinite(n))
-          ? (i ? "输出 " : "输入 ") + range.map((n: number) => n.toLocaleString()).join("–")
+          ? t(i ? "marketSync.detail.outputRange" : "marketSync.detail.inputRange", {
+              range: range.map((n: number) => n.toLocaleString()).join("–"),
+            })
           : "",
       )
       .filter(Boolean)
-      .join("；");
+      .join(" · ");
     const details = rule.details_v2;
     if (!details || typeof details !== "object") return [];
     return Object.entries(details).flatMap(([key, raw]) => {
@@ -65,6 +68,8 @@ export function marketPrices(row: PriceCatalogRow): MarketPrice[] {
       const size = typeof item.unit_size === "number" && item.unit_size > 0 ? item.unit_size : 1;
       const token = item.unit_name === "token";
       const factor = token ? 1_000_000 / size : 1;
+      const knownUnit: Record<string, string> = { pic: "picture", second: "second", time: "query" };
+      const rawUnit = typeof item.unit_name === "string" ? item.unit_name : "";
       const price = (value: unknown) =>
         typeof value === "number" && Number.isFinite(value) && value >= 0 ? value * factor : null;
       return [
@@ -74,10 +79,13 @@ export function marketPrices(row: PriceCatalogRow): MarketPrice[] {
           usd: price(item.unit_price_usd),
           cny: price(item.unit_price),
           unit: token
-            ? "1M tokens"
-            : size +
-              " " +
-              ({ pic: "张", second: "秒", time: "次" }[String(item.unit_name)] ?? String(item.unit_name || "单位")),
+            ? t("marketSync.unit.token")
+            : t("marketSync.detail.unitAmount", {
+                size,
+                unit: Object.hasOwn(knownUnit, rawUnit)
+                  ? t("marketSync.unit." + knownUnit[rawUnit])
+                  : rawUnit || t("marketSync.detail.unit"),
+              }),
           tier,
           range: ranges,
         },
@@ -85,10 +93,10 @@ export function marketPrices(row: PriceCatalogRow): MarketPrice[] {
     });
   });
 }
-/** 格式化市场价格；参数为金额及币种符号，返回最多六位有效数字或未提供提示，供卡片与详情统一使用。 */
-export function marketMoney(value: number | null, currency = "$"): string {
+/** 格式化市场价格；参数为金额、币种符号及当前界面翻译函数，返回最多六位有效数字或未提供提示。供卡片与详情统一使用。 */
+export function marketMoney(value: number | null, currency = "$", t: TFunction = translate): string {
   return value == null
-    ? "未提供"
+    ? t("marketSync.detail.missingPrice")
     : currency + new Intl.NumberFormat("en-US", { maximumSignificantDigits: 6 }).format(value);
 }
 

@@ -91,7 +91,7 @@ test("team usage displays recorded calls without requesting the removed Agent en
       const response = await loaded;
       expect(response.status(), await response.text()).toBe(200);
       expect((await response.json()).metadata.total_api_requests).toBeGreaterThanOrEqual(1);
-      await expect(page.getByText(t("{capitalizedEntityLabel} Spend Overview").replace("{capitalizedEntityLabel}", "Team"), { exact: true })).toBeVisible();
+      await expect(page.getByText(translate("zh-CN", "usagePolish.scopeSpend", { scope: translate("zh-CN", "usagePolish.scopeNames.team") }), { exact: true })).toBeVisible();
       await expect(page.getByText(team.team_alias, { exact: true }).first()).toBeVisible();
       await page.getByRole("tab", { name: t("pages.usage.modelActivity"), exact: true }).click();
       await expect(page.getByText("gpt-4o-mini", { exact: true }).filter({ visible: true }).first()).toBeVisible();
@@ -117,6 +117,7 @@ export function registerSC243() {
 
 test("usage views reconcile stored successes, failures, dimensions, filters and CSV", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1024, height: 820 });
   await loginAdmin(page);
   const guard = watchGateway(page);
   const headers = { Authorization: "Bearer " + await sessionBearer(page) };
@@ -125,6 +126,11 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
   let teamID = "", userID = "", key = "";
   const models: string[] = [];
   const modelName = "usage-priced-" + Date.now(), failedModel = modelName + "-failure";
+  /** 在保留表格内部可滚动的同时检查用量主区域没有横向溢出；不读取或修改后台数据。 */
+  const assertFits = async () => {
+    const workspace = page.getByTestId("admin-content");
+    await expect.poll(() => workspace.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2);
+  };
   const requests: string[] = [];
   page.on("request", request => { if (/\/(agent|customer|tag)\/daily\/activity/.test(request.url())) requests.push(request.url()); });
   try {
@@ -162,6 +168,12 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
     await stableGoto(page, "/usage");
     const initialBody = await (await initial).json();
     await assertUsageTiles(page, initialBody.metadata);
+    await assertFits();
+    // 点击真实密钥排行榜切换图表，保留请求记录名称和数值，卡片不横向出界。
+    const keyRank = page.getByRole("heading", { name: t("Top Virtual Keys"), exact: true }).locator("..");
+    await keyRank.getByRole("button", { name: t("usagePolish.chart"), exact: true }).click();
+    await expect(keyRank.getByRole("listitem").first()).toBeVisible();
+    await assertFits();
     await page.getByRole("button").filter({ has: page.getByRole("heading", { name: t("usagePolish.totalTokens"), exact: true }) }).click();
     await expect(page.getByRole("heading", { name: t("Input Tokens"), exact: true })).toBeVisible();
     // 显示零价及未知供应商后逐行对账，避免失败和免费调用在费用表中消失。
@@ -194,6 +206,10 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
       await page.getByRole("tab", { name: t("pages.usage." + view), exact: true }).click();
       const body = await (await loading).json();
       await assertUsageTiles(page, body.metadata);
+      const scope = translate("zh-CN", "usagePolish.scopeNames." + view);
+      await expect(page.getByRole("heading", { name: translate("zh-CN", "usagePolish.scopeSpend", { scope }), exact: true })).toBeVisible();
+      await expect(page.getByText(translate("zh-CN", "usagePolish.filterByScope", { scope }), { exact: true })).toBeVisible();
+      await assertFits();
       await page.getByRole("tab", { name: t("pages.usage.modelActivity"), exact: true }).click();
       await expect(page.getByText(modelName, { exact: true }).filter({ visible: true }).first()).toBeVisible();
       await page.getByRole("tab", { name: t("Key Activity"), exact: true }).click();
@@ -212,12 +228,15 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
       for (const [name, metrics] of Object.entries(endpoints)) {
         const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
         const headings = await row.locator("xpath=ancestor::table[1]").getByRole("columnheader").allTextContents();
-        for (const [label, value] of [["Total Request", metrics.api_requests.toLocaleString()], ["Total Tokens", metrics.total_tokens.toLocaleString()], ["Success Rate", (metrics.successful_requests / metrics.api_requests * 100).toFixed(2) + "%"]]) {
+        for (const [label, value] of [["Successful", metrics.successful_requests.toLocaleString()], ["Failed", metrics.failed_requests.toLocaleString()], ["Total Request", metrics.api_requests.toLocaleString()], ["Total Tokens", metrics.total_tokens.toLocaleString()], ["Success Rate", (metrics.successful_requests / metrics.api_requests * 100).toFixed(2) + "%"]]) {
           const index = headings.findIndex(text => text.trim() === t(label));
           expect(index, "端点表必须展示列：" + t(label)).toBeGreaterThanOrEqual(0);
-          await expect(row.getByRole("cell").nth(index)).toHaveText(value);
+          const cell = row.getByRole("cell").nth(index);
+          await expect(cell).toHaveText(value);
+          await expect(cell).toHaveCSS("text-align", "right");
         }
       }
+      await assertFits();
       await page.getByRole("tab", { name: t("pages.usage.cost"), exact: true }).click();
       const download = page.waitForEvent("download");
       await page.getByRole("button", { name: t("Export Data"), exact: true }).click();
@@ -251,6 +270,13 @@ test("usage views reconcile stored successes, failures, dimensions, filters and 
     await expect(page.getByRole("tab", { name: t("pages.usage.customer"), exact: true })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: t("pages.usage.tag"), exact: true })).toHaveCount(0);
     expect(requests, "剩余视图不得请求移除维度").toEqual([]);
+    // 原页面切换英文后，组织筛选和页标题必须一起切换，不能拼出中英混排。
+    await page.getByRole("button", { name: translate("zh-CN", "language.en"), exact: true }).click();
+    await page.getByRole("tab", { name: translate("en", "pages.usage.organization"), exact: true }).click();
+    const organization = translate("en", "usagePolish.scopeNames.organization");
+    await expect(page.getByRole("heading", { name: translate("en", "usagePolish.scopeSpend", { scope: organization }), exact: true })).toBeVisible();
+    await expect(page.getByText(translate("en", "usagePolish.filterByScope", { scope: organization }), { exact: true })).toBeVisible();
+    await assertFits();
     await testInfo.attach("用量核对", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
     await guard.assertOk();
   } finally {

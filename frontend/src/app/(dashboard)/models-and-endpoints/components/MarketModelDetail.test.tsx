@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 import { apiClient, modelInfoCall } from "@/components/networking";
+import { setActiveLocale } from "@/i18n";
 import { MarketModelDetail, loadMarketAccess } from "./MarketModelDetail";
 import { priceCatalogRows } from "./priceCatalogRows";
 
@@ -11,7 +12,7 @@ vi.mock("@/components/networking", () => ({
   modelInfoCall: vi.fn(),
   getProxyBaseUrl: () => "https://internal.test",
 }));
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); setActiveLocale("zh-CN"); });
 /** 构造独立详情视图；参数为是否登录，返回渲染结果；不重试网络，DOM和查询缓存由测试隔离。 */
 function showDetail(loggedIn = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -60,6 +61,20 @@ it("详情保留全部价格并隔离内部接入信息", async () => {
   await user.click(screen.getByRole("tab", { name: "调用文档" }));
   expect(screen.getByRole("link", { name: "原厂接入文档" })).toHaveAttribute("href", "https://docs.test/");
   expect(screen.queryByRole("link", { name: "模型文档" })).not.toBeInTheDocument();
+});
+
+/** 前置英文无登录视图，验证页签、档位与单位使用英文及缺价保留；DOM清理会话与查询缓存。 */
+it("英文详情翻译页签、范围、单位和空价", async () => {
+  setActiveLocale("en");
+  const user = userEvent.setup();
+  showDetail();
+  const table = screen.getByRole("table", { name: "Full market pricing" });
+  expect(table).toHaveTextContent("Input 0–100");
+  expect(table).toHaveTextContent("1M tokens");
+  expect(table).toHaveTextContent("1 second");
+  expect(table).toHaveTextContent("Not provided");
+  await user.click(screen.getByRole("tab", { name: "API access" }));
+  expect(screen.getByText("Sign in to see deployment details.")).toBeVisible();
 });
 /** 前置登录后部署查询失败；验证错误可观察而非误报未部署；DOM及查询缓存隔离。 */
 it("查询失败时显示内部接入错误", async () => {

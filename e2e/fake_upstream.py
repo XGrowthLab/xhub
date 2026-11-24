@@ -258,11 +258,13 @@ class Handler(BaseHTTPRequestHandler):
                     "architecture": {"input_modalities": ["text"], "output_modalities": [output],
                         "function_calling": {"supported": output == "text"}},
                     "model_constraints": {"context_length": 128000},
-                    "pricing_rules_v2": [{"input_range": [0, 128000], "details_v2": {
+                    "pricing_rules_v2": [{"input_range": [0, 128000],
+                        "output_range": [0, -1 if Handler.market_variant else 99999999], "details_v2": {
                         "input": {"name": "文本输入", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 3 if Handler.market_variant and model_id == "e2e-market-chat" else 2, "unit_price": 21 if Handler.market_variant and model_id == "e2e-market-chat" else 14},
                         "output": {"name": "文本输出", "unit_name": "token", "unit_size": 1000000, "unit_price_usd": 6, "unit_price": 42}}}],
                     "support_api_protocols": ["openai"]})
                 if model_id == "e2e-market-chat":
+                    rows[-1]["avatar"] = "data:image/png;base64," + VISION_PNG
                     # 来源以 time 表示搜索次数；与旧部署的 second + search 组成真实预览夹具。
                     rows[-1]["pricing_rules_v2"][0]["details_v2"]["web_search_req"] = {
                         "name": "Web search", "unit_name": "time", "unit_size": 1, "unit_price_usd": 0.02

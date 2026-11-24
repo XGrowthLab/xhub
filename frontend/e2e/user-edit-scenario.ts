@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { GATEWAY, login, loginAdmin, sessionBearer, stableGoto, t, watchGateway } from "./helpers";
 import { requireAuthorizationError } from "./assertions";
+import { translate } from "../src/i18n/translate";
 /** 用途：注册独立场景「users can be edited and their team access follows membership changes」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC245() {
 
@@ -20,24 +21,60 @@ test("users can be edited and their team access follows membership changes", asy
   const account = await created.json();
   try {
     await stableGoto(page, "/users");
-    await page.getByTestId(`user-actions-${account.user_id}`).click();
+    const directoryURL = page.url();
+    const editDialog = page.getByRole("dialog", { name: t("pages.users.editUser") });
+    const rowActions = page.getByTestId("user-actions-" + account.user_id);
+    const viewport = page.viewportSize();
+
+    // 列表入口应打开弹窗且不切详情；中英文关闭按钮都只丢弃草稿。
+    await page.setViewportSize({ width: 800, height: 720 });
+    await rowActions.click();
     await page.getByRole("menuitem", { name: t("pages.users.editUser"), exact: true }).click();
-    await expect(page.getByLabel(t("pages.users.alias"))).toHaveValue("编辑前");
-    await page.getByLabel(t("pages.users.alias")).fill("编辑后");
-    await page.getByLabel(t("userBudgetReset.label")).selectOption("15");
-    await page.getByLabel(t("pages.users.email")).fill("user-edited@xhub.local");
-    await page.getByLabel(t("pages.users.maxBudget")).fill("25");
+    await expect(editDialog.getByLabel(t("pages.users.alias"))).toHaveValue("编辑前");
+    expect(await editDialog.locator("form").evaluate(form => form.scrollWidth <= form.clientWidth + 1)).toBe(true);
+    await editDialog.getByLabel(t("pages.users.alias")).fill("未保存");
+    await editDialog.getByRole("button", { name: t("common.cancel"), exact: true }).click();
+    await expect(editDialog).toBeHidden();
+    await expect(page).toHaveURL(directoryURL);
+    await expect(rowActions).toBeVisible();
+
+    await page.getByRole("button", { name: translate("en", "language.en"), exact: true }).click();
+    await rowActions.click();
+    await page.getByRole("menuitem", { name: translate("en", "pages.users.editUser"), exact: true }).click();
+    const englishDialog = page.getByRole("dialog", { name: translate("en", "pages.users.editUser") });
+    await expect(englishDialog.getByLabel(translate("en", "pages.users.alias"))).toHaveValue("编辑前");
+    await englishDialog.getByRole("button", { name: translate("en", "common.cancel"), exact: true }).click();
+    await expect(englishDialog).toBeHidden();
+    await expect(page).toHaveURL(directoryURL);
+    await page.getByRole("button", { name: translate("en", "language.zhCN"), exact: true }).click();
+    if (viewport) await page.setViewportSize(viewport);
+
+    await rowActions.click();
+    await page.getByRole("menuitem", { name: t("pages.users.editUser"), exact: true }).click();
+    await expect(editDialog.getByLabel(t("pages.users.alias"))).toHaveValue("编辑前");
+    await editDialog.getByLabel(t("pages.users.alias")).fill("编辑后");
+    await editDialog.getByLabel(t("userBudgetReset.label")).selectOption("15");
+    await editDialog.getByLabel(t("pages.users.email")).fill("user-edited@xhub.local");
+    await editDialog.getByLabel(t("pages.users.maxBudget")).fill("25");
     const saved = page.waitForResponse((response) => response.url().includes("/user/update") && response.request().method() === "POST");
-    await page.getByRole("button", { name: t("pages.users.saveChanges"), exact: true }).click();
+    await editDialog.getByRole("button", { name: t("pages.users.saveChanges"), exact: true }).click();
     expect((await saved).status()).toBe(200);
+    await expect(editDialog).toBeHidden();
+    await expect(page).toHaveURL(directoryURL);
+    await expect(page.getByText("user-edited@xhub.local", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: account.user_id, exact: true }).click();
     await expect(page.getByRole("heading", { name: "user-edited@xhub.local" })).toBeVisible();
-    await expect(page.getByText("编辑后", { exact: true })).toBeVisible();
-    await page.reload();
+    const overviewTab = page.getByRole("tab", { name: t("common.overview"), exact: true });
+    await expect(overviewTab).toHaveAttribute("aria-selected", "true");
     await page.getByRole("button", { name: t("pages.users.editUser"), exact: true }).click();
-    await expect(page.getByLabel(t("pages.users.alias"))).toHaveValue("编辑后");
-    await expect(page.getByLabel(t("userBudgetReset.label"))).toHaveValue("15");
-    await page.getByLabel(t("pages.users.alias")).fill("未保存");
-    await page.getByRole("button", { name: t("common.cancel"), exact: true }).click();
+    await expect(editDialog.getByLabel(t("pages.users.alias"))).toHaveValue("编辑后");
+    await expect(editDialog.getByLabel(t("userBudgetReset.label"))).toHaveValue("15");
+    await editDialog.getByLabel(t("pages.users.alias")).fill("未保存");
+    await editDialog.getByRole("button", { name: t("common.cancel"), exact: true }).click();
+    await expect(editDialog).toBeHidden();
+    await expect(overviewTab).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: t("common.details"), exact: true }).click();
     await expect(page.getByText("编辑后", { exact: true })).toBeVisible();
     // 入队前创建独立个人密钥，避免创建时自动派生团队绑定；离队后应继续按个人预算鉴权。
     const keyResponse = await page.request.post(GATEWAY + "/key/generate", { headers, data: { user_id: account.user_id, key_alias: "user-edit-key" } });

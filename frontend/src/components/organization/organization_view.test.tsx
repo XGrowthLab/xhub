@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -265,7 +265,8 @@ test("model badges stay non-clickable", async () => {
   expect(screen.queryByRole("link", { name: "gpt-4o-mini" })).not.toBeInTheDocument();
 });
 
-test("should keep unsaved settings edits when switching tabs and back", async () => {
+/** 已打开组织设置页为前置条件，验证取消弹窗保留该页签、丢弃草稿，测试框架清理组件与替身。 */
+test("cancels a settings draft without leaving the current tab", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
   const user = userEvent.setup();
@@ -284,17 +285,21 @@ test("should keep unsaved settings edits when switching tabs and back", async ()
   await user.click(screen.getByRole("tab", { name: "Settings" }));
   await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
 
-  const alias = await screen.findByLabelText(/Organization Name/i);
+  const dialog = await screen.findByRole("dialog", { name: "Organization Settings" });
+  const alias = within(dialog).getByRole("textbox", { name: "Organization Name" });
+  const savedName = alias.getAttribute("value");
   await user.clear(alias);
-  fireEvent.change(alias, { target: { value: "Renamed Org" } });
+  await user.type(alias, "Renamed Org");
   expect(alias).toHaveValue("Renamed Org");
 
-  await user.click(screen.getByRole("tab", { name: "Overview" }));
-  await user.click(screen.getByRole("tab", { name: "Settings" }));
-
-  expect(screen.getByLabelText(/Organization Name/i)).toHaveValue("Renamed Org");
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("button", { name: "Edit Settings" }));
+  expect(await screen.findByRole("textbox", { name: "Organization Name" })).toHaveValue(savedName);
 });
 
+/** 零速率上限显式显示为零；前置两个以零配置的限流字段，检查概览和设置的键值语义，测试框架清理。 */
 test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never as Unlimited", async () => {
   const zeroLimitOrg = {
     ...mockOrg,
@@ -318,13 +323,13 @@ test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never
   );
 
   const overview = await screen.findByRole("tabpanel", { name: "Overview" });
-  expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
-  expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+  for (const label of ["Tokens per minute Limit (TPM)", "Requests per minute Limit (RPM)"]) {
+    expect(within(overview).getByText(label).nextElementSibling).toHaveTextContent(/^0$/);
+  }
 
   await user.click(screen.getByRole("tab", { name: "Settings" }));
   const settings = await screen.findByRole("tabpanel", { name: "Settings" });
-  expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
-  expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
-  expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
-  expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+  for (const label of ["Tokens per minute Limit (TPM)", "Requests per minute Limit (RPM)"]) {
+    expect(within(settings).getByText(label).nextElementSibling).toHaveTextContent(/^0$/);
+  }
 });

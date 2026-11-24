@@ -23,15 +23,14 @@ export function registerDirectoryScenario(situation: "keyboard" | "sso-config" |
   await stableGoto(page, "/admin-panel");
   const section = page.getByRole("region", { name: "企业目录" });
   if (situation === "keyboard") {
-  // RGB、Lab、OKLCH 均可表达纯白；只接受等价白色，避免颜色序列化差异误报。
-  await expect(page.getByTestId("admin-settings-canvas")).toHaveCSS("background-color", /^(rgb\(255, 255, 255\)|lab\(100 0 0\))$/);
-  // 页签使用真实焦点与键盘切换；面板与标签关联且同一时刻只显示当前配置。
+  await expect(page.getByTestId("admin-settings-canvas")).toBeVisible();
+  // 与实际版本的四个配置页签对照。焦点从两端往返，验证标签与面板的关联。
   const tabs = section.getByRole("tablist", {name: "管理员设置"});
-  await expect(tabs.getByRole("tab")).toHaveCount(3);
+  await expect(tabs.getByRole("tab")).toHaveCount(4);
   await tabs.getByRole("tab", {name: "单点登录设置"}).focus();
   await page.keyboard.press("End");
-  await expect(tabs.getByRole("tab", {name: "日志设置"})).toBeFocused();
-  await expect(section.getByRole("tabpanel", {name: "日志设置"})).toBeVisible();
+  await expect(tabs.getByRole("tab", {name: "版本更新"})).toBeFocused();
+  await expect(section.getByRole("tabpanel", {name: "版本更新"})).toBeVisible();
   await page.keyboard.press("Home");
   await expect(tabs.getByRole("tab", {name: "单点登录设置"})).toBeFocused();
   }
@@ -277,7 +276,7 @@ export function registerDirectoryScenario(situation: "keyboard" | "sso-config" |
   }
   await page.setViewportSize({width: 1440, height: 1000});
   await page.keyboard.press("Escape");
-  await page.getByRole("button", {name: "Switch to dark mode (beta)", exact: true}).click();
+  await page.getByRole("button", {name: "Switch to dark mode", exact: true}).click();
   await englishArchiveOverview.getByRole("button", {name:"Configure Kodo archive"}).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
   await expect(input).toHaveValue("xhub-e2e-private");

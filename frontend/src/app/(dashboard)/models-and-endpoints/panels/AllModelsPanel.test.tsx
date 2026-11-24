@@ -4,12 +4,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsPanel from "./AllModelsPanel";
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), error: vi.fn(), openModel: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), error: vi.fn(), openModel: vi.fn(), priceCatalog: vi.fn() }));
 vi.mock("@/components/networking", () => ({ apiClient: { get: (path: string, ...params: unknown[]) => path === "/public/endpoints"
   ? Promise.resolve({ transports: [{ id: "bypass_openai_chat", protocol: "openai-chat", endpoint_id: "chat" }], endpoint_types: [{ id: "chat", label: "OpenAI Chat" }] })
   : mocks.get(path, ...params), put: mocks.put } }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "admin" }) }));
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostMap: () => ({ data: {} }) }));
+vi.mock("@/app/(dashboard)/hooks/models/usePriceCatalog", () => ({ usePriceCatalog: () => ({ data: mocks.priceCatalog() }) }));
 vi.mock("../detailNavigation", () => ({ useModelDetailRouting: () => ({ openModel: mocks.openModel }) }));
 vi.mock("@/components/add_model/ModelStatusToggle", () => ({ default: () => <span>已启用</span> }));
 vi.mock("@/lib/toast", () => ({ toast: { success: vi.fn(), fromError: mocks.error } }));
@@ -36,6 +36,7 @@ describe("公开模型默认权重", () => {
     setActiveLocale("zh-CN");
     vi.clearAllMocks();
     mocks.put.mockResolvedValue({});
+    mocks.priceCatalog.mockReturnValue({ models: [] });
   });
   /** 目录缺失默认字段或返回空值时，两部署均以 1 展示并初始化完整草稿；
    * 前置隔离内存目录，验证编辑、取消及无意外写入，RTL 自动卸载并清理缓存。
@@ -102,12 +103,30 @@ describe("公开模型默认权重", () => {
     expect(within(group).queryByRole("columnheader", { name: "默认权重" })).not.toBeInTheDocument();
     // 已登记的传输使用可读名称；展开才展示接口明细，详情仍指向实际部署。
     expect(await within(group).findByText("OpenAI · Chat Completions")).toBeVisible();
-    await user.click(within(group).getByText("1 个调用接口"));
-    expect(within(group).getByText("OpenAI Chat")).toBeVisible();
+    await user.click(within(group).getByRole("button", { name: "1 个调用接口" }));
+    const endpoints = await screen.findByRole("dialog", { name: "1 个调用接口" });
+    expect(within(endpoints).getByText("OpenAI Chat")).toBeVisible();
+    expect(group).not.toContainElement(endpoints);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(endpoints).not.toBeInTheDocument());
     expect(within(group).getByText("vendor/full/model")).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: "配置回退" })).toBeVisible();
     await user.click(within(group).getByRole("button", { name: "详情" }));
     expect(mocks.openModel).toHaveBeenCalledWith("record-a");
+  });
+
+  /** 前置已绑定市场模型与独立上游；验证连接协议不会覆盖实际模型头像，混合部署分别标识；内存目录自动清理。 */
+  it("共享绑定使用市场模型的头像，混合部署分别展示", async () => {
+    mocks.priceCatalog.mockReturnValue({ models: [{ id: "x-ai/grok-4.5", avatar: "https://static.qiniu.com/model-icons/grok.png" }] });
+    const registered = { ...deployment("a"), model_info: { ...deployment("a").model_info, base_model: "x-ai/grok-4.5" } };
+    const other = { ...deployment("b"), litellm_params: { ...deployment("b").litellm_params, model: "claude-opus" } };
+    mocks.get.mockResolvedValue({ data: [{ model_name: "shared", deployments: [registered, other] }] });
+    mount();
+    const group = await screen.findByRole("region", { name: "公开模型 shared" });
+    const logos = within(group).getAllByTestId("model-avatar");
+    expect(logos.map((logo) => logo.getAttribute("data-avatar-kind"))).toEqual(["generic", "market", "provider"]);
+    expect(logos[1].querySelector("img")).toHaveAttribute("src", "https://static.qiniu.com/model-icons/grok.png");
+    expect(logos[2].querySelector("img")?.getAttribute("src")).toMatch(/anthropic/);
   });
   /** 前置单部署保留零权重及已删除部署分配；验证可见性、全零拒绝和修复保存仅包含现存部署。
    * 隔离内存目录及查询缓存，RTL 自动卸载，无业务数据写入或清理。 */

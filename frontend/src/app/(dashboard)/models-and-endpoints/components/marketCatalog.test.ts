@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { translate, type TFunction } from "@/i18n";
 import { priceCatalogRows } from "./priceCatalogRows";
 import {
   marketSale,
@@ -42,6 +43,7 @@ describe("市场目录及内部接入", () => {
   });
   /** 完整档位、单位换算、缺失和非法金额均验证；确定性数据，无清理。 */
   it("保留档位与缺失价格", () => {
+    const chinese: TFunction = (key, params) => translate("zh-CN", key, params);
     const prices = marketPrices(
       row({
         pricing_rules_v2: [
@@ -54,10 +56,10 @@ describe("市场目录及内部接入", () => {
           },
           { details_v2: { output: { unit_name: "token", unit_size: 1000000, unit_price_usd: -1 } } },
         ],
-      }),
+      }), chinese,
     );
     expect(prices).toHaveLength(3);
-    expect(prices[0]).toMatchObject({ usd: 2, cny: null, unit: "1M tokens", tier: 0 });
+    expect(prices[0]).toMatchObject({ usd: 2, cny: null, unit: "百万 Token", tier: 0 });
     expect(prices[1].unit).toBe("1 次");
     expect(prices[2].usd).toBeNull();
     expect(
@@ -68,7 +70,8 @@ describe("市场目录及内部接入", () => {
       )[0].range,
     ).toBe("");
     expect(marketPrices(row())).toEqual([]);
-    expect(marketMoney(null)).toBe("未提供");
+    expect(marketMoney(null, "$", chinese)).toBe("未提供");
+    expect(marketMoney(null, "$", (key, params) => translate("en", key, params))).toBe("Not provided");
   });
   /** 能力只能取明确声明，坏输入返回空或false，无副作用。 */
   it("读取明确能力和模态", () => {

@@ -30,6 +30,8 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       expect(response.status()).toBe(200);
       const createdMessages = (await response.json()).items.filter((item: { id: string; type: string }) => item.type === "market_update" && !before.has(item.id));
       expect(createdMessages).toHaveLength(1);
+      // 来源同时切换所有模型的开放上界写法，只有新增项和真实调价应进入消息。
+      expect(createdMessages[0].data.changes).toHaveLength(2);
       expect(createdMessages[0].data.changes).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "added", model: newModel }),
         expect.objectContaining({ kind: "price_changed", model: "e2e-market-chat" }),

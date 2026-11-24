@@ -8,6 +8,7 @@ import { t, useT } from "@/i18n";
 import { formatTemplateStrategyLabel } from "@/components/route_templates/strategyLabel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ConsolePageHeader } from "@/components/console/ConsolePrimitives";
 import RouteTemplateGuide from "@/components/route_templates/RouteTemplateGuide";
 import {
   Dialog,
@@ -225,31 +226,27 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
   if (!accessToken) return null;
 
   return (
-    <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-2">
-          {draft && (
-            <Button variant="ghost" size="sm" className="-ml-3" disabled={saving} onClick={() => setDraft(null)}>
-              <ArrowLeft />
-              {t("pages.routeTemplates.backToLibrary")}
+    <div className="mx-auto w-full min-w-0 max-w-[1600px] space-y-5">
+      {draft && (
+        <Button variant="ghost" size="sm" disabled={saving} onClick={() => setDraft(null)}>
+          <ArrowLeft />
+          {t("pages.routeTemplates.backToLibrary")}
+        </Button>
+      )}
+      <ConsolePageHeader
+        title={draft ? editorTitle(draft) : t("pages.routeTemplates.title")}
+        description={draft ? editorDescription(draft) : t("pages.routeTemplates.pageIntro")}
+        actions={<>
+          <RouteTemplateGuide />
+          {!draft && (
+            <Button onClick={() => startCreate()} disabled={loading || library.isError}>
+              <Plus />
+              {t("pages.routeTemplates.create")}
             </Button>
           )}
-          <h2 className="text-2xl font-semibold tracking-tight text-foreground">
-            {draft ? editorTitle(draft) : t("pages.routeTemplates.title")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {draft ? editorDescription(draft) : t("pages.routeTemplates.pageIntro")}
-          </p>
-        </div>
-        {!draft && (
-          <Button onClick={() => startCreate()} disabled={loading || library.isError}>
-            <Plus />
-            {t("pages.routeTemplates.create")}
-          </Button>
-        )}
-      </div>
+        </>}
+      />
 
-      <RouteTemplateGuide />
       {catalogError && (
         <p role="alert" className="text-destructive">
           {catalogError}
@@ -323,7 +320,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
       )}
 
       <Dialog open={jsonView !== null} onOpenChange={(open) => !open && setJsonView(null)}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="min-w-0 max-h-[calc(100dvh-2rem)] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{jsonView?.name}</DialogTitle>
             <DialogDescription>{t("pages.routeTemplates.jsonHint")}</DialogDescription>
@@ -335,9 +332,9 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
       </Dialog>
 
       <Dialog open={usage !== null} onOpenChange={(open) => !open && setUsage(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{t("pages.routeTemplates.usageTitle", { name: usage?.name ?? "" })}</DialogTitle>
+            <DialogTitle className="wrap-anywhere">{t("pages.routeTemplates.usageTitle", { name: usage?.name ?? "" })}</DialogTitle>
             {usage?.refused && (
               <DialogDescription>{t("pages.routeTemplates.inUseBy", { count: usage.rows.length })}</DialogDescription>
             )}
@@ -347,7 +344,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
           ) : (
             <ul className="space-y-1 text-sm">
               {usage?.rows.map((entry) => (
-                <li key={`${entry.scope_type}-${entry.scope_id}`}>
+                <li className="wrap-anywhere rounded-md bg-muted/35 px-3 py-2" key={`${entry.scope_type}-${entry.scope_id}`}>
                   {scopeLabel(entry.scope_type)}
                   {" · "}
                   {entry.name}

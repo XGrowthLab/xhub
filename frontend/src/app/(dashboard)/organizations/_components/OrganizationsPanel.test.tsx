@@ -48,9 +48,10 @@ const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
 interface RenderPanelOptions {
   premiumUser?: boolean;
   searchParams?: string;
+  accessToken?: string;
 }
 
-const renderPanel = ({ premiumUser = true, searchParams = "" }: RenderPanelOptions = {}) => {
+const renderPanel = ({ premiumUser = true, searchParams = "", accessToken }: RenderPanelOptions = {}) => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -62,7 +63,7 @@ const renderPanel = ({ premiumUser = true, searchParams = "" }: RenderPanelOptio
   const tree = (currentSearchParams: string) => (
     <NuqsTestingAdapter searchParams={currentSearchParams} onUrlUpdate={handleUrlUpdate} hasMemory>
       <QueryClientProvider client={queryClient}>
-        <OrganizationsPanel userRole="Admin" accessToken={null} premiumUser={premiumUser} />
+        <OrganizationsPanel userRole="Admin" accessToken={accessToken ?? null} premiumUser={premiumUser} />
       </QueryClientProvider>
     </NuqsTestingAdapter>
   );
@@ -139,29 +140,29 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
     expect(screen.getByTestId("organizations-table")).toBeInTheDocument();
   });
 
-  it("the edit action opens the detail in edit mode with ?org= set", async () => {
-    renderPanel();
-
+  /** 列表编辑及取消不写入 ?org。前置已登录的管理员，核对弹窗边界与返回列表，测试框架清理模拟路由。 */
+  it("opens the editor over the list and keeps the query string on cancel", () => {
+    renderPanel({ accessToken: "test-token" });
     act(() => capturedTableProps?.onEditClick("org-edit"));
 
-    await expectQueryString("?org=org-edit");
     expect(mockOrgInfoView).toHaveBeenLastCalledWith(
-      expect.objectContaining({ organizationId: "org-edit", editOrg: true }),
+      expect.objectContaining({ organizationId: "org-edit", editorOnly: true }),
     );
+    expect(screen.getByTestId("organizations-table")).toBeInTheDocument();
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+
+    act(() => mockOrgInfoView.mock.calls.at(-1)?.[0].onClose());
+    expect(screen.queryByTestId("organization-info-view")).not.toBeInTheDocument();
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 
-  it("a plain row click after leaving an edit view via browser history does not reopen in edit mode", async () => {
-    const { navigate } = renderPanel();
-
+  /** 取消组织编辑后，实际点击另一个组织才会进入详情；检查新详情只读初始化，模拟路由和组件由测试框架清理。 */
+  it("opens ordinary detail after cancelling the list editor", async () => {
+    renderPanel({ accessToken: "test-token" });
     act(() => capturedTableProps?.onEditClick("org-edit"));
-    await expectQueryString("?org=org-edit");
-    expect(mockOrgInfoView).toHaveBeenLastCalledWith(expect.objectContaining({ editOrg: true }));
-
-    navigate("");
-    expect(screen.getByTestId("organizations-table")).toBeInTheDocument();
+    act(() => mockOrgInfoView.mock.calls.at(-1)?.[0].onClose());
 
     act(() => capturedTableProps?.onOrganizationClick("org-plain"));
-
     await expectQueryString("?org=org-plain");
     expect(mockOrgInfoView).toHaveBeenLastCalledWith(
       expect.objectContaining({ organizationId: "org-plain", editOrg: false }),

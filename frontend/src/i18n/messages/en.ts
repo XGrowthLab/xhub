@@ -1127,7 +1127,7 @@ export const en = {
     mcpServers: "MCP Servers",
     teams: "Teams",
   },
-  directoryForm: { limitHelp: "How limits apply", teamModelHint: "Leave blank to inherit the organization’s model access. Select models to narrow this team’s access.", identity: "Basic Information", modelAccess: "Model access", limits: "Budget and rate limits" },
+  directoryForm: { editDenied: "You do not have permission to edit these settings.", limitHelp: "How limits apply", teamModelHint: "Leave blank to inherit the organization’s model access. Select models to narrow this team’s access.", identity: "Basic Information", modelAccess: "Model access", limits: "Budget and rate limits" },
   pages: {
     apiKeys: {
       title: "Virtual Keys",
@@ -1334,6 +1334,7 @@ export const en = {
       teamMembership: "Team Membership",
       addUserToTeam: "Add User to Team",
       memberRole: "Member Role",
+      memberRoleForTeam: "Member Role — {team}",
       adding: "Adding...",
       addToTeam: "Add to Team",
       selectModels: "Select models",
@@ -1549,6 +1550,8 @@ export const en = {
       garden: "Guardrail Garden",
       playground: "Test Playground",
       submitted: "Submitted Guardrails",
+      localEditorDescription: "Block keywords or redact text using the copyable regex examples.",
+      xgoEditorDescription: "Write rules in Go / XGo and copy examples from the function cards.",
     },
     prompts: {
       title: "Prompts",

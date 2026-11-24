@@ -187,3 +187,35 @@ func TestMarketEventsPersistOnSuccessfulRefresh(t *testing.T) {
 		t.Fatal("事件写入失败后目录或事件部分提交")
 	}
 }
+
+// TestMarketPriceJSONOpenBounds 验证来源开放上界改写不触发价格通知，有限边界变化仍触发。
+// 使用内存价格对象并校验原始规则无改写，无外部资源需要清理。
+func TestMarketPriceJSONOpenBounds(t *testing.T) {
+	row := func(input, output int) map[string]any {
+		return map[string]any{"market_catalog": true, "pricing_rules_v2": []map[string]any{
+			{"input_range": []int{0, input}, "output_range": []int{0, output}, "details_v2": map[string]any{"unit_price_usd": 0.05}},
+		}}
+	}
+	legacy := row(99999999, 99999999)
+	for _, tc := range []struct {
+		name      string
+		current   map[string]any
+		wantCount int
+	}{
+		{"same quote", row(-1, -1), 0},
+		{"finite limit", row(100000, -1), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changes, err := diffMarketChanges(
+				catalog.PriceDocument{Models: map[string]map[string]any{"sample": legacy}},
+				catalog.PriceDocument{Models: map[string]map[string]any{"sample": tc.current}},
+			)
+			if err != nil || len(changes) != tc.wantCount {
+				t.Fatalf("边界变化通知异常: %v %v", changes, err)
+			}
+		})
+	}
+	if bound := legacy["pricing_rules_v2"].([]map[string]any)[0]["input_range"].([]int)[1]; bound != 99999999 {
+		t.Fatal("通知比较改写了原报价")
+	}
+}

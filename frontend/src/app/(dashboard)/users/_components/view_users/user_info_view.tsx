@@ -1,8 +1,6 @@
 import { DateCell } from "@/components/shared/table_cells/date_cell";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   userGetInfoV2,
@@ -31,9 +29,12 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { ArrowLeft, CheckIcon, CopyIcon, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
-import UserAccountEditor from "./UserAccountEditor";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { ArrowLeft, KeyRound, Pencil, Plus, Trash2 } from "lucide-react";
+import UserAccountEditDialog, { unwrapUserInfo } from "./UserAccountEditDialog";
+import { DirectoryDetailHeader, DirectoryFacts, DirectoryPanel } from "@/components/shared/DirectoryDetail";
+import CopyButton from "@/components/shared/CopyButton";
+import { HelpDisclosure } from "@/components/console/ConsolePrimitives";
 import SetPasswordModal from "@/components/SetPasswordModal";
 import { toast } from "@/lib/toast";
 
@@ -70,13 +71,6 @@ const accountRoleLabel = (role: string | null | undefined): string => {
 const membershipRoleLabel = (role: string | null | undefined): string => {
   if (!role) return "—";
   return isTeamAdminMembership(role) ? t("Team admin") : t("Team member");
-};
-
-const unwrapUserInfo = (data: unknown): UserInfoV2Response | null => {
-  if (!data || typeof data !== "object") return null;
-  const record = data as { user_id?: string; user_info?: UserInfoV2Response };
-  if (record.user_info && !record.user_id) return record.user_info;
-  return data as UserInfoV2Response;
 };
 
 const asTeamRows = (raw: unknown): Array<Record<string, any>> => {
@@ -189,7 +183,6 @@ export default function UserInfoView({
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
   const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
   const [isRemoveTeamModalOpen, setIsRemoveTeamModalOpen] = useState(false);
@@ -380,66 +373,50 @@ export default function UserInfoView({
     );
   }
 
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
-  };
-
   // 空预算不构成调用授权门槛：有团队共享父级，无团队没有个人消费上限。
   const budgetLabel = userData.max_budget == null
     ? t(teamDetails.length === 0 ? "pages.users.unlimited" : "quotaGuide.blank")
     : `$${formatNumberWithCommas(userData.max_budget, 2)}`;
 
+  const personalModels = userData.models?.length ? (
+    <div className="flex flex-wrap gap-2">
+      {userData.models.map((model) => (
+        <BadgeLink key={model} className="max-w-full whitespace-normal [overflow-wrap:anywhere]">{model}</BadgeLink>
+      ))}
+    </div>
+  ) : <p className="text-sm text-muted-foreground">{t("Models are decided by the teams below. This account has no model list of its own.")}</p>;
+  const copyIdLabel = t("pages.users.copyUserId");
+  const budgetReset = userData.budget_reset_day
+    ? t("userBudgetReset.day", { day: userData.budget_reset_day })
+    : t("userBudgetReset.none");
+
   return (
-    <div className="p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button variant="ghost" onClick={onClose} className="mb-4">
-            <ArrowLeft />
-            {t("Back to Users")}
-          </Button>
-          <h2 className="text-xl font-semibold">{userData.user_email || t("User")}</h2>
-          <div className="flex items-center cursor-pointer">
-            <span className="text-sm text-muted-foreground font-mono">{userData.user_id}</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => copyToClipboard(userData.user_id, "user-id")}
-              className={`left-2 z-raised transition-all duration-200 ${
-                copiedStates["user-id"]
-                  ? "text-success bg-success/10 border-success/20"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              }`}
-            >
-              {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            </Button>
-          </div>
-        </div>
-        <div className="flex items-center space-x-2">
-          {isProxyAdmin && <Button variant="secondary" onClick={() => { setActiveTab("details"); setIsEditing(true); }}>
+    <div className="mx-auto w-full min-w-0 max-w-[1600px] space-y-4">
+      <DirectoryDetailHeader
+        title={userData.user_email || t("User")}
+        id={userData.user_id}
+        copyLabel={copyIdLabel}
+        backLabel={t("Back to Users")}
+        onBack={onClose}
+        actions={<>
+          {isProxyAdmin && <Button onClick={() => setIsEditing(true)} size="sm">
             <Pencil />{t("pages.users.editUser")}
           </Button>}
-          <Button variant="secondary" onClick={() => setIsSetPasswordOpen(true)}>
-            <KeyRound />
-            {t("pages.users.resetPassword")}
+          <Button variant="outline" size="sm" onClick={() => setIsSetPasswordOpen(true)}>
+            <KeyRound />{t("pages.users.resetPassword")}
           </Button>
           {isProxyAdmin && (
-            <Button
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-destructive border-destructive hover:bg-destructive/10"
-            >
-              <Trash2 />
-              {t("pages.users.deleteUser")}
+            <Button variant="outline" size="sm" onClick={() => setIsDeleteModalOpen(true)}
+              className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              <Trash2 />{t("pages.users.deleteUser")}
             </Button>
           )}
-        </div>
-      </div>
+        </>}
+      />
+      {isEditing && isProxyAdmin && accessToken && (
+        <UserAccountEditDialog userId={userId} user={userData} accessToken={accessToken}
+          onClose={() => setIsEditing(false)} onSaved={refreshUser} />
+      )}
 
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
@@ -463,216 +440,96 @@ export default function UserInfoView({
         confirmLoading={isDeletingUser}
       />
 
-      <Tabs value={activeTab} onValueChange={(v: unknown) => setActiveTab(String(v))} className="gap-0">
-        <TabsList variant="line" className="mb-4">
-          <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
-            {t("common.overview")}
-          </TabsTrigger>
-          <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
-            {t("common.details")}
-          </TabsTrigger>
+      <Tabs value={activeTab} onValueChange={(value: unknown) => setActiveTab(String(value))} className="min-w-0 gap-3">
+        <TabsList className="h-auto max-w-full flex-wrap justify-start">
+          <TabsTrigger value="overview" className="flex-none px-3">{t("common.overview")}</TabsTrigger>
+          <TabsTrigger value="details" className="flex-none px-3">{t("common.details")}</TabsTrigger>
         </TabsList>
 
-        {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Card className="block p-6">
-              <p>{t("pages.users.spendUsd")}</p>
-              <div className="mt-2">
-                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>
-                  {userData.max_budget == null ? budgetLabel : t("pages.users.spendOf", { limit: budgetLabel })}
-                </p>
-              </div>
-            </Card>
+          <div className="grid min-w-0 items-start gap-4 lg:grid-cols-2">
+            <DirectoryPanel title={t("pages.users.spendUsd")}>
+              <p className="text-2xl font-semibold tabular-nums [overflow-wrap:anywhere]">{"$" + formatNumberWithCommas(userData.spend || 0, 2)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {userData.max_budget == null ? budgetLabel : t("pages.users.spendOf", { limit: budgetLabel })}
+              </p>
+            </DirectoryPanel>
+            <DirectoryPanel title={t("pages.users.personalModels")}>{personalModels}</DirectoryPanel>
 
-            <Card className="block p-6">
-              <div className="flex justify-between items-center mb-2">
-                <div>
-                  <p>{t("common.teams")}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("There is no organization administrator. Each team belongs to one organization.")}
-                  </p>
-                </div>
-                {isProxyAdmin && (
-                  <Button variant="ghost" size="sm" onClick={handleOpenAddTeamModal}>
-                    <Plus />
-                    {t("pages.users.addTeam")}
+            <div className="min-w-0 lg:col-span-2">
+              <DirectoryPanel title={t("common.teams")} actions={isProxyAdmin && (
+                <Button variant="outline" size="sm" onClick={handleOpenAddTeamModal}>
+                  <Plus />{t("pages.users.addTeam")}
+                </Button>
+              )}>
+                {teamDetails.length ? (
+                  <ul className="divide-y overflow-hidden rounded-lg border">
+                    {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
+                      <li key={team.team_id} className="grid min-w-0 items-center gap-2 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+                        <div className="min-w-0">
+                          <BadgeLink href={teamDetailHref(team.team_id)} className="max-w-full whitespace-normal [overflow-wrap:anywhere]">
+                            {team.team_alias || team.team_id}
+                          </BadgeLink>
+                          {team.organization_alias && <p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">{team.organization_alias}</p>}
+                        </div>
+                        {isProxyAdmin ? (
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Select items={memberRoleOptions()} value={isTeamAdminMembership(team.user_role) ? "admin" : "user"}
+                              disabled={updatingTeam !== null} onValueChange={(value) => value && void updateTeamRole(team, value)}>
+                              <SelectTrigger className="min-w-0" aria-label={t("pages.users.memberRoleForTeam", { team: team.team_alias || team.team_id })}><SelectValue /></SelectTrigger>
+                              <SelectContent>{memberRoleOptions().map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+                            </Select>
+                            <Button variant="ghost" size="icon-sm" className="shrink-0 text-destructive"
+                              aria-label={t("Remove from {value0}", { value0: team.team_alias || team.team_id })}
+                              onClick={() => handleOpenRemoveTeamModal(team)}><Trash2 /></Button>
+                          </div>
+                        ) : <span className="text-sm text-muted-foreground">{membershipRoleLabel(team.user_role)}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : <p className="text-sm text-muted-foreground">{t("pages.users.noTeams")}</p>}
+                {teamDetails.length > 20 && (
+                  <Button variant="ghost" size="sm" className="mt-2" onClick={() => setIsTeamsExpanded(!isTeamsExpanded)}>
+                    {isTeamsExpanded ? t("Show Less") : t("pages.users.moreCount", { n: teamDetails.length - 20 })}
                   </Button>
                 )}
-              </div>
-              <div className="mt-2">
-                {teamDetails.length > 0 ? (
-                  <div className="max-h-60 overflow-y-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t("pages.users.teamName")}</TableHead>
-                          <TableHead>{t("Organization")}</TableHead>
-                          <TableHead>{t("Role in this team")}</TableHead>
-                          {isProxyAdmin && <TableHead className="text-right">{t("common.actions")}</TableHead>}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
-                          <TableRow key={team.team_id}>
-                            <TableCell>
-                              <BadgeLink href={teamDetailHref(team.team_id)}>
-                                {team.team_alias || team.team_id}
-                              </BadgeLink>
-                            </TableCell>
-                            <TableCell>{team.organization_alias || "—"}</TableCell>
-                            <TableCell>{isProxyAdmin ? (
-                              <Select items={memberRoleOptions()} value={isTeamAdminMembership(team.user_role) ? "admin" : "user"}
-                                disabled={updatingTeam !== null} onValueChange={(value) => value && void updateTeamRole(team, value)}>
-                                <SelectTrigger aria-label={`${t("pages.users.memberRole")} — ${team.team_alias || team.team_id}`}><SelectValue /></SelectTrigger>
-                                <SelectContent>{memberRoleOptions().map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
-                              </Select>
-                            ) : membershipRoleLabel(team.user_role)}</TableCell>
-                            {isProxyAdmin && (
-                              <TableCell className="text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  aria-label={t("Remove from {value0}", { value0: (team.team_alias || team.team_id) })}
-                                  onClick={() => handleOpenRemoveTeamModal(team)}
-                                  className="text-destructive"
-                                >
-                                  <Trash2 />
-                                </Button>
-                              </TableCell>
-                            )}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                ) : (
-                  <p>{t("pages.users.noTeams")}</p>
-                )}
-                {!isTeamsExpanded && teamDetails.length > 20 && (
-                  <Button variant="ghost" size="sm" className="mt-2" onClick={() => setIsTeamsExpanded(true)}>
-                    {t("pages.users.moreCount", { n: teamDetails.length - 20 })}
-                  </Button>
-                )}
-                {isTeamsExpanded && teamDetails.length > 20 && (
-                  <Button variant="ghost" size="sm" className="mt-2" onClick={() => setIsTeamsExpanded(false)}>
-                    {t("Show Less")}
-                  </Button>
-                )}
-              </div>
-            </Card>
-
-            <Card className="block p-6">
-              <p>{t("pages.users.personalModels")}</p>
-              <div className="mt-2">
-                {userData.models?.length && userData.models?.length > 0 ? (
-                  userData.models?.map((model, index) => <p key={index}>{model}</p>)
-                ) : (
-                  <p>{t("Models are decided by the teams below. This account has no model list of its own.")}</p>
-                )}
-              </div>
-            </Card>
+              </DirectoryPanel>
+            </div>
           </div>
         </TabsContent>
 
-        {/* Details Panel */}
         <TabsContent value="details" keepMounted>
-          <Card className="block p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium">{t("pages.users.userSettings")}</h3>
-            </div>
+          <div className="grid min-w-0 items-start gap-4 xl:grid-cols-2">
+            <DirectoryPanel title={t("pages.users.userSettings")}>
+              <DirectoryFacts fields={[
+                { label: t("pages.users.userId"), value: <span className="inline-flex max-w-full items-center gap-1"><code className="min-w-0 [overflow-wrap:anywhere]">{userData.user_id}</code><CopyButton value={userData.user_id} label={copyIdLabel} className="shrink-0" /></span> },
+                { label: t("pages.users.email"), value: userData.user_email || t("pages.users.notSet") },
+                { label: t("pages.users.alias"), value: userData.user_alias || t("pages.users.notSet") },
+                { label: t("pages.users.role"), value: accountRoleLabel(userData.user_role) },
+                { label: t("common.created"), value: <DateCell value={userData.created_at} fallback="common.unknown" /> },
+                { label: t("pages.users.lastUpdated"), value: <DateCell value={userData.updated_at} fallback="common.unknown" /> },
+              ]} />
+            </DirectoryPanel>
 
-            {isEditing && isProxyAdmin && accessToken ? <UserAccountEditor key={userId} user={userData} accessToken={accessToken}
-              onCancel={() => setIsEditing(false)} onSaved={async () => { await refreshUser(); setIsEditing(false); }} /> : <div className="space-y-4">
-                <div>
-                  <p className="font-medium">{t("pages.users.userId")}</p>
-                  <div className="flex items-center cursor-pointer">
-                    <span className="font-mono">{userData.user_id}</span>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                      className={`left-2 z-raised transition-all duration-200 ${
-                        copiedStates["user-id"]
-                          ? "text-success bg-success/10 border-success/20"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                      }`}
-                    >
-                      {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                    </Button>
-                  </div>
-                </div>
+            <DirectoryPanel title={t("directoryForm.limits")}>
+              <DirectoryFacts fields={[
+                { label: t("pages.users.maxBudget"), value: userData.max_budget == null ? budgetLabel : "$" + formatNumberWithCommas(userData.max_budget, 4) },
+                { label: t("userBudgetReset.label"), value: budgetReset },
+                { label: t("Requests per minute Limit (RPM)"), value: userData.rpm_limit ?? t("quotaGuide.rateBlank") },
+                { label: t("Tokens per minute Limit (TPM)"), value: userData.tpm_limit ?? t("quotaGuide.rateBlank") },
+              ]} />
+              {userData.budget_reset_at && (
+                <p className="mt-3 text-xs text-muted-foreground">{t("userBudgetReset.next", { date: new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short" }).format(new Date(userData.budget_reset_at)) })}</p>
+              )}
+            </DirectoryPanel>
 
-                <div>
-                  <p className="font-medium">{t("pages.users.email")}</p>
-                  <p>{userData.user_email || t("pages.users.notSet")}</p>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("pages.users.alias")}</p>
-                  <p>{userData.user_alias || t("pages.users.notSet")}</p>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("pages.users.role")}</p>
-                  <p>{accountRoleLabel(userData.user_role)}</p>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("common.created")}</p>
-                  <div><DateCell value={userData.created_at} fallback="common.unknown" /></div>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("pages.users.lastUpdated")}</p>
-                  <div><DateCell value={userData.updated_at} fallback="common.unknown" /></div>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("pages.users.personalModels")}</p>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {userData.models?.length && userData.models?.length > 0 ? (
-                      userData.models?.map((model, index) => (
-                        <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
-                          {model}
-                        </span>
-                      ))
-                    ) : (
-                      <p>{t("Models are decided by the teams below. This account has no model list of its own.")}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <p className="font-medium">{t("pages.users.maxBudget")}</p>
-                  <p>
-                    {userData.max_budget !== null && userData.max_budget !== undefined
-                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : budgetLabel}
-                  </p>
-                </div>
-
-                {(["rpm_limit", "tpm_limit"] as const).map((field) => (
-                  <div key={field}>
-                    <p className="font-medium">{t(field === "rpm_limit" ? "Requests per minute Limit (RPM)" : "Tokens per minute Limit (TPM)")}</p>
-                    <p>{userData[field] ?? t("quotaGuide.rateBlank")}</p>
-                  </div>
-                ))}
-                <div>
-                  <p className="font-medium">{t("userBudgetReset.label")}</p>
-                  <p>{userData.budget_reset_day ? t("userBudgetReset.day", { day: userData.budget_reset_day }) : t("userBudgetReset.none")}</p>
-                </div>
-
-                {userData.budget_reset_at && <p>{t("userBudgetReset.next", { date: new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", dateStyle: "short", timeStyle: "short" }).format(new Date(userData.budget_reset_at)) })}</p>}
-                <div>
-                  <p className="font-medium">{t("pages.users.metadata")}</p>
-                  <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
-                    {JSON.stringify(userData.metadata || {}, null, 2)}
-                  </pre>
-                </div>
-            </div>}
-          </Card>
+            <DirectoryPanel title={t("pages.users.personalModels")}>{personalModels}</DirectoryPanel>
+            {userData.metadata && Object.keys(userData.metadata).length > 0 && (
+              <HelpDisclosure title={t("pages.users.metadata")}>
+                <pre className="max-h-64 overflow-auto text-xs">{JSON.stringify(userData.metadata, null, 2)}</pre>
+              </HelpDisclosure>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
       <SetPasswordModal

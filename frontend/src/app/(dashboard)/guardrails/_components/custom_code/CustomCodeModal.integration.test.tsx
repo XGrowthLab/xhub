@@ -13,6 +13,20 @@ vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn() }));
 beforeEach(() => vi.clearAllMocks());
 const props = { visible: true, onClose: vi.fn(), onSuccess: vi.fn(), accessToken: "token" };
 describe("XGo custom guardrail editor", () => {
+  /** 前置英文界面和新建弹窗，验证标题、示例与关闭回调，卸载组件时无持久化副作用。 */
+  it("本地化弹窗标题并取消未保存的脚本", () => {
+    setActiveLocale("en");
+    render(<CustomCodeModal {...props} />);
+    expect(screen.getByRole("dialog", { name: "Create XGo guardrail" })).toBeVisible();
+    const input = screen.getByLabelText("Test input (JSON)");
+    fireEvent.change(input, { target: { value: '{"texts":["原始文本 unchanged"]}' } });
+    expect(input).toHaveValue('{"texts":["原始文本 unchanged"]}');
+    fireEvent.click(screen.getByRole("button", { name: "Load request example" }));
+    expect((input as HTMLTextAreaElement).value).toContain("hello secret");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onClose).toHaveBeenCalledOnce();
+    expect(createGuardrailCall).not.toHaveBeenCalled();
+  });
   it("saves Go syntax and the supported execution stage", async () => {
     vi.mocked(createGuardrailCall).mockResolvedValue({} as never);
     render(<CustomCodeModal {...props} />);

@@ -245,7 +245,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         </section>
       ) : (
         <Tabs defaultValue="guardrails">
-          <TabsList variant="line" className="max-w-full overflow-x-auto border-b">
+          <TabsList variant="line" className="w-full min-w-0 flex-wrap justify-start gap-1 border-b px-0 pb-1 group-data-horizontal/tabs:h-auto [&>[data-slot=tabs-trigger]]:min-h-9">
             <TabsTrigger value="garden" className="flex-none">
               {t("pages.guardrails.garden")}
             </TabsTrigger>
@@ -359,7 +359,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               message={t("Are you sure you want to delete guardrail: {value0}? This action cannot be undone.", {
                 value0: guardrailToDelete?.guardrail_name,
               })}
-              resourceInformationTitle="Guardrail Information"
+              resourceInformationTitle={t("Guardrail Information")}
               resourceInformation={[
                 { label: t("Name"), value: guardrailToDelete?.guardrail_name },
                 { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },

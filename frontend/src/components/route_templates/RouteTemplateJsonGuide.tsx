@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useT } from "@/i18n";
@@ -49,10 +50,11 @@ function JsonExample() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="font-medium">{t("pages.routeTemplates.jsonGuide.exampleTitle")}</h4>
         <Button variant="outline" size="sm" onClick={() => void copy()}>
+          <Copy aria-hidden="true" />
           {t("pages.routeTemplates.jsonGuide.copy")}
         </Button>
       </div>
-      <pre className="overflow-x-auto rounded-lg border bg-muted/30 p-4 text-xs leading-5">{json}</pre>
+      <pre className="max-h-96 overflow-auto rounded-lg border bg-muted/35 p-4 font-mono text-xs leading-5">{json}</pre>
       <p role="status" className="text-xs text-muted-foreground">
         {status}
       </p>
@@ -64,11 +66,9 @@ function JsonExample() {
 export default function RouteTemplateJsonGuide() {
   const t = useT();
   return (
-    <div className="space-y-4 pb-4 text-sm">
-      <h3 className="text-base font-semibold">{t("pages.routeTemplates.jsonGuide.title")}</h3>
-      <p>{t("pages.routeTemplates.jsonGuide.intro")}</p>
-      <Tabs defaultValue="fields">
-        <TabsList className="h-auto flex-wrap justify-start" aria-label={t("pages.routeTemplates.jsonGuide.tabsLabel")}>
+    <div className="min-w-0 text-sm">
+      <Tabs defaultValue="fields" className="gap-3">
+        <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto [&>[data-slot=tabs-trigger]]:min-h-8 [&>[data-slot=tabs-trigger]]:flex-none" aria-label={t("pages.routeTemplates.jsonGuide.tabsLabel")}>
           <TabsTrigger value="fields">{t("pages.routeTemplates.jsonGuide.tabFields")}</TabsTrigger>
           <TabsTrigger value="strategies">{t("pages.routeTemplates.jsonGuide.tabStrategies")}</TabsTrigger>
           <TabsTrigger value="examples">{t("pages.routeTemplates.jsonGuide.tabExamples")}</TabsTrigger>
@@ -76,57 +76,52 @@ export default function RouteTemplateJsonGuide() {
           <TabsTrigger value="validation">{t("pages.routeTemplates.jsonGuide.tabValidation")}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="fields" className="space-y-4 pt-3">
-          <p>{t("pages.routeTemplates.jsonGuide.currentStatusBody")}</p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">{t("pages.routeTemplates.jsonGuide.referenceTitle")}</caption>
-              <thead className="border-b">
-                <tr>
-                  <th className="p-2">{t("pages.routeTemplates.jsonGuide.field")}</th>
-                  <th className="p-2">{t("pages.routeTemplates.jsonGuide.behavior")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fieldRows.map(([field, key]) => (
-                  <tr key={field} className="border-b align-top">
-                    <td className="break-words p-2 font-mono">{field}</td>
-                    <td className="p-2">{t("pages.routeTemplates.jsonGuide." + key)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-muted-foreground">{t("pages.routeTemplates.jsonGuide.referenceHint")}</p>
+        <TabsContent value="fields" className="space-y-3">
+          <p className="leading-6 text-muted-foreground">{t("pages.routeTemplates.jsonGuide.currentStatusBody")}</p>
+          <dl aria-label={t("pages.routeTemplates.jsonGuide.referenceTitle")} className="divide-y rounded-lg border bg-card">
+            {fieldRows.map(([field, key]) => (
+              <div key={field} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:gap-4">
+                <dt className="[overflow-wrap:anywhere] font-mono text-xs leading-6 text-foreground">{field}</dt>
+                <dd className="text-sm leading-6 text-muted-foreground">{t("pages.routeTemplates.jsonGuide." + key)}</dd>
+              </div>
+            ))}
+          </dl>
         </TabsContent>
 
-        <TabsContent value="strategies" className="space-y-4 pt-3">
+        <TabsContent value="strategies" className="space-y-3 leading-6">
           <p>{t("pages.routeTemplates.jsonGuide.strategiesHint")}</p>
           <ul className="grid gap-2 sm:grid-cols-2">
             {strategies.map((strategy) => (
-              <li key={strategy}>
-                <code>{strategy}</code>
+              <li key={strategy} className="rounded-md border bg-muted/30 px-3 py-1.5">
+                <code className="break-words text-xs">{strategy}</code>
               </li>
             ))}
           </ul>
           <p>{t("pages.routeTemplates.jsonGuide.fieldRoutingStrategyArgs")}</p>
         </TabsContent>
 
-        <TabsContent value="examples" className="space-y-6 pt-3">
+        <TabsContent value="examples" className="space-y-3 leading-6">
           <p>{t("pages.routeTemplates.jsonGuide.examplesHint")}</p>
           <JsonExample />
         </TabsContent>
 
-        <TabsContent value="execution" className="space-y-4 pt-3">
+        <TabsContent value="execution" className="space-y-3 leading-6">
           <h4 className="font-medium">{t("pages.routeTemplates.jsonGuide.flowTitle")}</h4>
-          <p>{t("pages.routeTemplates.jsonGuide.executionBody")}</p>
-          <p>{t("pages.routeTemplates.jsonGuide.executionBoundary")}</p>
+          <ol className="list-decimal space-y-3 rounded-lg border bg-card py-3 ps-8 pe-4 marker:font-semibold marker:text-primary">
+            {[1, 2, 3, 4].map((step) => (
+              <li key={step}>
+                <h5 className="font-medium">{t("pages.routeTemplates.jsonGuide.flow" + step + "Title")}</h5>
+                <p className="text-muted-foreground">{t("pages.routeTemplates.jsonGuide.flow" + step + "Body")}</p>
+              </li>
+            ))}
+          </ol>
+          <p className="text-muted-foreground">{t("pages.routeTemplates.jsonGuide.executionBoundary")}</p>
         </TabsContent>
 
-        <TabsContent value="validation" className="space-y-4 pt-3">
+        <TabsContent value="validation" className="space-y-3 leading-6">
           <h4 className="font-medium">{t("pages.routeTemplates.jsonGuide.tabValidation")}</h4>
           <p>{t("pages.routeTemplates.jsonGuide.validationBody")}</p>
-          <p>{t("pages.routeTemplates.jsonGuide.healthFieldsHint")}</p>
+          <p className="text-muted-foreground">{t("pages.routeTemplates.jsonGuide.ruleBody")}</p>
         </TabsContent>
       </Tabs>
     </div>
