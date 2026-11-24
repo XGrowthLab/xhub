@@ -44,7 +44,7 @@ async function expectVisionBill(page: Page, headers: Record<string, string>, id:
 for (const locale of ["zh-CN", "en"] as const)
   for (const stream of [false, true]) {
     /** 前置真实浏览器/Go 后台/PostgreSQL 和校验图片字节/cap的本地上游；中英文创建选择有限额Key、上传预览、三协议JSON/SSE、账单和零占用。
-     * 原生Messages工具结果图片保留，跨协议与独立图片收费明确拒绝；提示不含答案，finally 删除Key/模型/连接，运行器回收账单和schema。 */
+     * 原生 Messages 保留工具结果图片；显式精度不可转换时返回能力错误及零费用账单。finally 删除 Key、模型和连接，运行器回收 schema。 */
     test("Vision upload and protocol bridge " + locale + " " + stream, async ({ page }) => {
       test.setTimeout(120000);
       await loginAdmin(page);
@@ -228,6 +228,29 @@ for (const locale of ["zh-CN", "en"] as const)
           expect(rejected.status, rejected.raw).toBe(400);
           expect(rejected.raw).not.toContain("green-pixel");
         }
+        const explicitDetail = await browserPost(page, key.key, "/gw/v1/responses", {
+          model: names[2],
+          stream,
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: "Describe this image." },
+                { type: "input_image", image_url: "data:image/png;base64," + PNG, detail: "original" },
+              ],
+            },
+          ],
+        });
+        expect(explicitDetail.status, explicitDetail.raw).toBe(400);
+        expect(explicitDetail.raw).toContain("unsupported_capability");
+        expect(explicitDetail.raw).toContain("image detail cannot be expressed by Messages");
+        expect(explicitDetail.raw).toContain("auto");
+        await expect.poll(async () => {
+          const reply = await page.request.get(GATEWAY + "/spend/logs/ui/" + explicitDetail.callID, { headers });
+          if (!reply.ok()) return null;
+          const bill = await reply.json();
+          return { status: bill.status, spend: Number(bill.spend) };
+        }).toEqual({ status: "error", spend: 0 });
         const invalid = await browserPost(page, key.key, "/gw/v1/responses", {
           model: names[0],
           input: [{ role: "user", content: [{ type: "input_image", image_url: "file:///private/image.png" }] }],

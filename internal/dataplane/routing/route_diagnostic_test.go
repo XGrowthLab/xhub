@@ -106,3 +106,49 @@ func TestRouteDiagnosisRequestCompatibility(t *testing.T) {
 		t.Fatalf("严格工具不兼容未解释: %+v", d)
 	}
 }
+
+// TestRouteDiagnosisImageDetailCapability 验证显式图片精度只在所有启用候选均因该参数被排除时返回可公开的能力错误。
+// 参数 t 为测试上下文；前置 Responses 图文与本地目录，覆盖关闭或兼容备选及其他失败原因；无外部资源。
+func TestRouteDiagnosisImageDetailCapability(t *testing.T) {
+	const name = "vision"
+	messages := DiagnosticDeployment(name, "messages", "bypass_anthropic_messages", false)
+	native := DiagnosticDeployment(name, "responses", "bypass_openai_responses", false)
+	paused := DiagnosticDeployment(name, "paused", "bypass_openai_responses", true)
+	invalid := DiagnosticDeployment(name, "invalid", "missing-transport", false)
+	input, err := llmdialogue.ParseDialogue("openai-responses", map[string]any{
+		"input": []any{map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "input_image", "image_url": "data:image/png;base64,AQID", "detail": "original"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		deployments  []config.ModelEntry
+		compatible   int
+		wantKind     string
+		wantGuidance bool
+	}{
+		{"messages", []config.ModelEntry{messages}, 0, "unsupported_capability", true},
+		{"disabled backup", []config.ModelEntry{messages, paused}, 0, "unsupported_capability", true},
+		{"mixed failures", []config.ModelEntry{messages, invalid}, 0, "model_unavailable", false},
+		{"compatible backup", []config.ModelEntry{messages, native}, 1, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			active, _ := DropDisabled(tc.deployments)
+			pool, _ := providerdeployment.Candidates(active, "responses", &input)
+			d := DiagnoseRoute(tc.deployments, pool, name, "responses", router.BuiltinSettings().ForModel(name), router.State{}, &input, true)
+			if d.compatible != tc.compatible {
+				t.Fatalf("显式精度改变了候选兼容性: %+v", d)
+			}
+			if tc.compatible != 0 {
+				return
+			}
+			status, kind, message := d.Failure(name)
+			if status != 400 || kind != tc.wantKind || strings.Contains(message, "detail=auto") != tc.wantGuidance || strings.Contains(message, "private") {
+				t.Fatalf("公开图片精度错误不准确或泄漏连接信息: %d %s %q", status, kind, message)
+			}
+		})
+	}
+}
