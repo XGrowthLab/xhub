@@ -191,6 +191,7 @@ jobs:
           # 令牌只用于真实发布读取，避免共享 runner 的匿名 API 限额。
           printf 'XHUB_RELEASE_TOKEN=%s\n' "$XHUB_RELEASE_TOKEN" |
             sudo sh -c 'umask 077; cat > /etc/xhub-updater.env'
+          unset XHUB_RELEASE_TOKEN
           sudo python3 -B deploy/install.py
           sudo systemctl is-enabled xhub-updater.service
           sudo systemctl is-active xhub-updater.service
