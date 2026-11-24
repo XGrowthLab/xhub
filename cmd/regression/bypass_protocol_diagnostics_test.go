@@ -26,6 +26,7 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 			t.Setenv("XHUB_REGRESSION_REDIS_URL", "")
 			google := protocol.name == "gemini" || protocol.name == "vertex"
 			const fieldError = `{"error":{"code":400,"message":"Invalid request","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","input":"private-echo"}]}]}}`
+			const embeddedError = `{"error":{"code":"embedded_failure","message":"Generation failed"},"usage":{"input_tokens":8,"output_tokens":2}}`
 			var calls atomic.Int32
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
@@ -46,6 +47,9 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(400)
 					_, _ = io.WriteString(w, fieldError)
+				case "embedded-error":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, embeddedError)
 				case "stream":
 					w.Header().Set("Content-Type", "text/event-stream")
 					_, _ = io.WriteString(w, "event: ping\ndata: {}\n\n")
@@ -74,6 +78,7 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 				{"disconnect", "transport_error", "EOF", 0, 502, 502, 2},
 				{"empty-error", "", "upstream returned HTTP 502 without an error body", 502, 502, 502, 2},
 				{"empty-success", "empty_response", "empty dialogue response", 200, 502, 502, 1},
+				{"embedded-error", "", "embedded_failure", 200, 200, 502, 1},
 				{"stream", "transport_error", "native stream ended without successful completion", 200, 200, 502, 1},
 			}
 			if google {
@@ -104,6 +109,9 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					}
 					if (tc.fixture == "invalid-field" && reply.text() != fieldError) || (tc.fixture == "empty-error" && reply.text() != "") {
 						t.Fatalf("诊断改变了供应商原始 HTTP 响应: %s", reply.describe())
+					}
+					if tc.fixture == "embedded-error" && reply.text() != embeddedError {
+						t.Fatalf("HTTP 200 中的供应商错误正文被改写: %s", reply.describe())
 					}
 					detail := logDetail(t, h, admin, reply.header("x-litellm-call-id"))
 					metadata, _ := detail["metadata"].(map[string]any)

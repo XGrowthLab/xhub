@@ -91,7 +91,7 @@ test("empty native response fails without replay and leaves confirmed billing in
 });
 
 for (const protocol of [
-  { name: "chat", transport: "bypass_openai_chat", endpoint: "bypass:openai-chat", path: "/bypass/openai/v1/chat/completions", fixture: "disconnect", status: 502, reason: "EOF" },
+  { name: "chat", transport: "bypass_openai_chat", endpoint: "bypass:openai-chat", path: "/bypass/openai/v1/chat/completions", fixture: "embedded-error", status: 200, reason: "embedded_failure" },
   { name: "responses", transport: "bypass_openai_responses", endpoint: "bypass:openai-responses", path: "/bypass/openai/v1/responses", fixture: "incomplete", status: 200, reason: "content_filter" },
   { name: "gemini", transport: "gemini_generate_content", endpoint: "bypass:gemini", path: "/bypass/gemini/v1beta/models/", fixture: "empty", status: 502, reason: "empty dialogue response" },
   { name: "vertex", transport: "vertex_generate_content", endpoint: "bypass:vertex", path: "/bypass/vertex/v1/models/", fixture: "invalid-field", status: 400, reason: "generationConfig.temperature" },
@@ -101,7 +101,10 @@ for (const protocol of [
     await loginAdmin(page);
     const headers = { Authorization: "Bearer " + await sessionBearer(page) };
     const name = "native-diagnostic-" + protocol.name + "-" + Date.now();
-    const params = { model: "e2e-native-diagnostics", api_base: UPSTREAM, api_key: "sk-fake", custom_llm_provider: "custom" };
+    const params = {
+      model: "e2e-native-diagnostics", api_base: UPSTREAM, api_key: "sk-fake", custom_llm_provider: "custom",
+      input_cost_per_token: 0.000001, output_cost_per_token: 0.000002,
+    };
     const modelInfo = { transport: protocol.transport, endpoint_types: [protocol.endpoint], pricing_source: "manual" };
     const model = await page.request.post(GATEWAY + "/model/new", { headers, data: { model_name: name, litellm_params: params, model_info: modelInfo } });
     expect(model.status(), await model.text()).toBe(200);

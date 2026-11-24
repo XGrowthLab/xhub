@@ -92,3 +92,19 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 		})
 	}
 }
+
+// TestNativeBypassErrorEnvelopeWithHTTP200 验证已收到显式错误正文时，仅日志标明失败，客户端保留供应商状态和字节。
+// 使用内存宿主及测试 HTTP 服务，断言一次出站、一次失败记账且无用量；结束关闭服务。
+func TestNativeBypassErrorEnvelopeWithHTTP200(t *testing.T) {
+	const raw = `{"id":"error-id","error":{"message":"Rejected"},"usage":{"prompt_tokens":5,"completion_tokens":2}}`
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, raw)
+	}))
+	t.Cleanup(up.Close)
+	h := officialHost(up, Deployment("public", "upstream", "fixture", up.URL, "bypass_openai_chat", nil))
+	rec := h.call(t, http.MethodPost, "/bypass/openai/v1/chat/completions", `{"model":"public","messages":[{"role":"user","content":"Hello"}]}`)
+	if rec.Code != http.StatusOK || rec.Body.String() != raw || len(h.spend) != 1 || h.spend[0].status != 502 || h.spend[0].usage != nil {
+		t.Fatalf("供应商原文或失败记账错误: status=%d spend=%+v", rec.Code, h.spend)
+	}
+}

@@ -397,9 +397,15 @@ forwarded:
 	}
 	var doc map[string]any
 	_ = json.Unmarshal(respBody, &doc)
+	logStatus := status
+	if status >= 200 && status < 300 && !response.Streamed && response.Diagnostics != nil &&
+		response.Diagnostics.Error != nil && isNativeDialogueGeneration(hit, countOnly) {
+		// 原生响应仍按上游字节透传；明确的错误包络独立记为失败，不能提交续接归属或生成费用。
+		logStatus = http.StatusBadGateway
+	}
 	depID := selectedID
 	taskRequestID := ""
-	if taskID := providercontract.ReadTaskID(doc, hit.Transport.TaskID); taskID != "" && status >= 200 && status < 300 && doc["error"] == nil && doc["detail"] == nil {
+	if taskID := providercontract.ReadTaskID(doc, hit.Transport.TaskID); taskID != "" && logStatus >= 200 && logStatus < 300 && doc["error"] == nil && doc["detail"] == nil {
 		scope := officialTaskScope(principal, hit.Transport.ID, taskID)
 		if billing := hit.Transport.Billing; billing != nil {
 			// 创建请求身份随调用方隔离的任务钉保存，后续查询更新同一日志。
@@ -420,7 +426,7 @@ forwarded:
 		h.PinOfficial(scope, selectedID)
 	}
 	respBody = rewriteQueueURLs(hit, doc, respBody)
-	if !countOnly && status >= 200 && status < 300 {
+	if !countOnly && logStatus >= 200 && logStatus < 300 {
 		responseID, _ := doc["id"].(string)
 		if response.Streamed {
 			responseID = response.ResponseID
@@ -437,13 +443,13 @@ forwarded:
 	note.Upstream = response.Diagnostics
 	h.AnnotateCall(callID, note)
 	var usage map[string]any
-	if !countOnly && status >= 200 && status < 300 && hit.Transport.ResponseUsage != nil {
+	if !countOnly && logStatus >= 200 && logStatus < 300 && hit.Transport.ResponseUsage != nil {
 		usage = hit.Transport.ResponseUsage(doc, body)
 		if response.Streamed {
 			usage = response.Usage
 		}
 	}
-	h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, usage, start, false, status, depID)
+	h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, usage, start, false, logStatus, depID)
 	response.Body = respBody
 	dptransport.WriteThrough(w, response)
 }
@@ -452,7 +458,14 @@ forwarded:
 // hit 为已匹配的动作，countOnly 标识只读计数，response 为出站结果；返回 true 时调用方须停止重放并报告上游错误。
 // 执行器转发后调用；非 2xx、已发送的 SSE、计数及其他异步/媒体接口返回 false，不修改搜索筛选或预算规则。
 func emptyBypassDialogue(hit providercontract.Hit, countOnly bool, response dptransport.ForwardResponse) bool {
-	if countOnly || response.Streamed || response.StatusCode < 200 || response.StatusCode >= 300 || len(bytes.TrimSpace(response.Body)) != 0 {
+	return !response.Streamed && response.StatusCode >= 200 && response.StatusCode < 300 &&
+		len(bytes.TrimSpace(response.Body)) == 0 && isNativeDialogueGeneration(hit, countOnly)
+}
+
+// isNativeDialogueGeneration 根据已登记动作和计数标志判断是否为原生对话生成。
+// 空正文检查和同步错误日志共用；计数和异步媒体接口返回 false，不改变权限、重试或任务生命周期。
+func isNativeDialogueGeneration(hit providercontract.Hit, countOnly bool) bool {
+	if countOnly {
 		return false
 	}
 	if hit.Transport.Protocol == "gemini" || hit.Transport.Protocol == "vertex" {

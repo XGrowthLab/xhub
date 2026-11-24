@@ -349,9 +349,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._response(400, b'{"error":{"code":400,"message":"Invalid request","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","input":"private-echo"}]}]}}', "application/json")
             elif fixture_path.query == "fixture=incomplete":
                 self._sse([{"type": "response.incomplete", "response": {"id": "resp_e2e_audit", "status": "incomplete", "incomplete_details": {"reason": "content_filter"}}}])
-            elif fixture_path.query == "fixture=disconnect":
-                self.close_connection = True
-                self.connection.shutdown(socket.SHUT_WR)
+            elif fixture_path.query == "fixture=embedded-error":
+                self._json({"error": {"code": "embedded_failure", "message": "Generation failed"}})
             else:
                 self._response(200, b"", "application/json")
             return
