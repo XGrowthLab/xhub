@@ -95,6 +95,12 @@ func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID 
 	if err == nil {
 		return pending, true
 	}
+	// 在途交付本就拥有槽位；其待结账查询失败仍按原有预算恢复错误反馈给客户端。
+	if errors.Is(err, usagespool.ErrBacklogRead) {
+		util.Error("billing admission pending stage=spool_status cause=%s", billingPendingCause(err))
+		util.WriteTypedError(w, r.URL.Path, http.StatusServiceUnavailable, "billing_storage_pending", "pending token charges must settle before another request")
+		return 0, false
+	}
 	util.Error("usage spool admission denied call_id=%q: %v", callID, err)
 	w.Header().Set("X-XHub-Usage-Persistence", "unavailable")
 	util.WriteTypedError(w, r.URL.Path, http.StatusServiceUnavailable, "billing_storage_unavailable", "billing storage is unavailable; retry after recovery")

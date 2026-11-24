@@ -76,7 +76,8 @@ func TestUsageSpoolAdmissionFailure(t *testing.T) {
 // TestUsageSpoolAdmissionBacklog 通过网关准入入口预留真实临时磁盘，验证带回旧账数量、满队列的 503 和结清后的再次放行。
 // 所有账单使用合成请求 ID，不访问供应商；测试结束后关闭队列并删除整个私有目录。
 func TestUsageSpoolAdmissionBacklog(t *testing.T) {
-	spool, err := usagespool.Open(usagespool.Config{Dir: filepath.Join(t.TempDir(), "spool"), MaxEntries: 2})
+	dir := filepath.Join(t.TempDir(), "spool")
+	spool, err := usagespool.Open(usagespool.Config{Dir: dir, MaxEntries: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +100,25 @@ func TestUsageSpoolAdmissionBacklog(t *testing.T) {
 	}
 	if n, ok := server.admitUsageSpool(httptest.NewRecorder(), request, "resumed"); !ok || n != 0 {
 		t.Fatalf("已结清的旧账不应再次阻塞准入: admitted=%v pending=%d", ok, n)
+	}
+	// 已占用的同步交付槽仍然存在；如果其待结目录读失败，保持客户端原本能据以重试的 pending 错误。
+	spool.Release("first")
+	marker, err := iam.UnconfirmedDelivery(iam.UsageRecord{RequestID: "resumed", TS: time.Now(),
+		Status: "success", HTTPStatus: 200, DeliveryPending: true, DeliverySpoolOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.DeliveryUnconfirmed = true
+	if err := spool.BeginDelivery(marker); err != nil {
+		t.Fatalf("创建在途交付标记失败: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "quarantine")); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	if _, ok := server.admitUsageSpool(w, request, "resumed"); ok || w.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(w.Body.String(), "billing_storage_pending") || w.Header().Get("X-XHub-Usage-Persistence") != "" {
+		t.Fatalf("已持有交付槽的读取故障改变了客户端错误契约: admitted=%v status=%d", ok, w.Code)
 	}
 }
 

@@ -37,6 +37,8 @@ const (
 )
 
 var (
+	// ErrBacklogRead 表示在途交付已持有自己的槽，但预算准入读取待结账单失败，供网关保留原有拒绝类别。
+	ErrBacklogRead = errors.New("usage spool backlog unreadable")
 	ErrUnavailable = errors.New("usage spool unavailable")
 	ErrFull        = errors.New("usage spool capacity exhausted")
 	ErrCorrupt     = errors.New("usage spool has quarantined evidence")
@@ -540,8 +542,10 @@ func (s *Spool) reserve(callID string, renew bool, probe func(string) error, pen
 			if !renew || s.activeDelivery[basename(callID)] {
 				if pending != nil {
 					state, err := s.statusLocked()
+					if err != nil {
+						return errors.Join(ErrBacklogRead, err)
+					}
 					*pending = state.Replayable
-					return err
 				}
 				return nil
 			}
