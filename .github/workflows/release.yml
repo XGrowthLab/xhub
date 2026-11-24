@@ -180,6 +180,14 @@ jobs:
         run: |
           install -D "$(command -v node)" bin/node-linux-amd64
           bash deploy/build.sh
+          # 模拟同一提交的非发布镜像。临时容器只用于写构建标签，随后销毁。
+          for service in gateway console; do
+            image="xhub-$service"
+            holder=$(docker create "$image")
+            docker commit --change 'LABEL org.opencontainers.image.version=main' \
+              --change "LABEL org.opencontainers.image.revision=$GITHUB_SHA" "$holder" "$image"
+            docker rm "$holder"
+          done
         env:
           XHUB_GATEWAY_ORIGIN: http://gateway:4000
       - name: Install and check version updates
@@ -198,7 +206,7 @@ jobs:
           before=$(sudo docker compose -f /opt/xhub/docker-compose.yml ps -q)
           sudo python3 -B deploy/install.py
           test "$before" = "$(sudo docker compose -f /opt/xhub/docker-compose.yml ps -q)"
-          node e2e/default_version_update_browser.cjs http://127.0.0.1:3000 http://127.0.0.1:4000 |
+          E2E_BUILD_REVISION="$GITHUB_SHA" node e2e/default_version_update_browser.cjs http://127.0.0.1:3000 http://127.0.0.1:4000 |
             tee .e2e/default-install/browser-result.json
       - uses: actions/upload-artifact@v4
         if: always()

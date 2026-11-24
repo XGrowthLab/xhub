@@ -21,9 +21,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
 
 if __package__:
-    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, SERVICES, validate_manifest, version_key
+    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
 else:
-    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, SERVICES, validate_manifest, version_key
+    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
 
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
 CHANNELS = {"stable", "beta"}
@@ -35,6 +35,11 @@ LOG = logging.getLogger("xhub-updater")
 
 class UntrackedRelease(ValueError):
     """运行镜像不是可回退的发布版本。允许读取发布，但不能以此为起点切换。"""
+
+    def __init__(self, message, build=None):
+        """保存原因和可选的构建标识供状态展示。构建信息不能充当发布清单或回退目标。"""
+        super().__init__(message)
+        self.build = build
 
 
 def valid_health_url(url):
@@ -166,8 +171,8 @@ class Compose:
         return images[0]
 
     def current(self):
-        """检查两个运行容器是否属于同一发布并有可恢复摘要；否则需人工完成首装。"""
-        releases, digests = {}, {}
+        """返回可回退的运行发布。非发布镜像只向状态调用方报告匹配的构建信息。"""
+        running = {}
         for service in SERVICES:
             ident = self.compose("ps", "-q", service)
             if not re.fullmatch(r"[0-9a-f]{12,64}", ident):
@@ -176,22 +181,39 @@ class Compose:
             if not container["State"]["Running"]:
                 raise ValueError("service not running")
             image = self.image(container["Image"])
-            releases[service] = self.release_labels(image["Config"].get("Labels"))
-            prefix = f"{self.namespace}-{service}@sha256:"
-            match = [x for x in image.get("RepoDigests") or [] if x.startswith(prefix)]
-            # Compose 已固定摘要时优先采用其明确引用；标签部署必须有唯一能回退的摘要。
-            reference = container["Config"]["Image"]
-            if reference in match:
-                digests[service] = reference
-            elif len(match) == 1:
-                digests[service] = match[0]
-            else:
-                raise UntrackedRelease("missing or ambiguous rollback image")
+            running[service] = (container["Config"]["Image"], image)
+        labels = {service: image["Config"].get("Labels") for service, (_, image) in running.items()}
+        releases, digests = {}, {}
+        try:
+            for service, (reference, image) in running.items():
+                releases[service] = self.release_labels(labels[service])
+                prefix = f"{self.namespace}-{service}@sha256:"
+                match = [x for x in image.get("RepoDigests") or [] if x.startswith(prefix)]
+                # Compose 已固定摘要时优先采用其明确引用；标签部署必须有唯一能回退的摘要。
+                if reference in match:
+                    digests[service] = reference
+                elif len(match) == 1:
+                    digests[service] = match[0]
+                else:
+                    raise UntrackedRelease("missing or ambiguous rollback image")
+        except UntrackedRelease as error:
+            raise UntrackedRelease(str(error), self.build_identity(labels)) from error
         version, revision, compatibility = releases["gateway"]
         if releases["console"] != (version, revision, compatibility):
             raise ValueError("application images do not belong to the same release")
         return validate_manifest({"schema": 1, "version": version, "revision": revision,
                                   "database_compatibility": compatibility, "images": digests}, self.namespace)
+
+    @staticmethod
+    def build_identity(labels):
+        """从两个运行镜像的标签提取一致的 Git 提交。缺失、无效或混合部署时返回 None。"""
+        if any(not isinstance(labels[service], dict) for service in SERVICES):
+            return None
+        revision, console_revision = (labels[service].get("org.opencontainers.image.revision") for service in SERVICES)
+        if not isinstance(revision, str) or revision != console_revision or not REVISION.fullmatch(revision):
+            return None
+        return {"revision": revision, "main": all(labels[service].get("org.opencontainers.image.version") == "main"
+                                                 for service in SERVICES)}
 
     @staticmethod
     def release_labels(labels):
@@ -279,18 +301,21 @@ class Agent:
             self.state.update(stage="failed", error="recovery_required")
             return
         self.recover()
+        build = None
         try:
             current = compose.current()
-        except UntrackedRelease:
+        except UntrackedRelease as error:
             current = None
+            build = error.build
         except Exception:
             LOG.exception("Unable to inspect the running release")
             current = None
         try:
-            self.record(current=current)
+            self.record(current=current, current_build=build)
         except Exception:
             LOG.exception("Unable to persist the running release")
             self.state["current"] = current
+            self.state["current_build"] = build
 
     def record(self, **fields):
         """原子更新对象和磁盘；写盘成功前不发布状态，供工作线程与 IPC 共用。"""
@@ -381,7 +406,8 @@ class Agent:
                                      current["database_compatibility"] == manifest["database_compatibility"])}
             return {"enabled": True, "channel": "beta" if self.releases.beta else "stable",
                     "channel_switch_enabled": self.channel_switch, "stage": state["stage"],
-                    "current": current["version"] if current else None, "candidate": candidate,
+                    "current": current["version"] if current else None,
+                    "current_build": None if current else state.get("current_build"), "candidate": candidate,
                     "previous": previous["version"] if previous else None, "error": state.get("error"),
                     "recovery_required": state.get("error") == "recovery_required",
                     "checked": checked_at, "updated_at": state["updated_at"]}
@@ -441,15 +467,19 @@ class Agent:
     def execute(self, action, expected, target):
         """后台检查发布或执行切换。失败只暴露稳定错误码，磁盘日志保留操作身份。"""
         try:
+            build = None
             try:
                 current = self.compose.current()
-            except UntrackedRelease:
+            except UntrackedRelease as error:
                 # 非发布镜像也能查阅更新信息，切换仍需要经过可回退的发布验证。
                 if action != "check":
                     raise
                 current = None
+                build = error.build
             if action == "check":
-                self.record(current=current, checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
+                # 发布查询出错时也保留这次从容器读到的实际构建。
+                self.record(current=current, current_build=build)
+                self.record(checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
                 return
             if current != expected or target["database_compatibility"] != current["database_compatibility"]:
                 self.record(stage="failed", error="invalid_target")

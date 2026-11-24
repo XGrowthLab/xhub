@@ -106,10 +106,10 @@ func TestUnixBridge(t *testing.T) {
 	agent := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/status":
-			_, _ = io.WriteString(w, "{\"enabled\":true,\"candidate\":{\"version\":\"v0.1.0-beta.2\",\"revision\":\""+strings.Repeat("1", 40)+"\",\"secret\":\"hidden\"}}")
+			_, _ = io.WriteString(w, "{\"enabled\":true,\"current_build\":{\"revision\":\""+strings.Repeat("2", 40)+"\",\"main\":true,\"path\":\"hidden\"},\"candidate\":{\"version\":\"v0.1.0-beta.2\",\"revision\":\""+strings.Repeat("1", 40)+"\",\"secret\":\"hidden\"}}")
 		case "/check":
 			w.WriteHeader(202)
-			_, _ = io.WriteString(w, "{\"enabled\":true,\"stage\":\"checking\"}")
+			_, _ = io.WriteString(w, "{\"enabled\":true,\"stage\":\"checking\",\"current_build\":{\"revision\":\"unsafe\",\"main\":true}}")
 		case "/channel":
 			var request map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -167,6 +167,12 @@ func TestUnixBridge(t *testing.T) {
 		mux.ServeHTTP(w, httptest.NewRequest(tc.method, Path+tc.suffix, strings.NewReader(tc.body)))
 		if w.Code != tc.code || strings.Contains(w.Body.String(), "hidden") {
 			t.Fatalf("%s: %d %s", tc.suffix, w.Code, w.Body.String())
+		}
+		if tc.method == "GET" && !strings.Contains(w.Body.String(), `"current_build":{"revision":"`+strings.Repeat("2", 40)+`","main":true}`) {
+			t.Fatalf("missing valid running build: %s", w.Body.String())
+		}
+		if tc.suffix == "/check" && strings.Contains(w.Body.String(), "current_build") {
+			t.Fatalf("invalid build reached the browser: %s", w.Body.String())
 		}
 	}
 	select {

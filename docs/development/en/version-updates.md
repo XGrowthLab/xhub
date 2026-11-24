@@ -2,6 +2,8 @@
 
 A platform administrator can open **Administrator settings → Version updates** to check for releases. Standard installations let administrators choose the stable or beta channel on the same page. Check again after switching to see releases for that channel. After confirmation, a separate host service verifies and switches the gateway and console images. Reopen the page to resume monitoring.
 
+**Current version** shows the running release when it has a verified rollback image pair. Images with a shared build revision show that commit, for example `main · e107582`. You can check the latest release in the channel and install a matching release pair on the host before using in-console updates.
+
 ## Stable and beta releases
 
 Tag a reviewed commit that has passed checks. Stable tags use three components, such as v0.1.0. The first test release is v0.1.0-beta.1, with beta.2 and later tags available for follow-up testing.

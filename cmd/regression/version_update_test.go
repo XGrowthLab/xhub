@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -27,9 +28,14 @@ func TestVersionUpdateAdminBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := make(chan map[string]string, 1)
+	var sourceBuild atomic.Bool
 	agent := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/status":
+			if sourceBuild.Load() {
+				_, _ = w.Write([]byte(`{"enabled":true,"current_build":{"revision":"` + strings.Repeat("1", 40) + `","main":true,"path":"secret"}}`))
+				return
+			}
 			_, _ = w.Write([]byte("{\"enabled\":true,\"stage\":\"idle\",\"current\":\"v0.1.0-beta.1\",\"host_path\":\"secret\"}"))
 		case "/apply":
 			var target map[string]string
@@ -79,6 +85,16 @@ func TestVersionUpdateAdminBoundary(t *testing.T) {
 	r := h.do("GET", versionUpdatePath, admin, nil)
 	if r.status != 200 || r.json()["current"] != "v0.1.0-beta.1" || r.json()["host_path"] != nil {
 		t.Fatalf("unexpected version state: %+v", r)
+	}
+	sourceBuild.Store(true)
+	buildState := h.do("GET", versionUpdatePath, admin, nil)
+	build, _ := buildState.json()["current_build"].(map[string]any)
+	if buildState.status != 200 || buildState.json()["current"] != nil ||
+		build["revision"] != strings.Repeat("1", 40) || build["main"] != true || len(build) != 2 {
+		t.Fatalf("unexpected running build: %+v", buildState)
+	}
+	if r := h.do("GET", versionUpdatePath, member, nil); r.status != 403 {
+		t.Fatalf("member version status got %d, want 403", r.status)
 	}
 	invalid := h.do("POST", versionUpdatePath+"/apply", admin, map[string]any{"image": "external"})
 	if invalid.status != 400 {

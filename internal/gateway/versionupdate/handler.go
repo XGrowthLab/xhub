@@ -35,19 +35,26 @@ type candidate struct {
 	Compatible bool   `json:"compatible"`
 }
 
+// runningBuild 记录两份运行镜像共有的提交，仅供展示，不是可回退的发布。
+type runningBuild struct {
+	Revision string `json:"revision"`
+	Main     bool   `json:"main,omitempty"`
+}
+
 // statusReply 只公开控制台所需字段，从不代理进程路径、配置或原始错误。
 type statusReply struct {
-	Enabled              bool       `json:"enabled"`
-	Channel              string     `json:"channel,omitempty"`
-	ChannelSwitchEnabled bool       `json:"channel_switch_enabled,omitempty"`
-	Stage                string     `json:"stage,omitempty"`
-	Current              *string    `json:"current,omitempty"`
-	Candidate            *candidate `json:"candidate,omitempty"`
-	Previous             *string    `json:"previous,omitempty"`
-	Error                string     `json:"error,omitempty"`
-	RecoveryRequired     bool       `json:"recovery_required,omitempty"`
-	Checked              int64      `json:"checked,omitempty"`
-	UpdatedAt            int64      `json:"updated_at,omitempty"`
+	Enabled              bool          `json:"enabled"`
+	Channel              string        `json:"channel,omitempty"`
+	ChannelSwitchEnabled bool          `json:"channel_switch_enabled,omitempty"`
+	Stage                string        `json:"stage,omitempty"`
+	Current              *string       `json:"current,omitempty"`
+	CurrentBuild         *runningBuild `json:"current_build,omitempty"`
+	Candidate            *candidate    `json:"candidate,omitempty"`
+	Previous             *string       `json:"previous,omitempty"`
+	Error                string        `json:"error,omitempty"`
+	RecoveryRequired     bool          `json:"recovery_required,omitempty"`
+	Checked              int64         `json:"checked,omitempty"`
+	UpdatedAt            int64         `json:"updated_at,omitempty"`
 }
 
 // targetRequest 是浏览器确认过的目标。操作身份从会话取得。
@@ -153,6 +160,9 @@ func handler(guard AdminGuard, client *http.Client, operation string) http.Handl
 			(!validVersion(release.Version) || !revisionPattern.MatchString(release.Revision)) {
 			util.WriteError(w, 502, "update_agent_invalid_response", "Invalid version update service response")
 			return
+		}
+		if build := state.CurrentBuild; build != nil && (state.Current != nil || !revisionPattern.MatchString(build.Revision)) {
+			state.CurrentBuild = nil
 		}
 		util.WriteJSON(w, response.StatusCode, state)
 	}
