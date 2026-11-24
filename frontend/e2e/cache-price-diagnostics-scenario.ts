@@ -56,14 +56,26 @@ export function registerCachePriceDiagnostics(locale: "en" | "zh-CN") {
       // 通过真实页面创建缺价模型，之后编辑补价；不依赖固定价格目录。
       await stableGoto(page, "/models-and-endpoints");
       await page.getByRole("button", { name: tr("pages.models.add"), exact: true }).click();
+      const priceSource = page.getByLabel(tr("providerGuideUI.priceSource"), { exact: true });
+      const advanced = page.getByText(tr("providerGuideUI.advancedProtocol"), { exact: true });
+      await expect(page.getByText(tr("providerGuideUI.pricingRequiresModel"), { exact: true })).toBeVisible();
+      await expect(priceSource).toBeDisabled();
+      await expect(advanced).toHaveCount(0);
       await page.getByLabel(tr("providerGuideUI.providerLabel"), { exact: true }).selectOption(credential);
+      await expect(priceSource).toBeDisabled();
       const upstreamModel = page.getByRole("combobox", { name: tr("providerGuideUI.upstreamLabel"), exact: true });
       await upstreamModel.fill("cache-price-model");
       await upstreamModel.press("Escape");
       await page.getByLabel(tr("providerGuideUI.publicName"), { exact: true }).fill(model);
       await page.getByRole("combobox", { name: tr("Upstream protocol"), exact: true }).click();
       await page.getByRole("option", { name: "OpenAI · Chat Completions", exact: true }).click();
-      await page.getByLabel(tr("providerGuideUI.priceSource"), { exact: true }).selectOption("manual");
+      await expect(advanced).toBeVisible();
+      await expect(page.getByLabel(tr("providerGuideUI.searchSupport"), { exact: true })).toBeHidden();
+      await advanced.click();
+      await expect(page.getByLabel(tr("providerGuideUI.searchSupport"), { exact: true })).toBeVisible();
+      await expect(page.getByLabel(tr("providerGuideUI.messagesReasoningMode"), { exact: true })).toHaveCount(0);
+      await expect(priceSource).toBeEnabled();
+      await priceSource.selectOption("manual");
       await page.locator("#editor-input_cost_per_token").fill("1");
       await page.locator("#editor-output_cost_per_token").fill("2");
       const read = page.locator("#editor-cache_read_input_token_cost"),

@@ -1,33 +1,34 @@
-/** 目的：独立验证 /model_hub 的页面与读接口；前置隔离网关与管理员，异常独立报告；上下文和 schema 由运行器清理。 */
-import { discoverPages } from "../../routes";
-import { registerPageScenario } from "../../page-scenario";
-registerPageScenario(discoverPages().find(page => page.route === '/model_hub')!, '/model_hub');
+import { expect, test } from "@playwright/test";
+import { GATEWAY, loginAdmin, sessionBearer } from "../../helpers";
 
-import { test, expect } from "@playwright/test";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
-
-// 通过真实配置接口保存自定义链接名，验证切换语言后名称不改写、API 构建版本不显示在公开页面；finally 恢复原配置，隔离数据库由运行器清理。
-test("public hub preserves configured names across languages", async ({page}) => {
+/** 管理员通过保留接口编辑公开模型目录链接；隔离网关回读原文并维护管理权限，最后恢复原配置。 */
+test("model catalog configured links preserve names through gateway aliases", async ({ page, request }) => {
   await loginAdmin(page);
-  const headers = {Authorization: "Bearer " + await sessionBearer(page)};
+  const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
   const info = await page.request.get(GATEWAY + "/public/model_hub/info");
   expect(info.status()).toBe(200);
   const old = await info.json();
   expect(typeof old.litellm_version).toBe("string");
   expect(old.litellm_version).not.toBe("");
+
   const name = "LiteLLM 模型 anthropic/claude-opus-5.5";
+  const usefulLinks = { [name]: "https://example.com/guide" };
+  const data = { useful_links: usefulLinks };
+  const denied = await request.post("/model_hub/update_useful_links", { data });
+  expect(denied.status()).toBe(401);
   try {
-    const saved = await page.request.post(GATEWAY + "/model_hub/update_useful_links", {headers,data:{useful_links:{[name]:"https://example.com/guide"}}});
-    expect(saved.status()).toBe(200);
-    await stableGoto(page,"/model_hub");
-    await expect(page.getByRole("button",{name,exact:true})).toBeVisible();
-    await expect(page.getByText(`v${old.litellm_version}`, { exact: true })).toHaveCount(0);
-    await stableGoto(page,"/api-keys");
-    await page.getByRole("button",{name:"English",exact:true}).click();
-    await stableGoto(page,"/model_hub");
-    await expect(page.getByRole("button",{name,exact:true})).toBeVisible();
-    await expect(page.getByText(`v${old.litellm_version}`, { exact: true })).toHaveCount(0);
+    const updated = await page.request.post("/ui/model_hub/update_useful_links", { headers, data });
+    expect(updated.status(), await updated.text()).toBe(200);
+    for (const path of ["/public/model_hub/info", "/gw/public/model_hub/info"]) {
+      const read = await page.request.get(path);
+      expect(read.status(), await read.text()).toBe(200);
+      expect((await read.json()).useful_links).toEqual(usefulLinks);
+    }
   } finally {
-    expect((await page.request.post(GATEWAY + "/model_hub/update_useful_links",{headers,data:{useful_links:old.useful_links}})).status()).toBe(200);
+    const restore = await page.request.post(GATEWAY + "/model_hub/update_useful_links", {
+      headers,
+      data: { useful_links: old.useful_links },
+    });
+    expect(restore.status(), await restore.text()).toBe(200);
   }
 });

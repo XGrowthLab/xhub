@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
@@ -29,21 +29,38 @@ const bindings: ModelEndpoint[] = [
 ];
 /** 双语组件验证简短标签、模式、路径、真实选择及禁用边界；DOM 自动清理，不访问后台。 */
 describe.each(["zh-CN", "en"] as const)("EndpointPicker %s", (locale) => {
+  /** 前置同时支持两种协议模式，切换后只列出该模式的路径，保留可读全路径；组件测试不使用网络。 */
   it("keeps paths and protocol selection unambiguous", async () => {
     const t = (key: string) => translate(locale, key);
     const change = vi.fn();
     const user = userEvent.setup();
-    render(
+    const view = render(
       <I18nProvider initialLocale={locale}>
         <EndpointPicker endpoints={bindings} value={bindings[1].path} onChange={change} />
       </I18nProvider>,
     );
     expect(screen.getByLabelText(t("protocolProbe.path"))).toHaveTextContent(bindings[1].path);
-    await user.click(screen.getByRole("button", { name: t("protocolProbe.standard"), exact: true }));
+    const picker = screen.getByRole("combobox");
+    await user.click(picker);
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveTextContent(bindings[1].path);
+    expect(screen.getByText(bindings[1].path, { selector: "span" })).toHaveClass("break-all");
+    await user.keyboard("{Escape}");
+    const standard = screen.getByRole("button", { name: t("protocolProbe.standard"), exact: true });
+    await user.click(standard);
     expect(change).toHaveBeenLastCalledWith(bindings[0].path);
-    await user.click(screen.getByRole("combobox"));
-    await user.click(screen.getByRole("option", { name: /^OpenAI Chat\s*\/v1\/chat\/completions$/ }));
+    view.rerender(
+      <I18nProvider initialLocale={locale}>
+        <EndpointPicker endpoints={bindings} value={bindings[0].path} onChange={change} />
+      </I18nProvider>,
+    );
+    expect(standard).toHaveAttribute("aria-pressed", "true");
+    await user.click(picker);
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveTextContent(bindings[0].path);
+    expect(screen.getByRole("option")).not.toHaveTextContent("/bypass/");
   });
+  /** 前置仅有标准入口，验证透传禁用，且不创建额外路径；渲染由测试框架回收。 */
   it("does not invent a missing bypass endpoint", () => {
     const t = (key: string) => translate(locale, key);
     render(

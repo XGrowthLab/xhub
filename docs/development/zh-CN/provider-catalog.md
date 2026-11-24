@@ -137,7 +137,7 @@ import (
 | 专用认证表单 | `internal/provider/registry/suppliers.go` + `internal/catalog/credential_providers.go` |
 | 专用型号默认值 | `internal/provider/registry/models.go` 的 `RegisterModel` |
 | 用量与价格 | `internal/provider/measurement` + `internal/catalog` |
-| 参数编辑与结果展示 | `frontend/src/components/chat`，同步 en/zh 文案 |
+| 参数编辑与结果展示 | `frontend/src/app/(dashboard)/playground/components/chat_ui`，同步 en/zh 文案 |
 
 ### 异步协议：参考现有任务实现
 

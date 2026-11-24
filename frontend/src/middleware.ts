@@ -2,11 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const GATEWAY = process.env.XHUB_GATEWAY_ORIGIN || "http://127.0.0.1:4000";
 
-/** Next App Router pages (LiteLLM dashboard). Everything else is the proxy API. */
+/** 控制台可读取的 Next 页面。未匹配的请求由网关处理。 */
 const APP_PAGES = new Set([
   "/",
   "/login",
-  "/connect",
   "/api-keys",
   "/playground",
   "/models-and-endpoints",
@@ -29,33 +28,42 @@ const APP_PAGES = new Set([
   "/route-templates",
   "/router-settings",
   "/admin-panel",
+  "/search-tools",
+  "/caching",
+  "/prompts",
+  "/mcp/oauth/callback",
+]);
+
+// 仅退役旧控制台地址，裸路径的同名网关 API 仍按原契约响应。
+const RETIRED_UI_PAGES = new Set([
+  "/agents",
+  "/workflows",
+  "/memory",
+  "/tool-policies",
+  "/budgets",
+  "/policies",
+  "/vector-stores",
+  "/transform-request",
+  "/ui-theme",
+  "/model_hub",
+]);
+
+// 从前有根地址和 /ui 别名的界面；只拦截这几个精确的读路径。
+const RETIRED_STANDALONE_PAGES = new Set([
   "/chat",
   "/chat/api-keys",
   "/chat/credentials",
   "/chat/integrations",
   "/chat/logs",
   "/chat/usage",
-  "/model_hub",
+  "/connect",
   "/model_hub_table",
   "/model-hub-table",
-  "/agents",
-  "/workflows",
-  "/memory",
-  "/policies",
-  "/search-tools",
-  "/vector-stores",
-  "/tool-policies",
-  "/budgets",
-  "/caching",
-  "/prompts",
-  "/transform-request",
+  "/retired",
   "/tag-management",
-  "/ui-theme",
-  "/old-usage",
-  "/api-reference",
-  "/mcp/oauth/callback",
 ]);
 
+/** 清理路径末尾斜杠；参数为 URL 路径，返回用于中间件匹配的路径，空路径归一到根目录。 */
 function stripSlash(path: string): string {
   if (path.length > 1 && path.endsWith("/")) {
     return path.slice(0, -1);
@@ -63,22 +71,14 @@ function stripSlash(path: string): string {
   return path || "/";
 }
 
-// 页面路径上的写请求是网关 API。GET /guardrails 渲染控制台，POST /guardrails 创建护栏。
-export function appPageWritePath(method: string, pathname: string): string | null {
-  if (method === "GET" || method === "HEAD") return null;
-  const path = stripSlash(pathname) || "/";
-  return APP_PAGES.has(path) ? path : null;
+/** 去掉控制台别名前缀；参数为 URL 路径，返回后端或 App Router 识别的路径，保留完整子路径。 */
+function uiAliasPath(pathname: string): string {
+  return stripSlash(pathname === "/ui" || pathname.startsWith("/ui/") ? pathname.slice(3) : pathname);
 }
 
 /** 解析 Next 页面路径；参数为请求路径，返回页面路径或 null。供中间件分流调用，支持 /ui 别名及文档子目录，未知非文档路径交网关，无副作用。 */
 export function dashboardAppPath(pathname: string): string | null {
-  let path = pathname;
-  if (path === "/ui" || path === "/ui/" || path.startsWith("/ui/")) {
-    const rest = path === "/ui" || path === "/ui/" ? "/" : path.slice(3);
-    path = stripSlash(rest) || "/";
-  } else {
-    path = stripSlash(path) || "/";
-  }
+  const path = uiAliasPath(pathname);
   // /docs 专用目录交给 Next，未知文章由页面返回 404，不能误转发到数据面。
   return path === "/docs" || path.startsWith("/docs/") || APP_PAGES.has(path) ? path : null;
 }
@@ -95,8 +95,17 @@ export function brandIconReadPath(method: string, pathname: string): string | nu
   return pathname === "/icon.svg" || pathname === "/ui/icon.svg" ? "/icon.svg" : null;
 }
 
-/** 按请求方法和路径分发控制台与网关；req 为 Next 请求，返回放行或保留查询参数的重写响应。
- * 品牌图标读取使用精确路由，其余请求沿用既有页面和 API 分流，不更改鉴权或正文。 */
+/** 在固定的网关地址上替换路径和查询；返回仅供中间件重写的 URL，无网络请求或数据写入。 */
+function gatewayURL(pathname: string, search: string): URL {
+  const url = new URL(GATEWAY);
+  url.pathname = pathname;
+  url.search = search;
+  url.hash = "";
+  return url;
+}
+
+/** 分发 Next 请求并保留查询参数和请求正文；返回页面、兼容跳转或网关重写。
+ * 退役页面读请求返回不可缓存的 410；/gw 和写入保持交给网关，避免拦截同名 API。 */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
@@ -116,33 +125,33 @@ export function middleware(req: NextRequest) {
   }
 
   if (pathname === "/gw" || pathname.startsWith("/gw/")) {
-    const rest = pathname === "/gw" || pathname === "/gw/" ? "/" : pathname.slice(3);
-    return NextResponse.rewrite(new URL((stripSlash(rest) || "/") + search, GATEWAY));
+    return NextResponse.rewrite(gatewayURL(stripSlash(pathname.slice(3)), search));
   }
 
-  // LiteLLM proxy mounts the static dashboard at /ui (see uiHref in production).
-  if (pathname === "/ui" || pathname === "/ui/" || pathname.startsWith("/ui/")) {
-    const appPath = dashboardAppPath(pathname);
-    if (!appPath) {
-      const rest = pathname === "/ui" || pathname === "/ui/" ? "/" : pathname.slice(3);
-      return NextResponse.rewrite(new URL((stripSlash(rest) || "/") + search, GATEWAY));
+  const path = uiAliasPath(pathname);
+  const isUIAlias = pathname === "/ui" || pathname.startsWith("/ui/");
+  if (req.method === "GET" || req.method === "HEAD") {
+    if (RETIRED_STANDALONE_PAGES.has(path) || (isUIAlias && RETIRED_UI_PAGES.has(path))) {
+      return new NextResponse(null, { status: 410, headers: { "Cache-Control": "no-store" } });
     }
-    const url = req.nextUrl.clone();
-    url.pathname = appPath;
-    return NextResponse.rewrite(url);
+
+    // 从历史地址直达当前用量或正式 API 文档，移除中间的说明页。
+    if (path === "/api-reference" || path === "/old-usage") {
+      const url = req.nextUrl.clone();
+      url.pathname = path === "/api-reference" ? "/docs/api/models" : "/ui/usage";
+      return NextResponse.redirect(url);
+    }
+
+    const appPath = dashboardAppPath(pathname);
+    if (appPath) {
+      if (!isUIAlias) return NextResponse.next();
+      const url = req.nextUrl.clone();
+      url.pathname = appPath;
+      return NextResponse.rewrite(url);
+    }
   }
 
-  const writePath = appPageWritePath(req.method, pathname);
-  if (writePath) {
-    return NextResponse.rewrite(new URL(writePath + search, GATEWAY));
-  }
-
-  if (dashboardAppPath(pathname)) {
-    return NextResponse.next();
-  }
-
-  const apiPath = stripSlash(pathname) || "/";
-  return NextResponse.rewrite(new URL(apiPath + search, GATEWAY));
+  return NextResponse.rewrite(gatewayURL(path, search));
 }
 
 export const config = {

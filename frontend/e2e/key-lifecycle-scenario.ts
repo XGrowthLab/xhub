@@ -45,7 +45,9 @@ export function registerKeyLifecycleScenario(locale: "en" | "zh-CN") {
       expect(configured.status(), await configured.text()).toBe(200);
       modelID = (await configured.json()).model_info.id;
       await page.getByTestId("create-key-button").click();
-      await page.getByLabel(tr("Key Name")).fill(alias);
+      const keyName = page.getByRole("dialog").getByRole("textbox", { name: tr("Key Name"), exact: true });
+      await keyName.fill(alias);
+      await expect(keyName).toHaveValue(alias);
       await expect(page.getByText(tr("keyEditor.rotationUnsupported"))).toBeVisible();
       await expect(page.getByRole("switch")).toHaveCount(0);
       await page.getByRole("combobox", { name: tr("Key Type"), exact: true }).click();

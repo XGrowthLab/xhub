@@ -60,10 +60,6 @@ vi.mock("./GuardrailTestPlayground", async () => {
   return { __esModule: true, default: MockGuardrailTestPlayground };
 });
 
-vi.mock("./TeamGuardrailsTab", () => ({
-  TeamGuardrailsTab: () => <div>Mock Team Guardrails Tab</div>,
-}));
-
 vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn((role: string) => role === "admin"),
 }));
@@ -149,11 +145,24 @@ describe("GuardrailsPanel", () => {
     expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
   });
 
-  it("should mount every tab panel up front so panel state survives tab switches", async () => {
+  /** 管理员仍能访问调试及已有管理入口；下线的审核不再挂载，组件卸载时释放模拟数据。 */
+  it("keeps the playground mounted without exposing the submitted tab", async () => {
     renderWithProviders(<GuardrailsPanel {...defaultProps} />);
 
     expect(await screen.findByLabelText("playground draft")).toBeInTheDocument();
-    expect(screen.getByText("Mock Team Guardrails Tab")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Submitted Guardrails" })).not.toBeInTheDocument();
+  });
+
+  /** 普通成员访问护栏只看到使用指南，无列表请求或管理控件；不执行数据写入。 */
+  it("shows the member help without granting management access", () => {
+    renderWithProviders(<GuardrailsPanel accessToken="user-token" userRole="user" />);
+    expect(screen.getByRole("heading", { name: "Guardrails are managed by your administrator" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Read the guardrails guide" })).toHaveAttribute(
+      "href",
+      "/docs/product/routing",
+    );
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(mockGetGuardrailsList).not.toHaveBeenCalled();
   });
 
   it("should keep test playground state when switching tabs away and back", async () => {

@@ -1,3 +1,4 @@
+import { translate } from "@/i18n/translate";
 import { describe, expect, it } from "vitest";
 import {
   counterLabel,
@@ -153,4 +154,15 @@ describe("pricingIssueUrl", () => {
 
     expect(url.searchParams.get("title")).toBe("[Feature]: add guardrail pricing to the cost map");
   });
+});
+
+/** 使用实际中文目录验证已知计数器和未定价说明，未知项目保留上游名称；纯格式化，无需清理。 */
+it("本地化计数器和未计入费用的用量", () => {
+  const zh: Parameters<typeof counterLabel>[1] = (key, vars) => translate("zh-CN", key, vars);
+  expect(counterLabel("contentPolicyUnits", zh)).toBe("内容策略");
+  expect(counterLabel("vendorCounter", zh)).toBe("Vendor Counter");
+  expect(unpricedSummary({ contentPolicyUnits: 8 }, zh)).toBe("8 个单位未定价");
+  expect(counterMathRow(counterOf("wordPolicyUnits", 2, 2, null), zh).note).toBe("无已知单价，未计入费用");
+  expect(counterMathRow(counterOf("wordPolicyUnits", 2, 1, 0.2), zh).note).toBe("已排除 1 个未定价单位");
+  expect(unitsMathRows({ wordPolicyUnits: 4 }, zh)[0].label).toBe("词语策略");
 });

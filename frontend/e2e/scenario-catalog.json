@@ -37,14 +37,14 @@
   {
     "id": "SC-006",
     "file": "e2e/scenarios/legacy/coverage/sc-006.test.ts",
-    "title": "fresh isolated user sees empty chat usage and logs",
+    "title": "fresh isolated user has empty usage and logs",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "SC-007",
-    "file": "e2e/scenarios/legacy/coverage/sc-007.test.ts",
-    "title": "model hubs require login then allow searching the public price catalog",
+    "file": "e2e/scenarios/pages/legacy-routes-model-hub.test.ts",
+    "title": "retired model hub pages preserve the public catalog API",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -65,7 +65,7 @@
   {
     "id": "SC-010",
     "file": "e2e/scenarios/legacy/coverage/sc-010.test.ts",
-    "title": "chat shows the fake upstream assistant text",
+    "title": "playground shows the fake upstream assistant text",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -177,7 +177,7 @@
   {
     "id": "SC-026",
     "file": "e2e/scenarios/legacy/guardrails/sc-026.test.ts",
-    "title": "花园展示创建入口、支持状态和提交护栏空态",
+    "title": "花园展示创建入口和支持状态，隐藏未开放的提交审核",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -672,13 +672,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-097",
-    "file": "e2e/scenarios/legacy/pages/sc-097.test.ts",
-    "title": "chat shell is not admin sidebar",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-098",
     "file": "e2e/scenarios/legacy/pagination/sc-098.test.ts",
     "title": "日志分页完整流程：会话合并后翻页",
@@ -903,20 +896,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-130",
-    "file": "e2e/scenarios/columns/budgets-create.test.ts",
-    "title": "通用页面 /budgets 创建",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-131",
-    "file": "e2e/scenarios/columns/budgets-update.test.ts",
-    "title": "通用页面 /budgets 更新",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-132",
     "file": "e2e/scenarios/columns/caching-flush.test.ts",
     "title": "cache management reflects runtime en",
@@ -927,13 +906,6 @@
     "id": "SC-133",
     "file": "e2e/scenarios/columns/caching-save.test.ts",
     "title": "cache management reflects runtime zh-CN",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-134",
-    "file": "e2e/scenarios/columns/policies-create.test.ts",
-    "title": "通用页面 /policies 创建",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -990,41 +962,6 @@
     "id": "SC-142",
     "file": "e2e/scenarios/columns/search-tools-update.test.ts",
     "title": "通用页面 /search-tools 更新",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-143",
-    "file": "e2e/scenarios/columns/tag-management-unsupported.test.ts",
-    "title": "通用页面 /tag-management 不支持",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-144",
-    "file": "e2e/scenarios/columns/transform-request-transform.test.ts",
-    "title": "通用页面 /transform-request 转换",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-145",
-    "file": "e2e/scenarios/columns/ui-theme-save.test.ts",
-    "title": "通用页面 /ui-theme 保存",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-146",
-    "file": "e2e/scenarios/columns/ui-theme-upload.test.ts",
-    "title": "通用页面 /ui-theme 上传",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-147",
-    "file": "e2e/scenarios/columns/vector-stores-create.test.ts",
-    "title": "通用页面 /vector-stores 创建",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1127,13 +1064,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-164",
-    "file": "e2e/scenarios/pages/api-reference.test.ts",
-    "title": "页面可用 /api-reference",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-165",
     "file": "e2e/scenarios/pages/audit-logs.test.ts",
     "title": "页面可用 /audit-logs",
@@ -1141,65 +1071,9 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-166",
-    "file": "e2e/scenarios/pages/budgets.test.ts",
-    "title": "页面可用 /budgets",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-167",
     "file": "e2e/scenarios/pages/caching.test.ts",
     "title": "页面可用 /caching",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-168",
-    "file": "e2e/scenarios/pages/chat-api-keys.test.ts",
-    "title": "页面可用 /chat/api-keys",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-169",
-    "file": "e2e/scenarios/pages/chat-credentials.test.ts",
-    "title": "页面可用 /chat/credentials",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-170",
-    "file": "e2e/scenarios/pages/chat-integrations.test.ts",
-    "title": "页面可用 /chat/integrations",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-171",
-    "file": "e2e/scenarios/pages/chat-logs.test.ts",
-    "title": "页面可用 /chat/logs",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-172",
-    "file": "e2e/scenarios/pages/chat-usage.test.ts",
-    "title": "页面可用 /chat/usage",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-173",
-    "file": "e2e/scenarios/pages/chat.test.ts",
-    "title": "页面可用 /chat",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-174",
-    "file": "e2e/scenarios/pages/connect.test.ts",
-    "title": "页面可用 /connect",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1267,16 +1141,9 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-184",
-    "file": "e2e/scenarios/pages/model-hub-table.test.ts",
-    "title": "页面可用 /model_hub_table",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-185",
     "file": "e2e/scenarios/pages/model-hub.test.ts",
-    "title": "页面可用 /model_hub",
+    "title": "model catalog configured links preserve names through gateway aliases",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1316,13 +1183,6 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-191",
-    "file": "e2e/scenarios/pages/old-usage.test.ts",
-    "title": "页面可用 /old-usage",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-192",
     "file": "e2e/scenarios/pages/organizations.test.ts",
     "title": "页面可用 /organizations",
@@ -1333,13 +1193,6 @@
     "id": "SC-193",
     "file": "e2e/scenarios/pages/playground.test.ts",
     "title": "页面可用 /playground",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-194",
-    "file": "e2e/scenarios/pages/policies.test.ts",
-    "title": "页面可用 /policies",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1386,30 +1239,9 @@
     "environment": "default offline"
   },
   {
-    "id": "SC-201",
-    "file": "e2e/scenarios/pages/tag-management.test.ts",
-    "title": "页面可用 /tag-management",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
     "id": "SC-202",
     "file": "e2e/scenarios/pages/teams.test.ts",
     "title": "页面可用 /teams",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-203",
-    "file": "e2e/scenarios/pages/transform-request.test.ts",
-    "title": "页面可用 /transform-request",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-204",
-    "file": "e2e/scenarios/pages/ui-theme.test.ts",
-    "title": "页面可用 /ui-theme",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -1424,13 +1256,6 @@
     "id": "SC-206",
     "file": "e2e/scenarios/pages/users.test.ts",
     "title": "页面可用 /users",
-    "kind": "implemented",
-    "environment": "default offline"
-  },
-  {
-    "id": "SC-207",
-    "file": "e2e/scenarios/pages/vector-stores.test.ts",
-    "title": "页面可用 /vector-stores",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3263,14 +3088,14 @@
   {
     "id": "REG-skill-hub-support-en",
     "file": "e2e/scenarios/regression/skill-hub-support-en.test.ts",
-    "title": "skill hub reports unsupported discovery and preserves chat en",
+    "title": "retired skill hub preserves playground inference en",
     "kind": "implemented",
     "environment": "default offline"
   },
   {
     "id": "REG-skill-hub-support-zh-CN",
     "file": "e2e/scenarios/regression/skill-hub-support-zh-CN.test.ts",
-    "title": "skill hub reports unsupported discovery and preserves chat zh-CN",
+    "title": "retired skill hub preserves playground inference zh-CN",
     "kind": "implemented",
     "environment": "default offline"
   },
@@ -3607,6 +3432,34 @@
     "id": "REG-console-layout-zh-CN",
     "file": "e2e/scenarios/regression/console-layout-zh-CN.test.ts",
     "title": "console layout and real user flows zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-zh-CN",
+    "file": "e2e/scenarios/pages/legacy-routes-zh-CN.test.ts",
+    "title": "旧工作区下线并保留文档和用量入口 zh-CN",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-en",
+    "file": "e2e/scenarios/pages/legacy-routes-en.test.ts",
+    "title": "旧工作区下线并保留文档和用量入口 en",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "LEGACY-ROUTES-gateway",
+    "file": "e2e/scenarios/pages/legacy-routes-gateway.test.ts",
+    "title": "旧界面退役后同名网关 API 保持可用",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
+    "id": "REG-guardrails-monitor-ui",
+    "file": "e2e/scenarios/regression/guardrails-monitor-ui.test.ts",
+    "title": "guardrail monitor shows real outcomes on desktop and mobile",
     "kind": "implemented",
     "environment": "default offline"
   }

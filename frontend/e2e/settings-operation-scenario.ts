@@ -1,7 +1,7 @@
 import { matchesGatewayResponse } from "./gateway-response.cjs";
 import { expect } from "@playwright/test";
-import { test } from "./policy-config-service-scenario";
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { createBoundaryPolicy, test } from "./policy-config-service-scenario";
+import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer } from "./helpers";
 import { translate, type Locale } from "../src/i18n/translate";
 
 // 独立列举公开接口范围；不从服务端实现表读取，避免同时漏掉相同入口。
@@ -24,8 +24,8 @@ const settingsRoutes = [
 ];
 
 /** 注册C3设置入口的双语真实浏览器流程；locale选择语言，返回注册结果，无生产凭据。
- * 页面创建策略并刷新读回，15个旧设置接口返回明确错误且不改变策略/上游，随后页面正常对话。
- * 不恢复未挂载的旧模拟器；接口错误由真实HTTP核验，策略由独立fixture删除，schema由运行器清理。
+ * 通过真实 API 建策略，验证旧设置接口返回明确错误并保留策略及上游状态，随后通过导航进入调试台进行真实对话。
+ * 策略由独立夹具删除，数据库 schema 由运行器清理。
  */
 export function registerSettingsOperationBoundary(locale: Locale) {
   test("unsupported settings preserve configuration and chat " + locale, async ({ page, policyResources: resources }) => {
@@ -33,19 +33,7 @@ export function registerSettingsOperationBoundary(locale: Locale) {
     await loginAdmin(page);
     await page.getByRole("button", { name: locale === "en" ? "English" : "中文", exact: true }).click();
     const headers = resources.headers = { Authorization: "Bearer " + await sessionBearer(page) };
-    // 侧栏读取旧设置失败后仍可使用现有导航；真实页面不得把空KV当作配置生效。
-    const sidebarSettings = page.waitForResponse(r => matchesGatewayResponse(r.url(), r.request().method(), "/get/ui_settings", "GET"));
-    await page.reload();
-    expect((await sidebarSettings).status()).toBe(501);
-    await stableGoto(page, "/policies");
-    // 当前生产策略页仅为配置表单，沿用现有名称；本批不替换页面或恢复旧模拟器。
-    await page.getByLabel("名称", { exact: true }).fill(resources.name);
-    const pending = page.waitForResponse(r => matchesGatewayResponse(r.url(), r.request().method(), "/policies", "POST"));
-    await page.getByRole("button", { name: "创建", exact: true }).click();
-    const created = await pending;
-    expect(created.status()).toBe(200);
-    const policy = await created.json();
-    const readPath = GATEWAY + "/policies/" + encodeURIComponent(policy.policy_id);
+    const { policyID, readPath } = await createBoundaryPolicy(page, resources);
     const original = await page.request.get(readPath, { headers });
     expect(original.status()).toBe(200);
     const saved = await original.json();
@@ -54,7 +42,7 @@ export function registerSettingsOperationBoundary(locale: Locale) {
     const calls = await before.json();
     for (const route of settingsRoutes) {
       const [method, template] = route.split(" ");
-      const path = template.replace(/\{[^}]+\}/g, policy.policy_id);
+      const path = template.replace(/\{[^}]+\}/g, policyID);
       const response = await page.request.fetch(GATEWAY + path, { method, headers, data: { private_input: "do-not-echo" } });
       expect(response.status(), route + ": " + await response.text()).toBe(501);
       expect(response.headers()["cache-control"]).toBe("no-store");
@@ -67,9 +55,8 @@ export function registerSettingsOperationBoundary(locale: Locale) {
     const preserved = await page.request.get(readPath, { headers });
     expect(preserved.status()).toBe(200);
     expect(await preserved.json()).toEqual(saved);
-    await page.reload();
-    await expect(page.getByTestId("column-list")).toContainText(resources.name);
-    await stableGoto(page, "/playground");
+    await page.getByRole("link", { name: tr("nav.playground"), exact: true }).click();
+    await expect(page).toHaveURL(/\/ui\/playground\/?$/);
     await page.getByPlaceholder(tr("Select a Model"), { exact: true }).click();
     await page.getByRole("option", { name: "gpt-4o-mini", exact: true }).click();
     await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();

@@ -29,7 +29,7 @@ func (p SoftPricePlan) WithSearchRequest(requested bool) SoftPricePlan {
 }
 
 // IncludesSearch 判断本次计划是否可能按搜索计费；返回标志供响应头和账单说明使用，不改变价格或额度。
-// 检查实际请求及冻结模型的明确搜索报价；非对话计价仍沿用既有模型用量说明。
+// 检查实际请求及冻结模型的明确搜索报价，包括已识别的历史单位；非对话计价仍沿用既有模型用量说明。
 func (p SoftPricePlan) IncludesSearch() bool {
 	if p.searchRequested {
 		return true
@@ -40,7 +40,7 @@ func (p SoftPricePlan) IncludesSearch() bool {
 	}
 	if rates, ok := catalog.DecodeRates(source["rates"]); ok {
 		for _, r := range rates {
-			if r.Measure == "query" && (r.Variant == "search" || r.SourceKey == "search_context_cost_per_query" || r.SourceKey == "web_search_req") {
+			if _, isSearch := r.WebSearchQuery(); isSearch && r.Side == "output" {
 				return true
 			}
 		}
@@ -135,6 +135,12 @@ func (p SoftPricePlan) Charge(raw map[string]any) (catalog.Charge, error) {
 		rates, e := budgetRates(p.dep, p.row)
 		if e != nil {
 			return catalog.Charge{}, e
+		}
+		// 只在软预算费率副本上解释旧搜索单位；严格预算仍使用原先的准入和费率校验。
+		for i, rate := range rates {
+			if query, ok := rate.WebSearchQuery(); ok {
+				rates[i] = query
+			}
 		}
 		prices, e := budgetSelectPrices(rates, snapshot.Window, "")
 		if e != nil {

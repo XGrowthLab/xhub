@@ -106,9 +106,23 @@ export default function DirectorySettings() {
     <h2 id="directory-title" className="sr-only">{t("directory.title")}</h2>
     <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="gap-6">
     <div className="overflow-x-auto border-b pb-1.5">
-      <TabsList variant="line" activateOnFocus aria-label={t("enterprise.settingsTabs")}>
-        {["sso", "scim", "logs"].map((key) => <TabsTrigger key={key} value={key} className="flex-none">{t("enterprise.tabs." + key)}</TabsTrigger>)}
-        <TabsTrigger value="versions" className="flex-none">{t("versionUpdates.title")}</TabsTrigger>
+      <TabsList variant="line" activateOnFocus aria-label={t("enterprise.settingsTabs")} className="group-data-horizontal/tabs:h-auto items-stretch gap-4">
+        <div role="group" aria-label={t("enterprise.identitySection")}>
+          <p aria-hidden="true" className="px-2 text-xs font-medium text-muted-foreground">{t("enterprise.identitySection")}</p>
+          <div className="flex h-9 gap-1">
+            <TabsTrigger value="sso" className="flex-none">{t("enterprise.tabs.sso")}</TabsTrigger>
+            <TabsTrigger value="scim" className="flex-none">{t("enterprise.tabs.scim")}</TabsTrigger>
+          </div>
+        </div>
+        <div role="group" aria-label={t("enterprise.storageSection")} className="border-s ps-3">
+          <p aria-hidden="true" className="whitespace-nowrap px-2 text-xs font-medium text-muted-foreground">{t("enterprise.storageSection")}</p>
+          <div className="flex h-9">
+            <TabsTrigger value="logs" className="flex-none">{t("enterprise.tabs.logs")}</TabsTrigger>
+          </div>
+        </div>
+        <div className="flex h-9 self-end border-s ps-3">
+          <TabsTrigger value="versions" className="flex-none">{t("versionUpdates.title")}</TabsTrigger>
+        </div>
       </TabsList>
     </div>
     {/* 保留页签实例与归属快照；一次性凭据仅存在 SCIM 弹窗内存，关闭即清除。 */}

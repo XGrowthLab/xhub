@@ -83,7 +83,7 @@ export function RequestLogsTable({
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const columns = useMemo(() => {
-    const deps = { onSessionClick };
+    const deps = { onSessionClick, onRowClick };
     const columns = getRequestLogsTableColumns(deps);
     const order = [
       "startTime",
@@ -101,7 +101,7 @@ export function RequestLogsTable({
       (a, b) =>
         (order.includes(a.id!) ? order.indexOf(a.id!) : 99) - (order.includes(b.id!) ? order.indexOf(b.id!) : 99),
     );
-  }, [onSessionClick, t]);
+  }, [onSessionClick, onRowClick, t]);
 
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
@@ -149,7 +149,8 @@ export function RequestLogsTable({
             title={t("Filters")}
             applyLabel={t("logsUX.apply")}
             resetLabel={t("Reset")}
-            description={t("Narrow down request logs")}
+            description={t("logsUX.filterHint")}
+            fullWidthOnMobile
           >
             {({ get, set }) => (
               <RequestLogsFilters get={get} set={set} teams={teams} logsWindow={logsWindow} errorsOnly={errorsOnly} />

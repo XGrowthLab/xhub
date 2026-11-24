@@ -77,15 +77,26 @@ export function registerCacheManagement(locale: Locale) {
         expect(response.headers()["x-litellm-cache-hit"]).not.toBe("true");
         expect(Number((await waitForLog(page.request, headers, response.headers()["x-litellm-call-id"])).spend)).toBeGreaterThan(0);
       }
+      // 取消确认后使用同一请求验证缓存仍然命中。
+      await page.getByRole("button", { name: tr("flush"), exact: true }).click();
+      const confirm = page.getByRole("alertdialog", { name: tr("flushTitle") });
+      await expect(confirm.getByText(tr("flushScope"))).toBeVisible();
+      await confirm.getByRole("button", { name: tr("cancel"), exact: true }).click();
+      const afterCancel = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: inferenceHeaders, data: body });
+      expect(afterCancel.status(), await afterCancel.text()).toBe(200);
+      expect(afterCancel.headers()["x-litellm-cache-hit"]).toBe("true");
+
       // 修改请求鉴权以触发真实后台401，保留浏览器登录会话；不伪造成功或失败响应。
       await page.route("**/flushall", (route) => route.continue({ headers: { ...route.request().headers(), authorization: "Bearer invalid-cache-test" } }));
       await page.getByRole("button", { name: tr("flush"), exact: true }).click();
+      await confirm.getByRole("button", { name: tr("flushConfirm"), exact: true }).click();
       await expect(page.getByRole("alert").filter({ hasText: tr("flushFailed") })).toBeVisible();
       const preserved = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: inferenceHeaders, data: body });
       expect(preserved.status(), await preserved.text()).toBe(200);
       expect(preserved.headers()["x-litellm-cache-hit"]).toBe("true");
       await page.unroute("**/flushall");
       await page.getByRole("button", { name: tr("flush"), exact: true }).click();
+      await confirm.getByRole("button", { name: tr("flushConfirm"), exact: true }).click();
       await expect(page.getByTestId("cache-result")).toHaveText(tr("flushed"));
       const fresh = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: inferenceHeaders, data: body });
       expect(fresh.status(), await fresh.text()).toBe(200);

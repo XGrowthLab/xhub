@@ -485,3 +485,33 @@ func TestPriceWaitCancellation(t *testing.T) {
 		t.Fatalf("取消后仍占用连接或市场锁: %v", err)
 	}
 }
+
+// TestDeploymentPriceSearchUnitPreview 验证相同历史搜索费率与市场费率按语义比较。
+// 参数 t 运行纯内存部署预览；校验计价改变、真实秒价与确认版本，无外部副作用。
+func TestDeploymentPriceSearchUnitPreview(t *testing.T) {
+	var row map[string]any
+	if err := json.Unmarshal([]byte(`{"pricing_rules_v2":[{"details_v2":{"input":{"unit_name":"token","unit_size":1000000,"unit_price_usd":2},"output":{"unit_name":"token","unit_size":1000000,"unit_price_usd":6},"web_search_req":{"unit_name":"time","unit_size":1,"unit_price_usd":0.01}}}]}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	rates, reason := catalog.MarketRates(row)
+	if reason != "" {
+		t.Fatalf("市场夹具不可用：%s", reason)
+	}
+	for i, rate := range rates {
+		if rate.Measure == "query" {
+			rates[i].Measure = "second"
+		}
+	}
+	dep := config.ModelEntry{ModelName: "search", LiteLLMParams: map[string]any{"rates": rates}, ModelInfo: map[string]any{"id": "test", "db_model": true, "base_model": "base", "pricing_source": "manual"}}
+	doc := catalog.PriceDocument{Models: map[string]map[string]any{"base": row}}
+	initial := pricePreview(dep, doc)
+	if initial.Changed || initial.Current[len(rates)-1].Measure != "query" || rates[len(rates)-1].Measure != "second" {
+		t.Fatalf("历史标记未规范化或存储被改写：%+v", initial)
+	}
+	// 改为真正的按秒输出价，展示与比较都要保留秒单位。
+	rates[len(rates)-1].Variant = ""
+	updated := pricePreview(dep, doc)
+	if !updated.Changed || updated.Current[len(rates)-1].Measure != "second" || updated.Version == initial.Version {
+		t.Fatalf("真实秒价或确认版本没有保留：%+v", updated)
+	}
+}

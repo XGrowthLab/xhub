@@ -1208,15 +1208,17 @@ test("upstream-only chat automatically exposes all customer dialogue APIs", asyn
       await page.getByRole("option", { name, exact: true }).click();
       // 从真实端点选择器选择默认透传，并验证原生响应和实际账单。
       for (const target of [
-        { path: "/bypass/openai/v1/chat/completions", google: true },
+        { path: "/bypass/openai/v1/chat/completions", google: false },
         { path: "/v1/chat/completions", google: false },
         { path: "/v1/responses", google: false },
         { path: "/v1/messages", google: false },
         { path: "/v1beta/models/" + name + ":generateContent", google: true },
         { path: "/vertex/v1/models/" + name + ":generateContent", google: true },
       ]) {
+        const bypass = target.path.startsWith("/bypass/");
+        await page.getByRole("button", { name: t(bypass ? "protocolProbe.bypass" : "protocolProbe.standard"), exact: true }).click();
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
-        await expect(page.getByRole("option")).toHaveCount(8);
+        await expect(page.getByRole("option")).toHaveCount(bypass ? 1 : 7);
         await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(
@@ -1228,7 +1230,7 @@ test("upstream-only chat automatically exposes all customer dialogue APIs", asyn
         if (target.google) {
           await page
             .getByLabel("原生请求参数")
-            .fill(JSON.stringify(target.path.startsWith("/bypass/") ? { messages: [{ role: "user", content: "Say hello." }], max_tokens: 32 } : { contents: [{ role: "user", parts: [{ text: "hello" }] }] }));
+            .fill(JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hello" }] }] }));
           await page.getByRole("button", { name: "提交请求", exact: true }).click();
         } else {
           await page.getByRole("button", { name: t("Clear Chat"), exact: true }).click();
@@ -1324,8 +1326,10 @@ test("upstream-only responses automatically exposes all customer dialogue APIs",
         { path: "/v1beta/models/" + name + ":generateContent", google: true },
         { path: "/vertex/v1/models/" + name + ":generateContent", google: true },
       ]) {
+        const bypass = target.path.startsWith("/bypass/");
+        await page.getByRole("button", { name: t(bypass ? "protocolProbe.bypass" : "protocolProbe.standard"), exact: true }).click();
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
-        await expect(page.getByRole("option")).toHaveCount(8);
+        await expect(page.getByRole("option")).toHaveCount(bypass ? 1 : 7);
         await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(
@@ -1433,8 +1437,10 @@ test("upstream-only claude automatically exposes all customer dialogue APIs", as
         { path: "/v1beta/models/" + name + ":generateContent", google: true },
         { path: "/vertex/v1/models/" + name + ":generateContent", google: true },
       ]) {
+        const bypass = target.path.startsWith("/bypass/");
+        await page.getByRole("button", { name: t(bypass ? "protocolProbe.bypass" : "protocolProbe.standard"), exact: true }).click();
         await page.getByPlaceholder(t("Select an endpoint"), { exact: true }).click();
-        await expect(page.getByRole("option")).toHaveCount(8);
+        await expect(page.getByRole("option")).toHaveCount(bypass ? 1 : 7);
         await page.getByRole("option").filter({ has: page.getByText(target.path, { exact: true }) }).click();
         // SDK 在代理根地址下使用无 /v1 前缀路径，原生编辑器使用完整注册路径；两者均为网关真实入口。
         const pending = page.waitForResponse(

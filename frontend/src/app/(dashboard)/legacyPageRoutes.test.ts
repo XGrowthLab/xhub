@@ -12,6 +12,13 @@ describe("legacyPageRedirectHref", () => {
     expect(redirect("page=new_usage")).toBe("/ui/usage");
   });
 
+  /** 旧 Chat 书签打开当前调试台并保留额外参数，只解析纯函数，无环境或数据需清理。 */
+  it("maps the legacy chat bookmark to the playground", () => {
+    expect(redirect("page=chat&from=old-bookmark&model=test%2Bmodel")).toBe(
+      "/ui/playground?from=old-bookmark&model=test%2Bmodel",
+    );
+  });
+
   it("does not open removed columns from old bookmarks", () => {
     for (const page of [
       "agents",

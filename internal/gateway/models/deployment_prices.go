@@ -97,14 +97,39 @@ func pricePreview(dep config.ModelEntry, doc catalog.PriceDocument) deploymentPr
 	p.Changed = p.Reason == "" && (!samePrices(p.Current, p.Proposed) || !reflect.DeepEqual(p.CurrentTiers, p.ProposedTiers))
 	// 版本只包含影响价格决策的非敏感字段；不把 API Key 等凭据送入可见摘要。
 	p.Version = priceVersion(p.ID, p.Name, p.Base, p.Manual, dep.ParamString("model", ""), dep.ParamString("custom_llm_provider", ""), dep.ParamString("litellm_credential_name", ""), dep.ModelInfo["transport"], dep.ModelInfo["endpoint_types"], p.Current, p.Proposed, p.CurrentTiers, p.ProposedTiers, p.Reason)
+	// 现价供管理员核对实际单位。保留上面原始快照版本，兼容发布前打开的确认窗口。
+	p.Current = displayDeploymentRates(p.Current)
+	for i := range p.CurrentTiers {
+		p.CurrentTiers[i].Rates = displayDeploymentRates(p.CurrentTiers[i].Rates)
+	}
 	return p
+}
+
+// displayDeploymentRates 为管理预览复制费率并统一搜索单位；输入为冻结快照，返回展示用费率。
+// 不改变存储标记、计费条件或确认版本；真实按秒项目保留原值。
+func displayDeploymentRates(rates []catalog.Rate) []catalog.Rate {
+	out := append([]catalog.Rate(nil), rates...)
+	for i, rate := range out {
+		out[i] = displayDeploymentRate(rate)
+	}
+	return out
+}
+
+// displayDeploymentRate 将搜索的后台历史标记映射为读者看到的计费项；参数和返回值均为单条费率。
+// 调价预览及可用模型详情共用，金额、时段和真正按秒的费率维持原样。
+func displayDeploymentRate(rate catalog.Rate) catalog.Rate {
+	if query, ok := rate.WebSearchQuery(); ok {
+		query.Variant = "search"
+		return query
+	}
+	return rate
 }
 
 // samePrices 仅比较实际计价维度、金额及单位；忽略展示标签变化和数组顺序。
 // 参数为两份费率，返回是否等价；用于调价预览，无副作用。
 func samePrices(a, b []catalog.Rate) bool {
 	clean := func(in []catalog.Rate) []catalog.Rate {
-		out := append([]catalog.Rate(nil), in...)
+		out := displayDeploymentRates(in)
 		for i := range out {
 			out[i].Label = ""
 			out[i].SourceKey = ""

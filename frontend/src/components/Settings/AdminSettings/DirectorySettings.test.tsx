@@ -19,6 +19,18 @@ describe("DirectorySettings", () => {
   beforeEach(() => { vi.mocked(enterprise.listSSO).mockResolvedValue([]); vi.mocked(enterprise.readEnterprise).mockResolvedValue({configuration:null, counts:{}, events:[]}); });
   afterEach(cleanup);
 
+  /** 两种语言均按企业身份和日志存储分组；只读取模拟管理接口，测试框架清理组件。 */
+  it.each([["zh-CN", "企业身份", "日志与存储", "日志设置"], ["en", "Enterprise identity", "Logs and storage", "Log settings"]] as const)(
+    "按职责分组设置页签 %s", async (locale, identity, storage, logs) => {
+      const user = userEvent.setup();
+      render(<I18nProvider initialLocale={locale}><DirectorySettings /></I18nProvider>);
+      expect(within(screen.getByRole("group", { name: identity })).getByRole("tab", { name: "SCIM" })).toBeVisible();
+      const logsTab = within(screen.getByRole("group", { name: storage })).getByRole("tab", { name: logs });
+      await user.click(logsTab);
+      expect(logsTab).toHaveAttribute("aria-selected", "true");
+    },
+  );
+
   // 前置为模拟管理接口和中文组件；验证原始名称、一次性凭据、动态按钮与启用，清理组件和 mock。
   it("创建连接保留用户输入并可隐藏凭据和启用", async () => {
     const connection = { id: "directory-1", organization_id: "org-1", name: "研发 Directory", enabled: false };

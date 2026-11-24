@@ -65,12 +65,17 @@ func TestAvailablePricesRejectInvalidSnapshots(t *testing.T) {
 	}
 }
 
-// TestPublicRatesSnapshot 验证普通已确认费率、免费、按次搜索及非法输入；白名单复制不带原配置，全部为内存数据。
+// TestPublicRatesSnapshot 验证普通已确认费率、免费、历史搜索、真实秒计价和非法输入。
+// 模型卡片只返回公开维度并保留原始计费快照，全部为内存数据，无清理副作用。
 func TestPublicRatesSnapshot(t *testing.T) {
-	valid := []catalog.Rate{{Measure: "token", Side: "input", Window: "all", USD: 0}, {Measure: "query", Side: "output", Variant: "search", Window: "all", USD: .01}}
+	valid := []catalog.Rate{
+		{Measure: "token", Side: "input", Window: "all", USD: 0},
+		{Measure: "second", Side: "output", Variant: "search", Window: "all", USD: .01},
+		{Measure: "second", Side: "output", Variant: "video", Window: "all", USD: .25},
+	}
 	dep := config.ModelEntry{LiteLLMParams: map[string]any{"rates": valid}}
 	card := availableCard(dep)
-	if rates, ok := card["rates"].([]availableRate); !ok || len(rates) != 2 || rates[0].USD != 0 || rates[1].Measure != "query" {
+	if rates, ok := card["rates"].([]availableRate); !ok || len(rates) != 3 || rates[0].USD != 0 || rates[1].Measure != "query" || rates[1].Variant != "search" || rates[1].USD != .01 || rates[2].Measure != "second" || valid[1].Measure != "second" {
 		t.Fatalf("免费和搜索费率必须保留: %#v", card)
 	}
 	for _, rates := range [][]catalog.Rate{nil, {{Measure: "", Side: "input", Window: "all"}}, {{Measure: "token", Side: "input", Window: "all", USD: math.NaN()}}, {{Measure: "token", Side: "input", Window: "all", USD: -1}}} {
