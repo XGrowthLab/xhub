@@ -2,12 +2,29 @@ package deployment_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sunqirui1987/xhub/internal/config"
 	llmdialogue "github.com/sunqirui1987/xhub/internal/llm/dialogue"
 	"github.com/sunqirui1987/xhub/internal/provider/deployment"
 )
+
+// TestDeploymentKeepsInternalEncodeErrorsPrivate 使用内存部署与不可跨协议的历史，验证内部编码原因保留给路由诊断。
+// 参数 t 为测试上下文，部署端不能将未标记的编码错误视作客户端字段错误；无外部资源。
+func TestDeploymentKeepsInternalEncodeErrorsPrivate(t *testing.T) {
+	dep := config.ModelEntry{ModelName: "chat", ModelInfo: map[string]any{"transport": "bypass_openai_chat"}}
+	d := llmdialogue.Dialogue{Turns: []llmdialogue.Turn{
+		{Role: "user", Native: map[string]any{"role": "user", "content": "Hello"}, NativeProtocol: "anthropic-messages"},
+	}}
+	pool, decisions := deployment.Candidates([]config.ModelEntry{dep}, "chat", &d)
+	var field *llmdialogue.RequestFieldError
+	_, _, err := deployment.EncodeDialogue(dep, d)
+	if err == nil || errors.As(err, &field) || len(pool) != 0 || len(decisions) != 1 ||
+		decisions[0].CapabilityError != nil || !strings.Contains(decisions[0].Reason, "opaque history requires") {
+		t.Fatalf("未标记的编码错误不能成为可公开字段: %v %v %v", pool, decisions, err)
+	}
+}
 
 // TestDeploymentSearchPolicy 验证部署级能力校验、候选筛选与真实编码一致；前置共享模型的 Chat/Responses 配置。
 // 覆盖默认拒绝、显式降级、原生支持、非法配置及候选隔离；仅内存操作，无外部调用和清理。

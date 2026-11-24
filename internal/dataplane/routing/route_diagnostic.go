@@ -173,15 +173,17 @@ func (d routeDiagnosis) ProtocolProblems(pinned string) []dpdiagnostics.Protocol
 		if err == nil || (pinned != "" && router.DeploymentID(decision.Deployment) != pinned) {
 			continue
 		}
-		field, detail := "", err.Error()
+		var field, detail string
 		var requestField *llmdialogue.RequestFieldError
 		switch {
 		case errors.As(err, &requestField):
 			field, detail = requestField.Field, requestField.Message
 		case errors.Is(err, llmdialogue.ErrMessagesImageDetailUnsupported):
-			field = "detail"
+			detail = llmdialogue.ErrMessagesImageDetailUnsupported.Error()
 		case errors.Is(err, llmdialogue.ErrWebSearchUnsupported):
-			field = "tools"
+			detail = llmdialogue.ErrWebSearchUnsupported.Error()
+		default:
+			continue
 		}
 		profile, _ := providerdeployment.Execution(decision.Deployment)
 		problem := dpdiagnostics.NewProtocolProblem(field, profile.Protocol, detail)

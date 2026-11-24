@@ -7,6 +7,29 @@ import (
 	"testing"
 )
 
+// TestCloneObjectKeepsDecodedNumberType 验证深拷贝同时保留精确数字和已有普通数字类型。
+// 参数 t 为测试上下文；覆盖嵌套容器隔离及非法 JSON 数值。纯内存数据无需清理。
+func TestCloneObjectKeepsDecodedNumberType(t *testing.T) {
+	exact := json.Number("9007199254740993")
+	item := map[string]any{"exact": exact}
+	source := map[string]any{"array": []any{item}, "regular": float64(17)}
+	cloned, err := cloneObject(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copiedItem := cloned["array"].([]any)[0].(map[string]any)
+	if copiedItem["exact"] != exact || cloned["regular"] != float64(17) {
+		t.Fatalf("JSON 深拷贝改变了数字类型或精度: %#v", cloned)
+	}
+	copiedItem["exact"] = json.Number("31")
+	if item["exact"] != exact {
+		t.Fatal("修改副本影响了原始请求")
+	}
+	if _, err := cloneObject(map[string]any{"invalid": json.Number("not a number")}); err == nil {
+		t.Fatal("深拷贝接受了不可序列化的数字")
+	}
+}
+
 // TestAgentNativeRequests 验证 GPT/Grok Responses 与 DeepSeek Chat 的原生字段保留及跨协议拒绝。
 // 参数 t 为单测上下文；前置标准 Agent/工具多轮正文，断言模型替换、输入不变、无静默丢参；纯内存无需清理。
 func TestAgentNativeRequests(t *testing.T) {

@@ -17,7 +17,11 @@ func TestProtocolRejectionDetails(t *testing.T) {
 		LiteLLMParams: map[string]any{"model": "private-model-id", "api_key": "sk-private-api-key"},
 		ModelInfo:     map[string]any{"id": "private-deployment", "transport": "bypass_anthropic_messages"},
 	}
-	h := newHarness(t, messages, chatDeployment("to-chat"))
+	mixed := chatDeployment("mixed-compatibility")
+	mixed.ModelInfo["id"] = "mixed-chat"
+	invalid := chatDeployment("mixed-compatibility")
+	invalid.ModelInfo["id"], invalid.ModelInfo["transport"] = "mixed-invalid", "missing-transport"
+	h := newHarness(t, messages, chatDeployment("to-chat"), mixed, invalid)
 	admin := h.adminSession()
 	owner := h.openScope(t, admin, "compatibility-errors")
 	before := h.moneyOf(t, owner)
@@ -25,6 +29,8 @@ func TestProtocolRejectionDetails(t *testing.T) {
 		{"unknown field", "/v1/chat/completions", `{"model":"to-messages","messages":[{"role":"user","content":"Hello"}],"vendor_extra":true}`, "vendor_extra", "request_conversion", "anthropic-messages", "requires native openai-chat"},
 		{"hosted tool", "/v1/responses", `{"model":"to-chat","input":"Hello","tools":[{"type":"mcp"}]}`, "tools[0].type", "request_conversion", "openai-chat", "use a function tool"},
 		{"custom format", "/v1/responses", `{"model":"to-chat","input":"Hello","tools":[{"type":"custom","name":"run","format":{"type":"vendor"}}],"stream":true}`, "tools[0].format.type", "request_conversion", "openai-chat", "text and grammar"},
+		{"mixed deployment failures", "/v1/responses", `{"model":"mixed-compatibility","input":"Hello","tools":[{"type":"mcp"}]}`, "tools[0].type", "request_conversion", "openai-chat", "check model transport, endpoint configuration and request capabilities"},
+		{"search without exact field", "/v1/responses", `{"model":"to-chat","input":"Hello","tools":[{"type":"web_search"}]}`, "", "request_conversion", "openai-chat", "web_search"},
 		{"thinking display", "/v1/messages", `{"model":"to-chat","messages":[{"role":"user","content":"Hello"}],"thinking":{"type":"adaptive","display":"summary"}}`, "thinking.display", "request_conversion", "openai-chat", "requires native Messages"},
 		{"input validation", "/v1/chat/completions", `{"model":"to-chat","messages":[{"role":"user","content":"Hello"}],"tools":[{"type":"mcp"}]}`, "tools[0].type", "request_validation", "", "only function tools"},
 	} {
@@ -40,10 +46,16 @@ func TestProtocolRejectionDetails(t *testing.T) {
 					t.Fatalf("客户端缺少定位信息 %q: %s", part, r.describe())
 				}
 			}
-			if tc.path != "/v1/messages" && doc["param"] != tc.field {
-				t.Fatalf("OpenAI param 缺少精确路径: %v", doc)
+			if tc.path != "/v1/messages" {
+				var wantParam any
+				if tc.field != "" {
+					wantParam = tc.field
+				}
+				if doc["param"] != wantParam {
+					t.Fatalf("OpenAI param 只能公开准确路径: %v", doc)
+				}
 			}
-			for _, private := range []string{"private-model-id", "private-deployment", "sk-private-api-key", "Hello"} {
+			for _, private := range []string{"private-model-id", "private-deployment", "sk-private-api-key", "missing-transport", "Hello"} {
 				if strings.Contains(message, private) {
 					t.Fatalf("客户端错误泄露了内部信息 %q", private)
 				}
@@ -52,7 +64,7 @@ func TestProtocolRejectionDetails(t *testing.T) {
 			diagnosis := detail["metadata"].(map[string]any)["upstream_response"].(map[string]any)
 			protocol := diagnosis["protocol"].(map[string]any)
 			first := protocol["problems"].([]any)[0].(map[string]any)
-			if protocol["stage"] != tc.stage || first["field"] != tc.field ||
+			if protocol["stage"] != tc.stage || stringField(first, "field") != tc.field ||
 				stringField(first, "target_protocol") != tc.target || diagnosis["status_code"] != float64(0) {
 				t.Fatalf("真实调用日志与客户端错误不一致: %v", diagnosis)
 			}
@@ -63,8 +75,9 @@ func TestProtocolRejectionDetails(t *testing.T) {
 	}
 }
 
-// TestSameProtocolRawExtension 使用真实 Chat 网关和本地上游验证同协议保留精确扩展；独立 PG 和服务由 cleanup 回收。
-func TestSameProtocolRawExtension(t *testing.T) {
+// TestSameProtocolCanonicalExtension 使用真实 Chat 网关和本地上游验证脱敏结果与精确数字同时生效；
+// 参数 t 为测试上下文，独立 PG 和 HTTP 服务由 cleanup 回收。
+func TestSameProtocolCanonicalExtension(t *testing.T) {
 	seen := make(chan map[string]json.RawMessage, 1)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]json.RawMessage
@@ -81,15 +94,19 @@ func TestSameProtocolRawExtension(t *testing.T) {
 	dep.LiteLLMParams["model"] = "actual-upstream-model"
 	h := newHarness(t, dep)
 	admin := h.adminSession()
+	h.putGuardrail(t, "redact-extension", guardrailRow("redact-extension", kindRedact, []string{"Placeholder"}, "redact"))
 	h.ok("POST", "/v1/chat/completions", admin, json.RawMessage(`{
-	  "model":"native-extension","messages":[{"role":"user","content":"Hello"}],
+	  "model":"native-extension","messages":[{"role":"user","content":[{"type":"text","text":"Placeholder","vendor_extra":{"number":9007199254740995}}]}],
 	  "vendor_extra":{"number":9007199254740993},"disable_fallbacks":true
 	}`))
 	select {
 	case body := <-seen:
 		if string(body["vendor_extra"]) != `{"number":9007199254740993}` ||
+			!strings.Contains(string(body["messages"]), `"number":9007199254740995`) ||
+			!strings.Contains(string(body["messages"]), "[REDACTED]") ||
+			strings.Contains(string(body["messages"]), "Placeholder") ||
 			string(body["model"]) != `"actual-upstream-model"` || body["disable_fallbacks"] != nil {
-			t.Fatalf("保真出站丢失扩展或重新加入网关字段: %v", body)
+			t.Fatalf("出站丢失精确扩展或脱敏结果: %s", body["messages"])
 		}
 	default:
 		t.Fatal("同协议没有实际到达本地上游")

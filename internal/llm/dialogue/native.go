@@ -11,7 +11,7 @@ import (
 )
 
 // cloneObject 复制 JSON 对象供协议投影与模型改名使用；参数为原始正文，返回独立对象或编码错误。
-// 请求/响应适配器调用；不共享嵌套引用，不允许非 JSON 值，无外部副作用。
+// 请求/响应适配器调用；不共享嵌套引用，不允许非 JSON 值。保留请求解码后已有的精确数字，无外部副作用。
 func cloneObject(body map[string]any) (map[string]any, error) {
 	if body == nil {
 		return nil, fmt.Errorf("JSON object required")
@@ -21,8 +21,33 @@ func cloneObject(body map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	var out map[string]any
-	err = json.Unmarshal(raw, &out)
-	return out, err
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	copyExactNumbers(out, body)
+	return out, nil
+}
+
+// copyExactNumbers 把 source 中已解析的精确数字移入 target 中对应的 JSON 对象或数组。
+// cloneObject 在完成普通深拷贝后调用。函数返回应保留的值，只改写 target，保留其他数字的既有 Go 类型。
+func copyExactNumbers(target, source any) any {
+	switch source := source.(type) {
+	case json.Number:
+		return source
+	case map[string]any:
+		if object, ok := target.(map[string]any); ok {
+			for key, value := range object {
+				object[key] = copyExactNumbers(value, source[key])
+			}
+		}
+	case []any:
+		if items, ok := target.([]any); ok {
+			for i := range min(len(items), len(source)) {
+				items[i] = copyExactNumbers(items[i], source[i])
+			}
+		}
+	}
+	return target
 }
 
 // projectedFieldPositions 保存投影前的消息位置和工具路径，只用于当前请求的诊断。

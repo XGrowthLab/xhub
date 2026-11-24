@@ -1,7 +1,6 @@
 package deployment
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/sunqirui1987/xhub/internal/config"
@@ -61,13 +60,8 @@ func EncodeDialogue(m config.ModelEntry, d llmdialogue.Dialogue) (map[string]any
 	}
 	payload, err := llmdialogue.EncodeDialogue(prepared, t.Protocol, m.ParamString("model", ""))
 	if err != nil {
-		// 到这里已完成部署配置与搜索策略校验。剩下的是协议编码错误，
-		// 即便未定位到单字段，也应向调用方解释能力边界。
-		var field *llmdialogue.RequestFieldError
-		if errors.As(err, &field) || errors.Is(err, llmdialogue.ErrMessagesImageDetailUnsupported) {
-			return nil, nil, err
-		}
-		return nil, nil, &llmdialogue.RequestFieldError{Message: err.Error()}
+		// 公开能力错误需由协议层显式标记。其他编码错误仅供内部路由诊断使用。
+		return nil, nil, err
 	}
 	if effort != "" {
 		// 输出上限仍由原请求和硬额度链控制；adaptive并不意味着可以擅自扩大max_tokens。

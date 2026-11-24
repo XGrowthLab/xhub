@@ -84,9 +84,9 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "invalid body")
 		return
 	}
-	original := raw
-	var body map[string]any
-	if err := json.Unmarshal(raw, &body); err != nil {
+	callerProtocol := dpdialogue.CallerProtocol(op)
+	body, err := decodeServeBody(raw, callerProtocol != "")
+	if err != nil {
 		util.Error("process path=%s step=body reason=invalid json", r.URL.Path)
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "invalid json")
 		return
@@ -98,7 +98,6 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		return
 	}
 	cachePolicy := clientCachePolicy{read: true, write: true}
-	callerProtocol := dpdialogue.CallerProtocol(op)
 	if callerProtocol != "" {
 		cachePolicy, err = consumeClientCachePolicy(body)
 		if err != nil {
@@ -297,7 +296,12 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		status, kind, message := diagnosis.Failure(alias)
 		util.Error("process path=%s step=route call_id=%q model=%q reason=%q message=%q fallback_visited=%d", r.URL.Path, callID, alias, kind, message, len(fallbacks.Seen)-1)
 		if problems := diagnosis.ProtocolProblems(""); len(problems) > 0 {
-			writeProtocolRejection(w, r.URL.Path, status, kind, "request_conversion", callerProtocol, "", problems, snapshot)
+			reason := ""
+			if kind != "unsupported_capability" {
+				// 有候选因配置等原因被拒时，保留总体路由说明。字段只能解释其中一部分。
+				reason = message
+			}
+			writeProtocolRejection(w, r.URL.Path, status, kind, "request_conversion", callerProtocol, reason, problems, snapshot)
 			return
 		}
 		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: snapshot})
@@ -410,7 +414,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 			connection, upstreamModel := dep.MonitorIdentity()
 			h.AnnotateCall(callID, dpcontract.CallNote{Supplier: connection, APIBase: dep.LogAPIBase(), UpstreamModel: upstreamModel, UpstreamSelected: true})
 			if dpdialogue.CallerProtocol(op) != "" {
-				built, err = dpdialogue.BuildDialogue(dep, dialogue, original)
+				built, err = dpdialogue.BuildDialogue(dep, dialogue)
 				if errors.Is(err, dpdialogue.ErrDialogueCredentials) {
 					missingCredential = true
 					util.Debug("skip deployment path=%s provider=%s model=%s reason=missing api key or api base", r.URL.Path, supplier, realModel)
