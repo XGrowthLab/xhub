@@ -1,6 +1,6 @@
 # Version updates and rollback
 
-A platform administrator can open **Administrator settings → Version updates** to check for releases. The page shows the running version, release channel, target and release notes. After confirmation, a separate host service verifies and switches the gateway and console images. Reopen the page to resume monitoring.
+A platform administrator can open **Administrator settings → Version updates** to check for releases. Standard installations let administrators choose the stable or beta channel on the same page. Check again after switching to see releases for that channel. After confirmation, a separate host service verifies and switches the gateway and console images. Reopen the page to resume monitoring.
 
 ## Stable and beta releases
 
@@ -17,7 +17,7 @@ For an existing or customized deployment, connect the executor to the running pr
 1. Install deploy/update_agent.py and deploy/update_manifest.py together in a host administrator controlled directory such as /opt/xhub-updater.
 2. Adapt deploy/xhub-updater.service.example to your Compose path, project name and health URLs. The updater reads Releases from XGrowthLab/xhub. A protected EnvironmentFile may provide a read-only XHUB_RELEASE_TOKEN for a private repository. Registry credentials belong to host Docker.
 3. Set XHUB_UPDATE_SOCKET=/run/xhub-updater/agent.sock in the gateway. Mount the directory /run/xhub-updater read-only at the same path and allow the gateway process to connect to the socket. The directory mount reconnects to the socket after a service restart.
-4. Start the host service and recreate the gateway once. Stable is the default. Add --allow-beta to ExecStart on beta test instances. Host administrators can supply --namespace and --manifest-file for an isolated or offline image mirror.
+4. Start the host service and recreate the gateway once. Stable is the default. Use `--allow-beta` to start a new instance on the beta channel. On an existing host, add `--enable-channel-switch` to ExecStart, reload systemd and restart the updater to let administrators save the channel from the console. Standard installations include this argument. Removing the argument fixes the channel to the host settings. Host administrators can supply --namespace and --manifest-file for an isolated or offline image mirror.
 
 The default health URLs are http://127.0.0.1:4000/health/readiness and http://127.0.0.1:3000/login. Pass two --health-url arguments when the local ports or private IPv4 bindings differ. Only the host service controls Docker. This workflow supports a single gateway and console in the configured project.
 

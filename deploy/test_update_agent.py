@@ -150,6 +150,46 @@ class UpdateTests(unittest.TestCase):
                     "http://127.0.0.1:0/login", "http://127.0.0.1:3000/login?a=1"):
             self.assertFalse(valid_health_url(url), url)
 
+    def test_channel_change_resets_preview_and_survives_restart(self):
+        """在临时状态目录测试切换、缓存失效、重启和关闭主机开关，结束清理状态。"""
+        def new_agent(allow_switch=True):
+            """以正式渠道启动执行器，返回复用临时状态的实例，不修改运行镜像。"""
+            return Agent(self.root, self.compose, Releases(file=self.source), allow_switch)
+
+        self.agent = new_agent()
+        self.assertIsNone(self.check()["candidate"])
+        code, beta = self.agent.submit("channel", {"channel": "beta", "actor": "platform-admin"})
+        self.assertEqual((code, beta["channel"], beta["checked"]), (200, "beta", 0))
+        self.agent = new_agent()
+        self.assertEqual(self.agent.status()["channel"], "beta")
+        self.assertEqual(self.agent.state["channel_changed_by"], "platform-admin")
+        self.assertEqual(self.check()["candidate"]["version"], self.next["version"])
+        code, stable = self.agent.submit("channel", {"channel": "stable", "actor": "platform-admin"})
+        self.assertEqual((code, stable["channel"], stable["checked"]), (200, "stable", 0))
+        self.assertIsNone(stable["candidate"])
+        self.assertEqual(self.agent.submit("apply", {"actor": "admin", "version": self.next["version"],
+                                                    "revision": self.next["revision"]}), (409, "invalid_target"))
+        locked = new_agent(False)
+        self.assertFalse(locked.status()["channel_switch_enabled"])
+        self.assertEqual(locked.submit("channel", {"channel": "beta", "actor": "admin"}), (403, "channel_locked"))
+        self.assertEqual(self.compose.switched, [])
+
+    def test_channel_change_rejects_busy_invalid_and_failed_write(self):
+        """无效输入、操作中或写盘失败都保留原渠道；临时状态与并发线程在用例结束清理。"""
+        self.agent = Agent(self.root, self.compose, self.releases, True)
+        self.assertEqual(self.agent.submit("channel", {"channel": "custom", "actor": "admin"}), (400, "invalid_channel"))
+        self.check()
+        self.compose.release.clear()
+        self.apply()
+        self.assertTrue(self.compose.started.wait(2))
+        self.assertEqual(self.agent.submit("channel", {"channel": "stable", "actor": "admin"}), (409, "busy"))
+        self.compose.release.set()
+        self.await_idle()
+        with patch.object(self.agent, "record", side_effect=OSError("read-only state")), self.assertLogs(level="ERROR"):
+            self.assertEqual(self.agent.submit("channel", {"channel": "stable", "actor": "admin"}),
+                             (503, "update_agent_unavailable"))
+        self.assertEqual(self.agent.status()["channel"], "beta")
+
     def test_concurrent_upgrade_restart_and_manual_rollback(self):
         """拉取被阻塞时拒绝第二项任务。完成版本重开执行器可见，并能使用上一版本回退。"""
         self.assertTrue(self.check()["candidate"]["compatible"])

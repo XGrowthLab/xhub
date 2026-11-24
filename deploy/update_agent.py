@@ -26,6 +26,7 @@ else:
     from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, SERVICES, validate_manifest, version_key
 
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
+CHANNELS = {"stable", "beta"}
 CHECK_TTL = 3600
 URLS = ("http://127.0.0.1:4000/health/readiness", "http://127.0.0.1:3000/login")
 HEALTH_NETWORKS = tuple(ipaddress.ip_network(value) for value in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
@@ -253,10 +254,11 @@ class NoRedirect(HTTPRedirectHandler):
 class Agent:
     """管理单个升级或回退事务，并在 IPC 或进程退出后从持久状态恢复。"""
 
-    def __init__(self, directory, compose, releases):
-        """读取上一次状态；主进程先持有目录排他锁，处理器只并行访问本实例。"""
+    def __init__(self, directory, compose, releases, channel_switch=False):
+        """加载上次事务及渠道。仅当主机允许控制台切换时，已保存的渠道覆盖启动参数。"""
         self.file = directory / "state.json"
         self.compose, self.releases = compose, releases
+        self.channel_switch = channel_switch
         self.lock = threading.RLock()
         self.state = {"stage": "idle", "updated_at": 0}
         try:
@@ -265,7 +267,12 @@ class Agent:
                     persisted = read_json(stream, 128 << 10)
                 if not isinstance(persisted, dict) or persisted.get("stage") not in ACTIVE | {"idle", "failed", "succeeded"}:
                     raise ValueError("invalid saved update state")
+                channel = persisted.get("channel")
+                if channel is not None and channel not in CHANNELS:
+                    raise ValueError("invalid saved release channel")
                 self.state.update(persisted)
+                if self.channel_switch and channel is not None:
+                    self.releases.beta = channel == "beta"
         except Exception:
             # 文件不可信时保留原始证据，禁止后续更新覆盖它。
             LOG.exception("Unable to load updater state")
@@ -372,17 +379,20 @@ class Agent:
                                  "prerelease": version_key(manifest["version"])[3] < 3,
                                  "notes": checked["notes"], "compatible": bool(current and
                                      current["database_compatibility"] == manifest["database_compatibility"])}
-            return {"enabled": True, "channel": "beta" if self.releases.beta else "stable", "stage": state["stage"],
+            return {"enabled": True, "channel": "beta" if self.releases.beta else "stable",
+                    "channel_switch_enabled": self.channel_switch, "stage": state["stage"],
                     "current": current["version"] if current else None, "candidate": candidate,
                     "previous": previous["version"] if previous else None, "error": state.get("error"),
                     "recovery_required": state.get("error") == "recovery_required",
                     "checked": checked_at, "updated_at": state["updated_at"]}
 
     def submit(self, action, body):
-        """校验目标版本并取得唯一操作槽；操作记录落盘后才向浏览器确认接收。"""
+        """串行处理控制请求。渠道切换同步完成，检查与镜像切换落盘后由后台线程执行。"""
         with self.lock:
             if self.state["stage"] in ACTIVE or self.state.get("pending") or self.state.get("error") == "recovery_required":
                 return 409, "busy"
+            if action == "channel":
+                return self.change_channel(body["channel"], body["actor"])
             current = self.state.get("current")
             if action == "apply":
                 candidate = self.status()["candidate"]
@@ -410,6 +420,23 @@ class Agent:
                 self.mark_failed("check_failed" if action == "check" else "prepare_failed")
                 return 503, "update_agent_unavailable"
             return 202, self.status()
+
+    def change_channel(self, channel, actor):
+        """在 submit 持锁时保存平台管理员选的渠道，清除旧检查结果；写盘失败继续使用原渠道。"""
+        if not self.channel_switch:
+            return 403, "channel_locked"
+        if channel not in CHANNELS:
+            return 400, "invalid_channel"
+        if self.releases.beta == (channel == "beta"):
+            return 200, self.status()
+        try:
+            self.record(channel=channel, channel_changed_by=actor, channel_changed_at=int(time.time()),
+                        checked=None, checked_at=0)
+        except Exception:
+            self.log_failure("save release channel")
+            return 503, "update_agent_unavailable"
+        self.releases.beta = channel == "beta"
+        return 200, self.status()
 
     def execute(self, action, expected, target):
         """后台检查发布或执行切换。失败只暴露稳定错误码，磁盘日志保留操作身份。"""
@@ -475,7 +502,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """严格限定操作、参数和调用方标识；提交前的错误没有副作用。"""
         action = self.path.lstrip("/")
-        fields = {"check": {"actor"}, "apply": {"actor", "version", "revision"}, "rollback": {"actor", "version"}}
+        fields = {"check": {"actor"}, "apply": {"actor", "version", "revision"},
+                  "rollback": {"actor", "version"}, "channel": {"actor", "channel"}}
         try:
             size = int(self.headers.get("Content-Length", "-1"))
             if action not in fields or not 0 <= size <= 1024:
@@ -507,6 +535,7 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--allow-beta", action="store_true")
+    parser.add_argument("--enable-channel-switch", action="store_true")
     parser.add_argument("--manifest-file", type=Path)
     parser.add_argument("--namespace", default=NAMESPACE)
     parser.add_argument("--health-url", action="append")
@@ -536,7 +565,8 @@ def main():
         compose = Compose(args.compose.resolve(), args.state_dir / "compose.override.json",
                           args.project, args.namespace, health, args.health_timeout)
         # 先恢复上次事务，再接受客户端请求，避免启动恢复期间的 IPC 连接超时积压。
-        agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace))
+        agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace),
+                      args.enable_channel_switch)
         with socketserver.ThreadingUnixStreamServer(str(args.socket), Handler) as server:
             server.daemon_threads = True
             os.chmod(args.socket, 0o660)
