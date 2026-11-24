@@ -132,18 +132,26 @@ export function registerUserBulkBudgetScenario(locale: "en" | "zh-CN") {
       }
       // 实际单用户编辑入口也必须保存并回读月度日期，不能只验证仓库中未挂载的旧组件。
       await stableGoto(page, "/users");
+      const directoryURL = page.url();
       await page.getByTestId(`user-actions-${users[0].user_id}`).click();
       await page.getByRole("menuitem", { name: tr("pages.users.editUser"), exact: true }).click();
-      await page.getByLabel(tr("userBudgetReset.label")).selectOption("15");
+      const editDialog = page.getByRole("dialog", { name: tr("pages.users.editUser"), exact: true });
+      await editDialog.getByLabel(tr("userBudgetReset.label")).selectOption("15");
       const singleSaved = page.waitForResponse(r => r.url().endsWith("/user/update") && r.request().method() === "POST");
-      await page.getByRole("button", { name: tr("pages.users.saveChanges"), exact: true }).click();
+      await editDialog.getByRole("button", { name: tr("pages.users.saveChanges"), exact: true }).click();
       expect((await singleSaved).status()).toBe(200);
       expect((await read(users[0].user_id)).budget_reset_day).toBe(15);
-      await expect(page.getByText(tr("userBudgetReset.day", { day: 15 }), { exact: true })).toBeVisible();
+      // 保存关闭弹窗并留在列表。主动打开详情再核对展示值，避免误匹配弹窗中的原生选项。
+      await expect(editDialog).toBeHidden();
+      await expect(page).toHaveURL(directoryURL);
+      await page.getByRole("button", { name: users[0].user_id, exact: true }).click();
+      await page.getByRole("tab", { name: tr("common.details"), exact: true }).click();
+      const details = page.getByRole("tabpanel", { name: tr("common.details"), exact: true });
+      await expect(details.getByText(tr("userBudgetReset.day", { day: 15 }), { exact: true })).toBeVisible();
       await page.reload();
       await page.getByRole("button", { name: tr("pages.users.editUser"), exact: true }).click();
-      await expect(page.getByLabel(tr("userBudgetReset.label"))).toHaveValue("15");
-      await page.getByRole("button", { name: tr("common.cancel"), exact: true }).click();
+      await expect(editDialog.getByLabel(tr("userBudgetReset.label"))).toHaveValue("15");
+      await editDialog.getByRole("button", { name: tr("common.cancel"), exact: true }).click();
       const minted = await page.request.post(GATEWAY + "/key/generate", {
         headers,
         data: { user_id: users[0].user_id, key_alias: prefix },
