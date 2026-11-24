@@ -761,6 +761,59 @@ func awaitAdmissionTickets(t *testing.T, s *Spool, want uint64) {
 	}
 }
 
+// TestSyncProbe 双向阻塞两个同步函数，验证它们同时开始、双方都返回后才结束，且保留每侧错误。
+// 使用虚拟时间检查成功、单边失败和双边失败。只创建测试内的 goroutine 和通道，退出前全部收回。
+func TestSyncProbe(t *testing.T) {
+	fileErr := errors.New("file sync failed")
+	dirErr := errors.New("directory sync failed")
+	for _, tc := range []struct {
+		name      string
+		file, dir error
+	}{
+		{"success", nil, nil}, {"file", fileErr, nil}, {"directory", nil, dirErr}, {"both", fileErr, dirErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fileReady, dirReady := make(chan struct{}), make(chan struct{})
+				fileReturn, dirReturn := make(chan struct{}), make(chan struct{})
+				result := make(chan error, 1)
+				go func() {
+					result <- syncProbe(
+						func() error { close(fileReady); <-fileReturn; return tc.file },
+						func() error { close(dirReady); <-dirReturn; return tc.dir },
+					)
+				}()
+				synctest.Wait()
+				select {
+				case <-fileReady:
+				default:
+					t.Error("目录同步等待时，文件同步没有开始")
+				}
+				select {
+				case <-dirReady:
+				default:
+					t.Error("文件同步等待时，目录同步没有开始")
+				}
+				// 分别让文件或目录先返回，防止第一项成功或失败就提前放行。
+				first, second := fileReturn, dirReturn
+				if tc.dir != nil {
+					first, second = dirReturn, fileReturn
+				}
+				close(first)
+				synctest.Wait()
+				if len(result) != 0 {
+					t.Error("另一项同步尚未结束时准入已返回")
+				}
+				close(second)
+				err := <-result
+				if (err == nil) != (tc.file == nil && tc.dir == nil) || errors.Is(err, fileErr) != (tc.file != nil) || errors.Is(err, dirErr) != (tc.dir != nil) {
+					t.Fatalf("返回的探针错误与真实同步结果不符: %v", err)
+				}
+			})
+		})
+	}
+}
+
 // TestReserveForAttempt 用单槽临时队列验证首次准入先取票、普通重试重新核验磁盘，
 // 以及重试失败后槽位可复用。夹具负责关闭队列、清理文件，并在失败时恢复目录权限。
 func TestReserveForAttempt(t *testing.T) {

@@ -539,7 +539,7 @@ func (s *Spool) reserve(callID string, renew bool, probe func() error) (err erro
 	return nil
 }
 
-// probeWritableLocked 用一次独立文件创建、写入、fsync、删除和目录 fsync 验证卷能持久写入。
+// probeWritableLocked 建立临时探针，写入后同步其数据和根目录，再删除探针，以验证当前卷可写。
 // 由 reserve 在互斥锁内调用；任一步骤失败都返回错误，不发布本次探针的取票截止点。
 func (s *Spool) probeWritableLocked() error {
 	suffix, err := token()
@@ -552,11 +552,21 @@ func (s *Spool) probeWritableLocked() error {
 		return err
 	}
 	_, writeErr := file.Write([]byte("usage-spool-probe\n"))
-	syncErr := file.Sync()
+	// 探针不承载账单，文件和新建目录项可在同一时间同步；二者都结束后才卸下目录项。
+	// 删除若因断电未持久化，现有启动扫描会清理 .probe-*。账单发布与确认仍按原有顺序刷盘。
+	syncErr := syncProbe(file.Sync, func() error { return s.syncDirectoryLocked(".") })
 	closeErr := file.Close()
 	removeErr := s.root.Remove(name)
-	dirErr := s.syncDirectoryLocked(".")
-	return errors.Join(writeErr, syncErr, closeErr, removeErr, dirErr)
+	return errors.Join(writeErr, syncErr, closeErr, removeErr)
+}
+
+// syncProbe 仅供准入探针并行同步仍有目录项的文件与其父目录。调用方持有队列锁并保持文件打开。
+// 两个参数分别执行文件同步和目录同步；等待二者结束，返回合并的错误，任一失败都不能放行。
+func syncProbe(syncFile, syncDir func() error) error {
+	fileDone := make(chan error, 1)
+	go func() { fileDone <- syncFile() }()
+	dirErr := syncDir()
+	return errors.Join(dirErr, <-fileDone)
 }
 
 // Release 归还尚未写入的在途容量；无返回值，重复或未知callID安全，不删除持久文件。

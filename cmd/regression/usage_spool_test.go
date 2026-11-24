@@ -251,7 +251,7 @@ func TestUsageSpoolDatabaseDisconnect(t *testing.T) {
 }
 
 // TestUsageSpoolUnavailableAdmission 验证不可写磁盘在真实HTTP准入时返回503且不调用上游；恢复权限后的首笔对话在重复刷账后仍只扣一次。
-// 使用临时目录及私有PG，硬额度与无限额账号均走相同存储准入；最后清理所有测试数据。
+// 使用临时目录及私有PG，硬额度与无限额账号均走相同存储准入；模拟遗留探针并核对恢复后的账单，最后清理所有数据。
 func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "spool")
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
@@ -278,10 +278,18 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// 模拟上一次探针已同步、删除尚未持久化时断电；下一笔真实请求必须能清理遗留项并准入。
+	orphan := filepath.Join(dir, ".probe-regression-interrupted")
+	if err := os.WriteFile(orphan, []byte("usage-spool-probe\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	resumed := h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
 	id := resumed.headers.Get("x-litellm-call-id")
 	h.flushSpend()
 	h.flushSpend()
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("恢复后的网关未清理探针残留: %v", err)
+	}
 	var events []iam.UsageEvent
 	if err := h.db.Engine.Where("request_id = ?", id).Find(&events); err != nil {
 		t.Fatal(err)

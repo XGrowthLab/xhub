@@ -1,13 +1,13 @@
 import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
  * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
- * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
+ * 恢复前在独占目录构造探针残留，确认真实账单和监控消费均只增加一次。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -20,6 +20,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
     const headers = { Authorization: "Bearer " + bearer };
     const control = JSON.parse(readFileSync(join(process.env.E2E_RUN_DIR!, "enterprise-fixture.json"), "utf8")).control;
     const model = "spool-browser-recovery-" + Date.now();
+    const orphanProbe = join(process.env.E2E_RUN_DIR!, "usage-spool", ".probe-" + model);
     let modelID = "";
     let guardID = "";
     let injected = false;
@@ -109,11 +110,14 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect(callID).toBeTruthy();
       const state = await page.request.post(control + "/usage-spool/state", { data: { model } });
       expect(await state.json()).toEqual({ pending: 1, quarantined: 0 });
+      // 模拟断电后仍在目录中的探针，与已确认账单一起交给真实网关恢复。
+      writeFileSync(orphanProbe, "usage-spool-probe\n", { flag: "wx", mode: 0o600 });
       for (let i = 0; i < 2; i++) {
         const recovered = await page.request.post(control + "/usage-spool/recover", { data: { model } });
         expect(recovered.status(), await recovered.text()).toBe(200);
         expect(await recovered.json()).toEqual({ pending: 0, quarantined: 0 });
       }
+      expect(existsSync(orphanProbe)).toBe(false);
       injected = false;
       const billResponse = await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers });
       expect(billResponse.status()).toBe(200);
@@ -234,6 +238,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         return Number((await info.json()).user_info.spend) - startingSpend;
       }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
     } finally {
+      rmSync(orphanProbe, { force: true });
       if (injected)
         expect((await page.request.post(control + "/usage-spool/recover", { data: { model } })).status()).toBe(200);
       expect((await page.request.put(GATEWAY + "/account/log-capture", { headers, data: { enabled: false } })).status()).toBe(200);
