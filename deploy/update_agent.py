@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 from http.server import BaseHTTPRequestHandler
+import ipaddress
 import json
 import logging
 import os
@@ -27,7 +28,23 @@ else:
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
 CHECK_TTL = 3600
 URLS = ("http://127.0.0.1:4000/health/readiness", "http://127.0.0.1:3000/login")
+HEALTH_NETWORKS = tuple(ipaddress.ip_network(value) for value in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 LOG = logging.getLogger("xhub-updater")
+
+
+class UntrackedRelease(ValueError):
+    """运行镜像不是可回退的发布版本。允许读取发布，但不能以此为起点切换。"""
+
+
+def valid_health_url(url):
+    """检查管理员传入的 HTTP 探针地址，只接受回环或私网 IPv4 字面量及合法端口。"""
+    match = re.fullmatch(r"http://([0-9.]+):(\d{1,5})/[-\w/]*", url)
+    if not match or not 1 <= int(match[2]) <= 65535:
+        return False
+    try:
+        return any(ipaddress.IPv4Address(match[1]) in network for network in HEALTH_NETWORKS)
+    except ipaddress.AddressValueError:
+        return False
 
 
 class TrustedRedirect(HTTPRedirectHandler):
@@ -168,7 +185,7 @@ class Compose:
             elif len(match) == 1:
                 digests[service] = match[0]
             else:
-                raise ValueError("missing or ambiguous rollback image")
+                raise UntrackedRelease("missing or ambiguous rollback image")
         version, revision, compatibility = releases["gateway"]
         if releases["console"] != (version, revision, compatibility):
             raise ValueError("application images do not belong to the same release")
@@ -179,12 +196,17 @@ class Compose:
     def release_labels(labels):
         """把 Docker 标签对象转为版本、提交、兼容标识三元组；缺少或无效的发布标签抛 ValueError。"""
         if not isinstance(labels, dict):
-            raise ValueError("image has no release labels")
+            raise UntrackedRelease("image has no release labels")
         version, revision, compatibility = (labels.get(key) for key in (
             "org.opencontainers.image.version", "org.opencontainers.image.revision", COMPAT_LABEL))
         if not all(isinstance(value, str) and value for value in (version, revision, compatibility)):
-            raise ValueError("image has incomplete release labels")
-        return version if version.startswith("v") else "v" + version, revision, compatibility
+            raise UntrackedRelease("image has incomplete release labels")
+        version = version if version.startswith("v") else "v" + version
+        try:
+            version_key(version)
+        except ValueError as error:
+            raise UntrackedRelease("image was built outside a versioned release") from error
+        return version, revision, compatibility
 
     def prepare(self, manifest, pull):
         """拉取并验证两份镜像与清单相符。完整通过前不修改任何 Compose 配置。"""
@@ -221,7 +243,7 @@ class Compose:
 
 
 class NoRedirect(HTTPRedirectHandler):
-    """健康检查只访问预先配置的主机回环地址。"""
+    """健康检查只访问预先配置的回环或私网地址。"""
 
     def redirect_request(self, *args):
         """不跟随服务健康检查响应中的重定向地址。"""
@@ -252,6 +274,8 @@ class Agent:
         self.recover()
         try:
             current = compose.current()
+        except UntrackedRelease:
+            current = None
         except Exception:
             LOG.exception("Unable to inspect the running release")
             current = None
@@ -390,7 +414,13 @@ class Agent:
     def execute(self, action, expected, target):
         """后台检查发布或执行切换。失败只暴露稳定错误码，磁盘日志保留操作身份。"""
         try:
-            current = self.compose.current()
+            try:
+                current = self.compose.current()
+            except UntrackedRelease:
+                # 非发布镜像也能查阅更新信息，切换仍需要经过可回退的发布验证。
+                if action != "check":
+                    raise
+                current = None
             if action == "check":
                 self.record(current=current, checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
                 return
@@ -486,8 +516,8 @@ def main():
     health = args.health_url or URLS
     if not 5 <= args.health_timeout <= 300:
         parser.error("health timeout must be between 5 and 300 seconds")
-    if len(health) != 2 or any(not re.fullmatch(r"http://127\.0\.0\.1:\d{1,5}/[-\w/]*", url) for url in health):
-        parser.error("expected gateway and console loopback health URLs")
+    if len(health) != 2 or any(not valid_health_url(url) for url in health):
+        parser.error("expected gateway and console health URLs on loopback or private IPv4")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", args.project):
         parser.error("invalid Compose project")
     if not re.fullmatch(r"[a-z0-9.:/-]+/[a-z0-9_-]+", args.namespace):

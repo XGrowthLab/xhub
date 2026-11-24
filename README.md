@@ -152,28 +152,18 @@ Start with one team and one application, then expand along your organizational s
 
 ## Docker installation and usage
 
-### 1. Prepare your environment
+### 1. Install on Linux
 
-Install [Docker Desktop](https://docs.docker.com/desktop/) on macOS/Windows, or [Docker Engine](https://docs.docker.com/engine/install/) and the [Compose plugin](https://docs.docker.com/compose/install/linux/) on Linux. Start Docker and check:
-
-```bash
-docker version
-docker compose version
-```
-
-The current deployment builds on your host and packages the output into Docker images. You also need **Git, Go 1.25, Node.js ≥24.14.1, npm ≥11.10.0**, and a readable system CA bundle. The build script detects the common Debian/Ubuntu, RHEL, macOS, and Alpine paths; set `XHUB_CA_CERT_FILE` for another location. The build script requires Bash; on Windows, install these tools inside WSL2 Linux and enable Docker Desktop WSL integration. The script supports amd64/arm64 and downloads Linux Node.js from npmmirror. See the [installation guide](docs/getting-started.md) for complete requirements.
-
-### 2. Build and start
+On Linux with systemd, install [Docker Engine and Compose v2](https://docs.docker.com/compose/install/linux/), Git, Go 1.25, Node.js 24.14.1+, npm 11.10+, and Python 3.10+.
 
 ```bash
 git clone https://github.com/qiniu/xhub.git
 cd xhub
 bash deploy/build.sh
-docker compose up -d --no-build
-docker compose ps
+sudo python3 -B deploy/install.py
 ```
 
-The build script creates local `xhub-gateway` and `xhub-console` images. Compose starts the gateway, console, PostgreSQL, and Redis. PostgreSQL data is stored in the `xhub-pg` named volume. Use a fresh database for your first installation.
+The installer starts the Compose stack and the host update service. The **Version updates** tab is available on the stable channel by default. To enable in-console image switching, start with a matching release image pair using `deploy/install.py --release` and authorized GHCR access. Use a fresh database for your first installation. For macOS, Windows and source builds, see the [source build instructions](docs/getting-started.md#build-the-compose-images-from-source).
 
 | Service | Purpose and address |
 | --- | --- |
@@ -182,7 +172,7 @@ The build script creates local `xhub-gateway` and `xhub-console` images. Compose
 | PostgreSQL | Host port `5433` for configuration, identity, and usage storage |
 | Redis | Internal Compose service for shared runtime state |
 
-### 3. Sign in and connect your first model
+### 2. Sign in and connect your first model
 
 The initial local administrator is `admin@xhub.local` / `admin-pass-1234`. Change the password after signing in, then:
 
@@ -193,31 +183,9 @@ The initial local administrator is `admin@xhub.local` / `admin-pass-1234`. Chang
 
 A fresh installation starts without model deployments. Follow the [user and administration guide](docs/user-guide.md) for complete steps.
 
-### 4. Operate and update
+### 3. Operate and update
 
-```bash
-# Follow gateway and console logs
-docker compose logs -f gateway console
-
-# Restart application services
-docker compose restart gateway console
-
-# Stop services and retain the PostgreSQL volume
-docker compose down
-
-# Start again
-docker compose up -d --no-build
-```
-
-Back up your database before updating. From the repository directory, pull the new version, rebuild, and recreate the application containers:
-
-```bash
-git pull --ff-only
-bash deploy/build.sh
-docker compose up -d --no-build --force-recreate gateway console
-```
-
-For a server deployment, set `NEXT_PUBLIC_BASE_URL` to the browser-accessible gateway URL before building, and set Compose's `XHUB_PUBLIC_ORIGIN` to the same public API URL. Keep the console container's `XHUB_GATEWAY_ORIGIN` set to a reachable internal gateway address. Gateway settings, including initial administrator credentials, are in `configs/config.docker.yaml`; rebuild images after changing them. Initial password configuration only creates accounts that do not exist; change an existing account's password in the console. See [deployment configuration](docs/getting-started.md#deployment-configuration) for details.
+Open **Administrator settings → Version updates** to check for a new release. Confirm the switch after reviewing the version and backing up the database. See the [host update guide](docs/development/en/version-updates.md) for upgrading an existing deployment, Docker commands, and rollback.
 
 ## Run from source
 

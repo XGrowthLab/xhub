@@ -153,7 +153,7 @@ test('verification prepares configs/config.yaml before Go tests without overwrit
 /** 正常流程验证发布依赖真实测试且 PR 没有写权限；只读配置，无需清理。 */
 test('publication requires regression and browser verification', () => {
   assert.deepEqual(workflow.on.push, { branches: ['main'], tags: ['v*'] });
-  assert.equal(publish.needs, 'verify');
+  assert.deepEqual(publish.needs, ['verify', 'verify_install']);
   assert.match(publish.if, /github.event_name != 'pull_request'/);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.deepEqual(publish.permissions, { contents: 'write', packages: 'write' });
@@ -162,6 +162,18 @@ test('publication requires regression and browser verification', () => {
   assert.match(commands, /bash scripts\/regression.sh -v/);
   assert.match(commands, /scenarios\/keys\/rotation-secret.test.ts/);
   assert.ok(workflow.jobs.verify.steps.some(item => item.run === 'docker compose down -v' && item.if === 'always()'));
+});
+
+/** 发布前走新安装入口、重试原部署并在浏览器检查，最后清理隔离 runner 上的服务。 */
+test('publication validates the default systemd installation', () => {
+  const steps = workflow.jobs.verify_install.steps;
+  const verify = steps.find(item => item.name === 'Install and check version updates')?.run;
+  assert.match(verify, /sudo python3 -B deploy\/install\.py/);
+  assert.match(verify, /sudo systemctl is-active xhub-updater\.service/);
+  assert.match(verify, /node e2e\/default_version_update_browser\.cjs/);
+  const cleanup = steps.find(item => item.name === 'Remove the isolated install');
+  assert.equal(cleanup.if, 'always()');
+  assert.match(cleanup.run, /docker compose -f \/opt\/xhub\/docker-compose\.yml down -v/);
 });
 
 /** 回归日志覆盖成功、大量失败输出、无换行长行及目录创建失败；执行真实工作流 shell，验证双流落盘、输出上限和原始退出码，finally 清理临时夹具。 */

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from deploy.update_manifest import MANIFEST_NAME, NAMESPACE, validate_manifest, version_key
-from deploy.update_agent import ACTIVE, Agent, Compose, Releases, save_json
+from deploy.update_agent import ACTIVE, Agent, Compose, Releases, UntrackedRelease, save_json, valid_health_url
 
 
 def manifest(number, compatibility="a"):
@@ -119,6 +119,36 @@ class UpdateTests(unittest.TestCase):
         source.github = lambda path, asset=False: self.base if asset else rows
         with self.assertRaises(ValueError):
             source.latest()
+
+    def test_running_main_image_can_check_but_cannot_apply(self):
+        """模拟主分支镜像无发布版本的实例，检查后拒绝切换，临时状态由用例清理。"""
+        labels = {
+            "org.opencontainers.image.version": "main",
+            "org.opencontainers.image.revision": self.base["revision"],
+            "io.xhub.database-compatibility": self.base["database_compatibility"],
+        }
+        with patch.object(self.compose, "current", side_effect=lambda: Compose.release_labels(labels)):
+            self.agent = Agent(self.root, self.compose, self.releases)
+            status = self.check()
+            self.assertIsNone(status["current"])
+            self.assertEqual(status["candidate"]["version"], self.next["version"])
+            self.assertFalse(status["candidate"]["compatible"])
+            code, _ = self.agent.submit("apply", {"actor": "admin", "version": self.next["version"],
+                                                  "revision": self.next["revision"]})
+            self.assertEqual(code, 409)
+            self.assertEqual(self.compose.switched, [])
+        with self.assertRaises(UntrackedRelease):
+            Compose.release_labels({})
+
+    def test_health_targets_stay_on_local_network(self):
+        """验证回环与私网地址可用，同时拒绝 DNS、公共 IP、非法端口和重定向参数，无外部请求。"""
+        for url in ("http://127.0.0.1:4000/health/readiness", "http://192.168.1.2:3000/login",
+                    "http://10.0.0.1:65535/login", "http://172.31.1.8:1/login"):
+            self.assertTrue(valid_health_url(url), url)
+        for url in ("http://169.254.169.254:80/latest", "http://8.8.8.8:4000/login", "http://localhost:3000/login",
+                    "http://192.168.1.999:3000/login", "http://127.0.0.1:65536/login",
+                    "http://127.0.0.1:0/login", "http://127.0.0.1:3000/login?a=1"):
+            self.assertFalse(valid_health_url(url), url)
 
     def test_concurrent_upgrade_restart_and_manual_rollback(self):
         """拉取被阻塞时拒绝第二项任务。完成版本重开执行器可见，并能使用上一版本回退。"""
