@@ -11,6 +11,8 @@ import (
 
 	"github.com/sunqirui1987/xhub/internal/auth"
 	"github.com/sunqirui1987/xhub/internal/config"
+	dpcontract "github.com/sunqirui1987/xhub/internal/dataplane/contract"
+	dpdiagnostics "github.com/sunqirui1987/xhub/internal/dataplane/diagnostics"
 	providerregistry "github.com/sunqirui1987/xhub/internal/provider/registry"
 	"github.com/sunqirui1987/xhub/internal/router"
 )
@@ -19,6 +21,15 @@ import (
 type cancellationHost struct {
 	*streamAuditHost
 	failures, bills int
+	upstream        *dpdiagnostics.UpstreamDiagnostics
+}
+
+// AnnotateCall 记录最后一次已观测的上游响应。参数 id 和 note 沿用调用契约，无持久化副作用。
+func (h *cancellationHost) AnnotateCall(id string, note dpcontract.CallNote) {
+	h.streamAuditHost.AnnotateCall(id, note)
+	if note.Upstream != nil {
+		h.upstream = note.Upstream
+	}
 }
 
 // NoteFailure 统计执行器报告的部署故障；参数为路由身份和策略，无返回或外部副作用。
@@ -107,6 +118,12 @@ func TestClientCancellationClassification(t *testing.T) {
 type canceledNativeHost struct {
 	*fallbackNativeHost
 	status, bills int
+	savedResponse string
+}
+
+// RememberExchange 捕获断连前实际收到的正文，以核对成功读取和取消交错的日志；内存中仅保留本次测试内容。
+func (h *canceledNativeHost) RememberExchange(_ string, _ *http.Request, _, response []byte) {
+	h.savedResponse = string(response)
 }
 
 // RecordSpend 记录原生入口最终HTTP分类和次数；其余参数仅满足宿主契约，无外部结算。
@@ -165,54 +182,95 @@ func TestNativeClientCancellationClassification(t *testing.T) {
 	}
 }
 
-// TestUpstream4xxPrereadClientCancellation 验证读取 4xx 正文时连接取消应记为未知来源中断而不是上游 400。
-// 使用内存传输和请求上下文，覆盖流式/非流式及空/部分正文；断言零重试、零冷却、单次失败记录，无外部数据需清理。
-func TestUpstream4xxPrereadClientCancellation(t *testing.T) {
-	for _, stream := range []bool{false, true} {
-		for _, partial := range []bool{false, true} {
-			t.Run(fmt.Sprintf("stream=%t/partial=%t", stream, partial), func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				attempts := 0
-				client := &http.Client{Transport: auditRoundTripper(func(*http.Request) (*http.Response, error) {
-					attempts++
-					data := ""
-					if partial {
-						data = `{"error":`
-					}
-					return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(&cancellationBody{data: data, cancel: cancel, err: context.Canceled})}, nil
-				})}
-				cfg := chatConfig(config.ModelEntry{ModelName: "cancel-4xx", LiteLLMParams: map[string]any{"model": "cancel-4xx", "api_base": "https://example.invalid/v1", "api_key": "test"}})
-				settings := router.BuiltinSettings()
-				settings.Settings["retry_policy"] = map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3}
-				h := &cancellationHost{streamAuditHost: &streamAuditHost{logHost: newLogHost(cfg, client), settings: settings}}
-				Serve(h, httptest.NewRecorder(), chatRequest(t, "cancel-4xx", stream).WithContext(ctx), "chat")
-				if attempts != 1 || h.status != 499 || h.failures != 0 || h.bills != 1 {
-					t.Fatalf("4xx 预读取消分类错误: attempts=%d status=%d failures=%d bills=%d", attempts, h.status, h.failures, h.bills)
-				}
-			})
-		}
-	}
-}
-
-// TestUpstream4xxEmptyTruncationNeverRetries 验证 4xx 头已收到但正文截断时不应把空流当成可重试的空成功。
-// 使用内存传输模拟意外 EOF 和可重试配置，覆盖流式与非流式；断言一次上游调用和零冷却，无外部资源需清理。
-func TestUpstream4xxEmptyTruncationNeverRetries(t *testing.T) {
-	for _, stream := range []bool{true} {
-		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+// TestNativeCancellationKeepsObservedError 验证收到完整的供应商 503 错误后发生取消，仍落一次 499 及原始错误。
+// 参数 t 为测试上下文；分别覆盖 EOF 和取消读错，任何继续重试均判失败；内存树和上下文由测试回收。
+func TestNativeCancellationKeepsObservedError(t *testing.T) {
+	for _, terminal := range []error{io.EOF, context.Canceled} {
+		t.Run(terminal.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			const raw = "{ \"error\": {\"message\": \"Supplier response retained\"} }\n"
 			attempts := 0
 			client := &http.Client{Transport: auditRoundTripper(func(*http.Request) (*http.Response, error) {
 				attempts++
-				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(&cancellationBody{err: io.ErrUnexpectedEOF})}, nil
+				return &http.Response{
+					StatusCode: 503, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(&cancellationBody{data: raw, cancel: cancel, err: terminal}),
+				}, nil
 			})}
-			cfg := chatConfig(config.ModelEntry{ModelName: "truncated-4xx", LiteLLMParams: map[string]any{"model": "truncated-4xx", "api_base": "https://example.invalid/v1", "api_key": "test"}})
+			deployment := Deployment("cancel", "cancel", "test", "https://example.invalid/v1", "bypass_openai_chat", nil)
+			models := []config.ModelEntry{deployment}
 			settings := router.BuiltinSettings()
 			settings.Settings["retry_policy"] = map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3}
-			h := &cancellationHost{streamAuditHost: &streamAuditHost{logHost: newLogHost(cfg, client), settings: settings}}
-			Serve(h, httptest.NewRecorder(), chatRequest(t, "truncated-4xx", stream), "chat")
-			if attempts != 1 || h.status != 400 || h.failures != 0 || h.bills != 1 {
-				t.Fatalf("截断 4xx 不应重试或换模型: attempts=%d status=%d failures=%d bills=%d", attempts, h.status, h.failures, h.bills)
+			host := &canceledNativeHost{fallbackNativeHost: &fallbackNativeHost{logicHost: &logicHost{
+				cfg: &config.Config{}, client: client, models: models,
+			}, policy: settings}}
+			req := chatRequest(t, "cancel", false).WithContext(ctx)
+			req.URL.Path = "/bypass/openai/v1/chat/completions"
+			hit, ok := providerregistry.Match(req.Method, req.URL.Path)
+			if !ok {
+				t.Fatal("未匹配测试透传路径")
+			}
+			rec := httptest.NewRecorder()
+			ServeBypass(host, rec, req, hit)
+			if attempts != 1 || host.bills != 1 || host.status != 499 || host.savedResponse != raw || rec.Body.Len() != 0 || len(host.notes) == 0 {
+				t.Fatalf("已收到的错误被丢弃或错误重试: attempts=%d status=%d bills=%d", attempts, host.status, host.bills)
+			}
+			up := host.notes[len(host.notes)-1].Upstream
+			if up == nil || up.StatusCode != 503 || up.Error == nil || up.Failure == nil ||
+				up.Failure.Kind != "request_canceled" || up.Failure.Phase != "response_transfer" {
+				t.Fatalf("未保留取消阶段和原始供应商错误: %+v", up)
 			}
 		})
+	}
+}
+
+// TestUpstreamErrorPrereadClientCancellation 验证错误正文读取取消时只记一次 499，无重试或冷却。
+// 输入为 400、429、503 和普通/流式请求，覆盖截断及读取完整后取消。
+// 保留已收到的明确错误和原 HTTP 状态，残片不会被当作上游错误。使用内存传输，测试释放上下文。
+func TestUpstreamErrorPrereadClientCancellation(t *testing.T) {
+	for _, status := range []int{400, 429, 503} {
+		for _, stream := range []bool{false, true} {
+			for _, sample := range []struct {
+				data     string
+				terminal error
+				complete bool
+			}{
+				{"", context.Canceled, false},
+				{`{"error":`, context.Canceled, false},
+				{`{"error":{"message":"upstream failed"},"request_id":"vendor-unit"}`, context.Canceled, true},
+				{`{"error":{"message":"upstream failed"},"request_id":"vendor-unit"}`, io.EOF, true},
+			} {
+				// 本轮修复覆盖 429/503 在正文完整读完后取消的竞态；可重试的 400 仍只对预读中断分类。
+				if status == 400 && sample.terminal == io.EOF {
+					continue
+				}
+				t.Run(fmt.Sprintf("status=%d/stream=%t/bytes=%d/trailing=%v", status, stream, len(sample.data), sample.terminal), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					attempts := 0
+					client := &http.Client{Transport: auditRoundTripper(func(*http.Request) (*http.Response, error) {
+						attempts++
+						return &http.Response{StatusCode: status, Header: make(http.Header),
+							Body: io.NopCloser(&cancellationBody{data: sample.data, cancel: cancel, err: sample.terminal})}, nil
+					})}
+					cfg := chatConfig(config.ModelEntry{ModelName: "cancel-preread", LiteLLMParams: map[string]any{"model": "cancel-preread", "api_base": "https://example.invalid/v1", "api_key": "test"}})
+					settings := router.BuiltinSettings()
+					settings.Settings["retry_policy"] = map[string]any{"max_attempts": 1, "timeout_seconds": 60, "failure_threshold": 1}
+					h := &cancellationHost{streamAuditHost: &streamAuditHost{logHost: newLogHost(cfg, client), settings: settings}}
+					Serve(h, httptest.NewRecorder(), chatRequest(t, "cancel-preread", stream).WithContext(ctx), "chat")
+					if attempts != 1 || h.status != 499 || h.failures != 0 || h.bills != 1 {
+						t.Fatalf("HTTP %d 预读取消分类错误: attempts=%d status=%d failures=%d bills=%d", status, attempts, h.status, h.failures, h.bills)
+					}
+					diagnostic := h.upstream
+					if diagnostic == nil || diagnostic.StatusCode != status || diagnostic.Failure == nil || diagnostic.Failure.Phase != "response_transfer" {
+						t.Fatalf("预读取消丢失上游事实: %+v", diagnostic)
+					}
+					if (diagnostic.Error["request_id"] == "vendor-unit") != sample.complete {
+						t.Fatalf("忽略了完整错误或误用了残片: %v", diagnostic.Error)
+					}
+				})
+			}
+		}
 	}
 }

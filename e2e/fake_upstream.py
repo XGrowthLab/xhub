@@ -337,6 +337,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.shutdown(socket.SHUT_WR)
             elif "Return an empty 502." in contents:
                 self._response(502, b"", "text/plain")
+            elif "Read complete error then disconnect." in contents:
+                vendor_error = b'{ "type": "error", "error": { "type": "overloaded_error", "message": "Provider saturated" }, "request_id": "req-vendor-502" }\n'
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Request-Id", "req-vendor-502")
+                self.send_header("Content-Length", str(len(vendor_error) + 100))
+                self.end_headers()
+                self.wfile.write(vendor_error)
+                self.close_connection = True
             elif "End the stream early." in contents:
                 self._response(200, b'event: ping\ndata: {"type":"ping"}\n\n', "text/event-stream")
             elif "Trigger empty response." in contents:
@@ -355,6 +364,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": {"code": "embedded_failure", "message": "Generation failed"}})
             else:
                 self._response(200, b"", "application/json")
+            return
+        # 日志回归用隔离夹具依次验证非对象错误、无效终态和成功后存储失败。
+        if req.get("model") == "e2e-json-null-error":
+            self._response(503, b'"null"', "application/json")
+            return
+        if req.get("model") == "e2e-native-log-failure":
+            if "Check invalid terminal response." in str(req.get("input", "")):
+                self._json({"id": "resp_queued", "status": "queued", "output": []})
+            else:
+                self._json({"id": "resp_log_completed", "object": "response", "status": "completed",
+                            "output": [{"type": "message", "role": "assistant",
+                                        "content": [{"type": "output_text", "text": "Generated content"}]}],
+                            "usage": {"input_tokens": 3, "output_tokens": 2}})
             return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":

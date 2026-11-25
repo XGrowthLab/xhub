@@ -45,14 +45,12 @@ export function checkHasMessages(messages: any): boolean {
   return false;
 }
 
-/**
- * Checks if response object contains data.
- * @param response - Response to check
- * @returns True if response exists and has content
- */
-export function checkHasResponse(response: any): boolean {
-  if (!response) return false;
-  return Object.keys(formatData(response)).length > 0;
+/** 检查日志响应是否有可展示内容。传入任意存储值，返回布尔；日志详情调用，解析得到 null 或空容器时视为空，不修改原响应。 */
+export function checkHasResponse(response: unknown): boolean {
+  const value: unknown = formatData(response);
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return typeof value !== "object" || Object.keys(value).length > 0;
 }
 
 /**

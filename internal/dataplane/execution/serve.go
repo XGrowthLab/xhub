@@ -319,6 +319,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	cancelPhase := "before_upstream"
 	triedHTTP := false
 	missingCredential := false
+	// writeResponseFailure 记录并返回同一份网关 502 错误。部署和用量沿用当前尝试，供应商响应事实仍在独立诊断。
+	// 供 Responses 同步传输、结果验证和历史提交失败调用，避免成功正文覆盖最终错误。调用方收到写入后的错误响应。
+	writeResponseFailure := func(deployment, kind, detail string, usage map[string]any) {
+		const status = http.StatusBadGateway
+		h.RememberExchange(callID, r, raw, util.TypedErrorBody(r.URL.Path, status, kind, detail, ""))
+		h.RecordSpend(w, p, callID, alias, op, usage, start, false, status, deployment)
+		util.WriteTypedError(w, r.URL.Path, status, kind, detail)
+	}
 	// stopCanceled 在调用方上下文结束时记录一次零费用取消并终止执行。
 	// 参数保留已读取正文、用量、部署和首字时间；返回是否已处理取消。
 	// 每次出站及传输错误分支调用，不能检查已主动释放的 attempt context，否则正常完成也会被误判。
@@ -514,9 +522,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					util.Error("upstream dial path=%s provider=%s model=%s base_host=%s err=%s", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), dpdiagnostics.SafeErr(err))
 					if dialogue.NativeResponses {
 						// 提交后网络错误不能证明供应商未执行，原生灰度不自动重放生成。
-						h.RememberExchange(callID, r, raw, nil)
-						h.RecordSpend(w, p, callID, alias, op, nil, start, false, http.StatusBadGateway, did)
-						util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", dpdiagnostics.SafeErr(err))
+						writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(err), nil)
 						return
 					}
 					continue
@@ -533,10 +539,25 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				h.AnnotateCall(callID, dpcontract.CallNote{Upstream: diagnostic})
 				if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 					// 重试前保存完整错误正文；若所有候选都失败，最终日志必须能还原最后一次上游响应。
-					lastResponse, _ = io.ReadAll(resp.Body)
+					var readErr error
+					lastResponse, readErr = io.ReadAll(resp.Body)
 					resp.Body.Close()
 					cancelAttempt()
 					h.DecBusy(did)
+					if cause := r.Context().Err(); cause != nil {
+						// 上游响应头和入站取消是不同事实；即使只允许一次尝试，也必须在返回前记录 499。
+						receivedError := lastResponse
+						if readErr != nil && !diagnostic.ObserveCompleteErrorBody(receivedError) {
+							receivedError = nil
+						}
+						lastErr = readErr
+						if lastErr == nil {
+							lastErr = cause
+						}
+						if stopCanceled(receivedError, nil, did, 0) {
+							return
+						}
+					}
 					h.NoteFailure(router.CooldownID(rawDep), routeCfg)
 					lastStatus = resp.StatusCode
 					lastErr = errUpstreamStatus
@@ -550,10 +571,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					errorAttempt := readBufferedAttempt(resp)
 					// 正文预读时请求上下文可能结束；不能把不完整响应当作完整上游 4xx，也不能重试。
 					if errorAttempt.readErr != nil && r.Context().Err() != nil {
+						receivedError := errorAttempt.body
+						if !diagnostic.ObserveCompleteErrorBody(receivedError) {
+							receivedError = nil
+						}
 						cancelAttempt()
 						h.DecBusy(did)
 						lastErr = errorAttempt.readErr
-						if stopCanceled(errorAttempt.body, nil, did, 0) {
+						if stopCanceled(receivedError, nil, did, 0) {
 							return
 						}
 					}
@@ -697,9 +722,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					}
 					h.NoteFailure(did, routeCfg)
 					if dialogue.NativeResponses {
-						h.RememberExchange(callID, r, raw, attempt.body)
-						h.RecordSpend(w, p, callID, alias, op, nil, start, false, http.StatusBadGateway, did)
-						util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", dpdiagnostics.SafeErr(attempt.readErr))
+						writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(attempt.readErr), nil)
 						return
 					}
 					continue
@@ -717,12 +740,10 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						if dialogue.NativeResponses {
 							// 上游已返回成功HTTP，原生终态损坏不能再次生成；保留失败和已有用量供对账。
 							h.NoteFailure(did, routeCfg)
-							h.RememberExchange(callID, r, raw, attempt.body)
 							var observed map[string]any
 							_ = json.Unmarshal(attempt.body, &observed)
 							usage, _ := observed["usage"].(map[string]any)
-							h.RecordSpend(w, p, callID, alias, op, llmdialogue.NormalizeDialogueUsage(usage), start, false, http.StatusBadGateway, did)
-							util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", dpdiagnostics.SafeErr(conversionErr))
+							writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(conversionErr), llmdialogue.NormalizeDialogueUsage(usage))
 							return
 						}
 						lastErr = conversionErr
@@ -740,11 +761,8 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						}
 						if prepareErr != nil {
 							// 上游已完整完成，本地历史失败不能再次付费生成；保留真实 usage 和失败原因，预占待核对。
-							detail := dpdiagnostics.SafeErr(prepareErr)
-							h.RememberExchange(callID, r, raw, []byte(detail))
 							h.AnnotateCall(callID, dpcontract.CallNote{Provider: supplier, SessionID: plan.SessionID})
-							h.RecordSpend(w, p, callID, alias, op, llmdialogue.NormalizeDialogueUsage(result.Usage), start, false, http.StatusBadGateway, did)
-							util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "history_unavailable", detail)
+							writeResponseFailure(did, "history_unavailable", dpdiagnostics.SafeErr(prepareErr), llmdialogue.NormalizeDialogueUsage(result.Usage))
 							return
 						}
 						result = prepared
@@ -786,8 +804,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 								Usage map[string]any `json:"usage"`
 							}
 							_ = json.Unmarshal(attempt.body, &response)
-							h.RecordSpend(w, p, callID, alias, op, llmdialogue.NormalizeDialogueUsage(response.Usage), start, false, http.StatusBadGateway, did)
-							util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "history_unavailable", "conversation history could not be saved")
+							writeResponseFailure(did, "history_unavailable", "conversation history could not be saved", llmdialogue.NormalizeDialogueUsage(response.Usage))
 							return
 						}
 					} else {

@@ -1,12 +1,15 @@
 package util
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
+// TestWriteTypedErrorUsesProviderEnvelope 验证 HTTP 错误与失败日志共用协议包络，状态、限流响应头和字段也保持一致。
+// 参数 t 为测试上下文；使用内存响应与三种入站协议，无外部资源和清理步骤。
 func TestWriteTypedErrorUsesProviderEnvelope(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -46,6 +49,9 @@ func TestWriteTypedErrorUsesProviderEnvelope(t *testing.T) {
 				t.Fatalf("decode response: %v", err)
 			}
 			tt.check(t, body)
+			if serialized := TypedErrorBody(tt.path, http.StatusTooManyRequests, "rate_limit", "slow down", ""); !bytes.Equal(serialized, rr.Body.Bytes()) || serialized[len(serialized)-1] != '\n' {
+				t.Fatalf("错误日志包络与 HTTP 响应不一致: %q, want %q", serialized, rr.Body.Bytes())
+			}
 		})
 	}
 }
@@ -69,4 +75,17 @@ func nestedMap(t *testing.T, body map[string]any, key string) map[string]any {
 		t.Fatalf("%q = %#v, want object", key, body[key])
 	}
 	return got
+}
+
+// TestTypedErrorBodyField 验证字段路径和包含引号、换行的原消息可无损解码。
+// 参数 t 为测试上下文；使用内存 JSON，验证 OpenAI 错误对象，无清理。
+func TestTypedErrorBodyField(t *testing.T) {
+	const detail = "Invalid \"image\".\nUse a URL."
+	var doc map[string]any
+	if err := json.Unmarshal(TypedErrorBody("/v1/responses", 400, "invalid_request_error", detail, "input[0].image_url"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if fields := nestedMap(t, doc, "error"); fields["message"] != detail || fields["param"] != "input[0].image_url" {
+		t.Fatalf("错误消息或字段路径丢失: %v", fields)
+	}
 }

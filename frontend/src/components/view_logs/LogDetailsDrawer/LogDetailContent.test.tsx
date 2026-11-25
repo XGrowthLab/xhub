@@ -191,6 +191,30 @@ it.each(["zh-CN", "en"] as const)("%s 取消诊断不推断用户停止或供应
  expect(region).not.toHaveTextContent(translate(locale,"logDiagnostics.noUpstreamError"));
 });
 
+/** 使用两种 499 传输阶段，核对中英文首屏和已收到的供应商信息；内存渲染，卸载自动清理。 */
+it.each(["zh-CN", "en"] as const)("%s 在首屏区分等待响应与传输中断", (locale) => {
+  const beforeHeaders = logEntry({
+    status: "error",
+    metadata: { http_status: 499, upstream_response: { status_code: 0, failure: { phase: "upstream_request", kind: "request_canceled" } } },
+  });
+  const { rerender } = render(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={beforeHeaders} /></I18nProvider>);
+  expect(screen.getByRole("alert")).toHaveTextContent(translate(locale, "logDiagnostics.canceledWaitingForUpstream"));
+  expect(screen.getByRole("alert")).not.toHaveTextContent(translate(locale, "logDiagnostics.upstreamError"));
+  const duringResponse = logEntry({
+    status: "error",
+    metadata: { http_status: 499, upstream_response: {
+      status_code: 503,
+      failure: { phase: "response_transfer", kind: "request_canceled" },
+      error: { error: { message: "Original vendor error" } },
+    } },
+  });
+  rerender(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={duringResponse} /></I18nProvider>);
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(translate(locale, "logDiagnostics.canceledDuringUpstreamResponse", { status: 503 }));
+  expect(alert).toHaveTextContent("Original vendor error");
+  expect(alert).not.toHaveTextContent(translate(locale, "logDiagnostics.canceledWaitingForUpstream"));
+});
+
 /** 写客户端失败日志以中英文说明未知来源；普通日志不显示该提示，组件自动清理。 */
 it.each(["zh-CN", "en"] as const)("%s 客户端写入失败不推断责任", (locale) => {
   const failure = {phase:"client_write",kind:"client_write_error",transport_error:"synthetic write failure"};

@@ -47,7 +47,7 @@ type ForwardResponse struct {
 // 过滤客户端鉴权与逐跳头后设置登记的供应商认证，复制 client 禁止重定向；若 context 有截止时间则由它独占超时控制。
 // 安装原始诊断后读取；2xx SSE 且有 w 时逐行保留换行转发并 Flush，事件/行上限 8 MiB，必须观测正常终态。
 // 完整 Responses completed 或明确输出上限终态可立即结束；其他协议保留既有读取规则。
-// 多个图像事件保留事实并阻止当前单规格自动定价；同步正文最多 64 MiB，不将缺失统计伪造成付费事实。
+// 多个图像事件保留事实并阻止当前单规格自动定价；同步正文最多 64 MiB。底层读取报错但已读到完整供应商错误包络时，保留已观测的 HTTP 状态和字节。
 // 本函数关闭上游 Body；流式开始后可能已写状态或部分正文，调用方必须检查 Streamed 并禁止重复写出/危险重试。
 // 不负责路由重试、任务归属或结算去重，副作用为单次出站 HTTP 及可选客户端输出。
 func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, address, key string, body []byte, in http.Header, transport providercontract.Transport, w http.ResponseWriter) (ForwardResponse, error) {
@@ -174,6 +174,10 @@ func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, addre
 	result.Body, err = io.ReadAll(io.LimitReader(resp.Body, (64<<20)+1))
 	if err == nil && len(result.Body) > 64<<20 {
 		err = fmt.Errorf("bypass response exceeds 64 MiB")
+	}
+	if err != nil && result.Diagnostics.ObserveCompleteErrorBody(result.Body) && r.Context().Err() == nil {
+		// 完整错误先于 HTTP 结束标记到达；调用仍可接收时按实际 HTTP 错误路由，诊断保留读取失败。
+		return result, nil
 	}
 	return result, err
 }

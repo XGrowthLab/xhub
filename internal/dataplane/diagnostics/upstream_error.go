@@ -1,6 +1,7 @@
 package diagnostics
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,29 @@ import (
 // UpstreamError 保存供应商明确返回的错误对象及关联 ID，不把 HTTP 200 的流内错误误当作成功。
 // 由 ExtractUpstreamError 创建，协议适配器和执行器消费；Envelope 只包含错误及关联信息，不包含生成正文。
 type UpstreamError struct{ Envelope map[string]any }
+
+// ObserveCompleteErrorBody 从读取中断前收到的字节中提取可完整解码的上游 HTTP 错误。
+// 参数 d 是该次 HTTP 诊断，body 是已读字节。成功更新 Error 并返回 true；非错误状态、残片和过大正文保持已有事实。
+// 透传和兼容执行器调用以保留错误证据；不改响应字节、读取错误或 HTTP 状态，也不处理生成正文。
+func (d *UpstreamDiagnostics) ObserveCompleteErrorBody(body []byte) bool {
+	if d == nil || d.StatusCode < 400 || len(body) == 0 || len(body) > 1<<20 {
+		return false
+	}
+	if !json.Valid(body) {
+		return false
+	}
+	var doc map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if decoder.Decode(&doc) != nil {
+		return false
+	}
+	if known := ExtractUpstreamError(doc); known != nil {
+		d.Error = known.Envelope
+		return true
+	}
+	return false
+}
 
 // Error 返回完整 JSON 错误描述，供执行器记录和非结构化错误调用方使用；不修改对象。
 // 接收者由 ExtractUpstreamError 构造，序列化失败时返回固定诊断，不能伪装成成功。

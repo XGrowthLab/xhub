@@ -1,9 +1,11 @@
 package regression
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -26,8 +28,8 @@ func TestCompactHistoryWriteFailureFailsResponse(t *testing.T) {
 				if strings.Contains(string(got.body), "response.completed") || !strings.Contains(string(got.body), "response.failed") {
 					t.Fatalf("历史写失败仍发布成功流: %s", got.describe())
 				}
-			} else if got.status != 502 || !strings.Contains(string(got.body), "history_unavailable") {
-				t.Fatalf("历史写失败未明确报错: %s", got.describe())
+			} else {
+				assertSearchableResponsesFailure(t, h, h.adminSession(), got, "history_unavailable")
 			}
 		})
 	}
@@ -64,9 +66,35 @@ func TestCompactHistoryNativeWriteFailure(t *testing.T) {
 				if strings.Contains(string(got.body), "response.completed") || !strings.Contains(string(got.body), "response.failed") {
 					t.Fatalf("原生流错误被标记成功: %s", got.describe())
 				}
-			} else if got.status != 502 || !strings.Contains(string(got.body), "history_unavailable") {
-				t.Fatalf("原生请求错误未暴露: %s", got.describe())
+			} else {
+				assertSearchableResponsesFailure(t, h, h.adminSession(), got, "history_unavailable")
 			}
 		})
+	}
+}
+
+// assertSearchableResponsesFailure 核对客户端收到的结构化网关错误、详情页和数据库错误搜索可用同一原因定位。
+// t 与 h 提供隔离 HTTP/PG 测试，admin 为日志读取身份，got 和 kind 为实际响应与预期类型；不单独创建资源。
+func assertSearchableResponsesFailure(t *testing.T, h *harness, admin string, got reply, kind string) {
+	t.Helper()
+	fields, ok := got.json()["error"].(map[string]any)
+	if got.status != 502 || !ok || fields["type"] != kind {
+		t.Fatalf("客户端未收到 %s 类型的错误: %s", kind, got.describe())
+	}
+	id := got.header("x-litellm-call-id")
+	entry := logDetail(t, h, admin, id)
+	var detail any
+	if err := json.Unmarshal([]byte(firstString(entry, "error")), &detail); err != nil || string(mustJSON(detail)) != string(mustJSON(got.json())) {
+		t.Fatalf("日志详情没有返回实际的网关错误: client=%s log=%v", got.describe(), entry["error"])
+	}
+	reason := fmt.Sprint(fields["message"])
+	// JSON 摘要会转义 URL 错误里的引号；检索关键错误词，详情仍要求完整消息逐字段一致。
+	if strings.Contains(reason, "EOF") {
+		reason = "EOF"
+	}
+	query := url.Values{"status_filter": {"error"}, "error_message": {reason}}
+	rows := rowsOf(h.ok("GET", "/spend/logs/ui?"+query.Encode(), admin, nil), "data")
+	if reason == "" || findLogByRequestID(rows, id) == nil {
+		t.Fatalf("按实际原因 %q 找不到失败请求 %s: %v", reason, id, rows)
 	}
 }

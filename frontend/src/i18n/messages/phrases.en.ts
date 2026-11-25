@@ -108,6 +108,8 @@ export const enPhrases: Record<string, string> = {
   "logDiagnostics.rejectedField": "Field",
   "logDiagnostics.targetProtocol": "Target protocol",
   "logDiagnostics.cancelUnknown": "The request connection was canceled. Who initiated it is unknown; this does not prove a user stopped generation.",
+  "logDiagnostics.canceledWaitingForUpstream": "The connection closed while waiting for upstream. No upstream HTTP response was received.",
+  "logDiagnostics.canceledDuringUpstreamResponse": "The connection closed during the response after upstream returned HTTP {status}.",
   "logDiagnostics.clientWriteError": "Writing the response to the client failed. The reason is unknown; this does not prove the user stopped generation or that the upstream failed.",
   "logDiagnostics.upstreamError": "Observed upstream error",
   "logDiagnostics.bodyOmitted": "The request body was not fully read and was not saved. Bytes read, the size limit, and the error reason were retained.",

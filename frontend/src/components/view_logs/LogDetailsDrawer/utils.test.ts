@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sortSessionLogs } from "./utils";
+import { checkHasResponse, sortSessionLogs } from "./utils";
 
 const log = (id: string, startTime: string, endTime: string, request_duration_ms?: number) => ({
   request_id: id,
@@ -40,5 +40,16 @@ describe("sortSessionLogs", () => {
     const input = [...rows];
     sortSessionLogs(input, "duration");
     expect(ids(input)).toEqual(ids(rows));
+  });
+});
+
+/** 验证日志抽屉解析任意响应时可安全判断正文状态，覆盖 JSON 空值、标量、数组及非 JSON。使用内存夹具，无清理。 */
+describe("checkHasResponse", () => {
+  it.each([
+    [null, false], [undefined, false], ["null", false], ['""', false], ["  ", false],
+    [{}, false], ["[]", false], ["false", true], [0, true], ['"null"', true],
+    ["upstream returned 502", true], [{ error: { message: "unavailable" } }, true], [[0], true],
+  ])("checks response %j without throwing", (response, expected) => {
+    expect(checkHasResponse(response)).toBe(expected);
   });
 });

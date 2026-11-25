@@ -57,3 +57,32 @@ func TestForwardOfficialClientWriteFailure(t *testing.T) {
 		})
 	}
 }
+
+// TestForwardOfficialReadInterruptedError 用真实 HTTP 夹具验证完整错误包络与 JSON 残片的处理。
+// 参数 t 为测试上下文；故意发出偏长的 Content-Length，前者保留字节、状态、读错误，后者保留 EOF 故障；服务器自动关闭。
+func TestForwardOfficialReadInterruptedError(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		complete   bool
+	}{
+		{"complete error", "{ \"error\": { \"message\": \"Vendor busy\" } }\n", true},
+		{"partial error", `{"error":{"message":"Vendor busy"`, false},
+		{"normal result", `{"content":"not an error"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Length", "128")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(503)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+			tr := providercontract.Transport{Protocol: "anthropic-messages", Auth: providercontract.AuthConfig{Header: "x-api-key"}}
+			got, err := ForwardOfficial(server.Client(), httptest.NewRequest("POST", "/", nil), "POST", server.URL, "test-key", []byte("{}"), nil, tr, nil)
+			if (err == nil) != tc.complete || (!tc.complete && !errors.Is(err, io.ErrUnexpectedEOF)) || got.StatusCode != 503 ||
+				string(got.Body) != tc.body || got.Diagnostics.ReadError == "" || (got.Diagnostics.Error != nil) != tc.complete {
+				t.Fatalf("完整错误与截断正文未正确区分: result=%+v diagnostics=%+v err=%v", got, got.Diagnostics, err)
+			}
+		})
+	}
+}

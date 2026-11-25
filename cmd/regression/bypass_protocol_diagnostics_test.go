@@ -17,6 +17,7 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 		name, transport, endpoint, path, outbound string
 	}{
 		{"chat", "bypass_openai_chat", "bypass:openai-chat", "/bypass/openai/v1/chat/completions", "/v1/chat/completions"},
+		{"anthropic", "bypass_anthropic_messages", "bypass:anthropic-messages", "/bypass/anthropic/v1/messages", "/v1/messages"},
 		{"responses", "bypass_openai_responses", "bypass:openai-responses", "/bypass/openai/v1/responses", "/v1/responses"},
 		{"gemini", "gemini_generate_content", "bypass:gemini", "/bypass/gemini/v1beta/models/audit:generateContent", "/v1beta/models/upstream:generateContent"},
 		{"vertex", "vertex_generate_content", "bypass:vertex", "/bypass/vertex/v1/models/audit:generateContent", "/models/upstream:generateContent"},
@@ -27,6 +28,7 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 			google := protocol.name == "gemini" || protocol.name == "vertex"
 			const fieldError = `{"error":{"code":400,"message":"Invalid request","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","input":"private-echo"}]}]}}`
 			const embeddedError = `{"error":{"code":"embedded_failure","message":"Generation failed"},"usage":{"input_tokens":8,"output_tokens":2}}`
+			const vendorError = "{ \"type\": \"error\", \"error\": { \"type\": \"overloaded_error\", \"message\": \"Provider saturated\" }, \"request_id\": \"req-vendor-502\" }\n"
 			var calls atomic.Int32
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(io.Discard, r.Body)
@@ -50,6 +52,14 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 				case "embedded-error":
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = io.WriteString(w, embeddedError)
+				case "vendor-error", "interrupted-error":
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Request-Id", "req-vendor-502")
+					if r.URL.Query().Get("fixture") == "interrupted-error" {
+						w.Header().Set("Content-Length", fmt.Sprint(len(vendorError)+100))
+					}
+					w.WriteHeader(502)
+					_, _ = io.WriteString(w, vendorError)
 				case "stream":
 					w.Header().Set("Content-Type", "text/event-stream")
 					_, _ = io.WriteString(w, "event: ping\ndata: {}\n\n")
@@ -77,6 +87,8 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 			cases := []failureCase{
 				{"disconnect", "transport_error", "EOF", 0, 502, 502, 2},
 				{"empty-error", "", "upstream returned HTTP 502 without an error body", 502, 502, 502, 2},
+				{"vendor-error", "", "Provider saturated", 502, 502, 502, 2},
+				{"interrupted-error", "", "Provider saturated", 502, 502, 502, 2},
 				{"empty-success", "empty_response", "empty dialogue response", 200, 502, 502, 1},
 				{"embedded-error", "", "embedded_failure", 200, 200, 502, 1},
 				{"stream", "transport_error", "native stream ended without successful completion", 200, 200, 502, 1},
@@ -94,6 +106,9 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					body := map[string]any{"model": "audit", "stream": stream, "messages": []any{map[string]any{"role": "user", "content": "Audit diagnostic."}}}
 					if protocol.name == "responses" {
 						body = map[string]any{"model": "audit", "input": "Audit diagnostic.", "stream": stream}
+					}
+					if protocol.name == "anthropic" {
+						body["max_tokens"] = 32
 					}
 					if google {
 						body = map[string]any{"contents": []any{map[string]any{"parts": []any{map[string]any{"text": "Audit diagnostic."}}}}}
@@ -113,6 +128,11 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					if tc.fixture == "embedded-error" && reply.text() != embeddedError {
 						t.Fatalf("HTTP 200 中的供应商错误正文被改写: %s", reply.describe())
 					}
+					if tc.fixture == "vendor-error" || tc.fixture == "interrupted-error" {
+						if reply.text() != vendorError || reply.header("Request-Id") != "req-vendor-502" {
+							t.Fatalf("供应商原始错误正文或请求 ID 被丢弃: %s", reply.describe())
+						}
+					}
 					detail := logDetail(t, h, admin, reply.header("x-litellm-call-id"))
 					metadata, _ := detail["metadata"].(map[string]any)
 					diag, _ := metadata["upstream_response"].(map[string]any)
@@ -126,6 +146,9 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					}
 					if tc.kind != "" && failure["kind"] != tc.kind {
 						t.Fatalf("失败类型不符: %v", diag)
+					}
+					if tc.fixture == "interrupted-error" && !strings.Contains(fmt.Sprint(diag["read_error"]), "unexpected EOF") {
+						t.Fatalf("HTTP 正文传输中断的诊断丢失: %v", diag)
 					}
 				})
 			}
