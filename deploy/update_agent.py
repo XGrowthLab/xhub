@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 from http.server import BaseHTTPRequestHandler
+import ipaddress
 import json
 import logging
 import os
@@ -20,14 +21,36 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
 
 if __package__:
-    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, SERVICES, validate_manifest, version_key
+    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
 else:
-    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, SERVICES, validate_manifest, version_key
+    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
 
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
+CHANNELS = {"stable", "beta"}
 CHECK_TTL = 3600
 URLS = ("http://127.0.0.1:4000/health/readiness", "http://127.0.0.1:3000/login")
+HEALTH_NETWORKS = tuple(ipaddress.ip_network(value) for value in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 LOG = logging.getLogger("xhub-updater")
+
+
+class UntrackedRelease(ValueError):
+    """运行镜像不是可回退的发布版本。允许读取发布，但不能以此为起点切换。"""
+
+    def __init__(self, message, build=None):
+        """保存原因和可选的构建标识供状态展示。构建信息不能充当发布清单或回退目标。"""
+        super().__init__(message)
+        self.build = build
+
+
+def valid_health_url(url):
+    """检查管理员传入的 HTTP 探针地址，只接受回环或私网 IPv4 字面量及合法端口。"""
+    match = re.fullmatch(r"http://([0-9.]+):(\d{1,5})/[-\w/]*", url)
+    if not match or not 1 <= int(match[2]) <= 65535:
+        return False
+    try:
+        return any(ipaddress.IPv4Address(match[1]) in network for network in HEALTH_NETWORKS)
+    except ipaddress.AddressValueError:
+        return False
 
 
 class TrustedRedirect(HTTPRedirectHandler):
@@ -148,8 +171,8 @@ class Compose:
         return images[0]
 
     def current(self):
-        """检查两个运行容器是否属于同一发布并有可恢复摘要；否则需人工完成首装。"""
-        releases, digests = {}, {}
+        """返回可回退的运行发布。非发布镜像只向状态调用方报告匹配的构建信息。"""
+        running = {}
         for service in SERVICES:
             ident = self.compose("ps", "-q", service)
             if not re.fullmatch(r"[0-9a-f]{12,64}", ident):
@@ -158,17 +181,23 @@ class Compose:
             if not container["State"]["Running"]:
                 raise ValueError("service not running")
             image = self.image(container["Image"])
-            releases[service] = self.release_labels(image["Config"].get("Labels"))
-            prefix = f"{self.namespace}-{service}@sha256:"
-            match = [x for x in image.get("RepoDigests") or [] if x.startswith(prefix)]
-            # Compose 已固定摘要时优先采用其明确引用；标签部署必须有唯一能回退的摘要。
-            reference = container["Config"]["Image"]
-            if reference in match:
-                digests[service] = reference
-            elif len(match) == 1:
-                digests[service] = match[0]
-            else:
-                raise ValueError("missing or ambiguous rollback image")
+            running[service] = (container["Config"]["Image"], image)
+        labels = {service: image["Config"].get("Labels") for service, (_, image) in running.items()}
+        releases, digests = {}, {}
+        try:
+            for service, (reference, image) in running.items():
+                releases[service] = self.release_labels(labels[service])
+                prefix = f"{self.namespace}-{service}@sha256:"
+                match = [x for x in image.get("RepoDigests") or [] if x.startswith(prefix)]
+                # Compose 已固定摘要时优先采用其明确引用；标签部署必须有唯一能回退的摘要。
+                if reference in match:
+                    digests[service] = reference
+                elif len(match) == 1:
+                    digests[service] = match[0]
+                else:
+                    raise UntrackedRelease("missing or ambiguous rollback image")
+        except UntrackedRelease as error:
+            raise UntrackedRelease(str(error), self.build_identity(labels)) from error
         version, revision, compatibility = releases["gateway"]
         if releases["console"] != (version, revision, compatibility):
             raise ValueError("application images do not belong to the same release")
@@ -176,15 +205,31 @@ class Compose:
                                   "database_compatibility": compatibility, "images": digests}, self.namespace)
 
     @staticmethod
+    def build_identity(labels):
+        """从两个运行镜像的标签提取一致的 Git 提交。缺失、无效或混合部署时返回 None。"""
+        if any(not isinstance(labels[service], dict) for service in SERVICES):
+            return None
+        revision, console_revision = (labels[service].get("org.opencontainers.image.revision") for service in SERVICES)
+        if not isinstance(revision, str) or revision != console_revision or not REVISION.fullmatch(revision):
+            return None
+        return {"revision": revision, "main": all(labels[service].get("org.opencontainers.image.version") == "main"
+                                                 for service in SERVICES)}
+
+    @staticmethod
     def release_labels(labels):
         """把 Docker 标签对象转为版本、提交、兼容标识三元组；缺少或无效的发布标签抛 ValueError。"""
         if not isinstance(labels, dict):
-            raise ValueError("image has no release labels")
+            raise UntrackedRelease("image has no release labels")
         version, revision, compatibility = (labels.get(key) for key in (
             "org.opencontainers.image.version", "org.opencontainers.image.revision", COMPAT_LABEL))
         if not all(isinstance(value, str) and value for value in (version, revision, compatibility)):
-            raise ValueError("image has incomplete release labels")
-        return version if version.startswith("v") else "v" + version, revision, compatibility
+            raise UntrackedRelease("image has incomplete release labels")
+        version = version if version.startswith("v") else "v" + version
+        try:
+            version_key(version)
+        except ValueError as error:
+            raise UntrackedRelease("image was built outside a versioned release") from error
+        return version, revision, compatibility
 
     def prepare(self, manifest, pull):
         """拉取并验证两份镜像与清单相符。完整通过前不修改任何 Compose 配置。"""
@@ -221,7 +266,7 @@ class Compose:
 
 
 class NoRedirect(HTTPRedirectHandler):
-    """健康检查只访问预先配置的主机回环地址。"""
+    """健康检查只访问预先配置的回环或私网地址。"""
 
     def redirect_request(self, *args):
         """不跟随服务健康检查响应中的重定向地址。"""
@@ -231,10 +276,11 @@ class NoRedirect(HTTPRedirectHandler):
 class Agent:
     """管理单个升级或回退事务，并在 IPC 或进程退出后从持久状态恢复。"""
 
-    def __init__(self, directory, compose, releases):
-        """读取上一次状态；主进程先持有目录排他锁，处理器只并行访问本实例。"""
+    def __init__(self, directory, compose, releases, channel_switch=False):
+        """加载上次事务及渠道。仅当主机允许控制台切换时，已保存的渠道覆盖启动参数。"""
         self.file = directory / "state.json"
         self.compose, self.releases = compose, releases
+        self.channel_switch = channel_switch
         self.lock = threading.RLock()
         self.state = {"stage": "idle", "updated_at": 0}
         try:
@@ -243,23 +289,33 @@ class Agent:
                     persisted = read_json(stream, 128 << 10)
                 if not isinstance(persisted, dict) or persisted.get("stage") not in ACTIVE | {"idle", "failed", "succeeded"}:
                     raise ValueError("invalid saved update state")
+                channel = persisted.get("channel")
+                if channel is not None and channel not in CHANNELS:
+                    raise ValueError("invalid saved release channel")
                 self.state.update(persisted)
+                if self.channel_switch and channel is not None:
+                    self.releases.beta = channel == "beta"
         except Exception:
             # 文件不可信时保留原始证据，禁止后续更新覆盖它。
             LOG.exception("Unable to load updater state")
             self.state.update(stage="failed", error="recovery_required")
             return
         self.recover()
+        build = None
         try:
             current = compose.current()
+        except UntrackedRelease as error:
+            current = None
+            build = error.build
         except Exception:
             LOG.exception("Unable to inspect the running release")
             current = None
         try:
-            self.record(current=current)
+            self.record(current=current, current_build=build)
         except Exception:
             LOG.exception("Unable to persist the running release")
             self.state["current"] = current
+            self.state["current_build"] = build
 
     def record(self, **fields):
         """原子更新对象和磁盘；写盘成功前不发布状态，供工作线程与 IPC 共用。"""
@@ -348,17 +404,21 @@ class Agent:
                                  "prerelease": version_key(manifest["version"])[3] < 3,
                                  "notes": checked["notes"], "compatible": bool(current and
                                      current["database_compatibility"] == manifest["database_compatibility"])}
-            return {"enabled": True, "channel": "beta" if self.releases.beta else "stable", "stage": state["stage"],
-                    "current": current["version"] if current else None, "candidate": candidate,
+            return {"enabled": True, "channel": "beta" if self.releases.beta else "stable",
+                    "channel_switch_enabled": self.channel_switch, "stage": state["stage"],
+                    "current": current["version"] if current else None,
+                    "current_build": None if current else state.get("current_build"), "candidate": candidate,
                     "previous": previous["version"] if previous else None, "error": state.get("error"),
                     "recovery_required": state.get("error") == "recovery_required",
                     "checked": checked_at, "updated_at": state["updated_at"]}
 
     def submit(self, action, body):
-        """校验目标版本并取得唯一操作槽；操作记录落盘后才向浏览器确认接收。"""
+        """串行处理控制请求。渠道切换同步完成，检查与镜像切换落盘后由后台线程执行。"""
         with self.lock:
             if self.state["stage"] in ACTIVE or self.state.get("pending") or self.state.get("error") == "recovery_required":
                 return 409, "busy"
+            if action == "channel":
+                return self.change_channel(body["channel"], body["actor"])
             current = self.state.get("current")
             if action == "apply":
                 candidate = self.status()["candidate"]
@@ -387,12 +447,39 @@ class Agent:
                 return 503, "update_agent_unavailable"
             return 202, self.status()
 
+    def change_channel(self, channel, actor):
+        """在 submit 持锁时保存平台管理员选的渠道，清除旧检查结果；写盘失败继续使用原渠道。"""
+        if not self.channel_switch:
+            return 403, "channel_locked"
+        if channel not in CHANNELS:
+            return 400, "invalid_channel"
+        if self.releases.beta == (channel == "beta"):
+            return 200, self.status()
+        try:
+            self.record(channel=channel, channel_changed_by=actor, channel_changed_at=int(time.time()),
+                        checked=None, checked_at=0)
+        except Exception:
+            self.log_failure("save release channel")
+            return 503, "update_agent_unavailable"
+        self.releases.beta = channel == "beta"
+        return 200, self.status()
+
     def execute(self, action, expected, target):
         """后台检查发布或执行切换。失败只暴露稳定错误码，磁盘日志保留操作身份。"""
         try:
-            current = self.compose.current()
+            build = None
+            try:
+                current = self.compose.current()
+            except UntrackedRelease as error:
+                # 非发布镜像也能查阅更新信息，切换仍需要经过可回退的发布验证。
+                if action != "check":
+                    raise
+                current = None
+                build = error.build
             if action == "check":
-                self.record(current=current, checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
+                # 发布查询出错时也保留这次从容器读到的实际构建。
+                self.record(current=current, current_build=build)
+                self.record(checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
                 return
             if current != expected or target["database_compatibility"] != current["database_compatibility"]:
                 self.record(stage="failed", error="invalid_target")
@@ -445,7 +532,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """严格限定操作、参数和调用方标识；提交前的错误没有副作用。"""
         action = self.path.lstrip("/")
-        fields = {"check": {"actor"}, "apply": {"actor", "version", "revision"}, "rollback": {"actor", "version"}}
+        fields = {"check": {"actor"}, "apply": {"actor", "version", "revision"},
+                  "rollback": {"actor", "version"}, "channel": {"actor", "channel"}}
         try:
             size = int(self.headers.get("Content-Length", "-1"))
             if action not in fields or not 0 <= size <= 1024:
@@ -477,6 +565,7 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--allow-beta", action="store_true")
+    parser.add_argument("--enable-channel-switch", action="store_true")
     parser.add_argument("--manifest-file", type=Path)
     parser.add_argument("--namespace", default=NAMESPACE)
     parser.add_argument("--health-url", action="append")
@@ -486,8 +575,8 @@ def main():
     health = args.health_url or URLS
     if not 5 <= args.health_timeout <= 300:
         parser.error("health timeout must be between 5 and 300 seconds")
-    if len(health) != 2 or any(not re.fullmatch(r"http://127\.0\.0\.1:\d{1,5}/[-\w/]*", url) for url in health):
-        parser.error("expected gateway and console loopback health URLs")
+    if len(health) != 2 or any(not valid_health_url(url) for url in health):
+        parser.error("expected gateway and console health URLs on loopback or private IPv4")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", args.project):
         parser.error("invalid Compose project")
     if not re.fullmatch(r"[a-z0-9.:/-]+/[a-z0-9_-]+", args.namespace):
@@ -506,7 +595,8 @@ def main():
         compose = Compose(args.compose.resolve(), args.state_dir / "compose.override.json",
                           args.project, args.namespace, health, args.health_timeout)
         # 先恢复上次事务，再接受客户端请求，避免启动恢复期间的 IPC 连接超时积压。
-        agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace))
+        agent = Agent(args.state_dir, compose, Releases(args.allow_beta, args.manifest_file, args.namespace),
+                      args.enable_channel_switch)
         with socketserver.ThreadingUnixStreamServer(str(args.socket), Handler) as server:
             server.daemon_threads = True
             os.chmod(args.socket, 0o660)

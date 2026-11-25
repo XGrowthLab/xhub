@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { fullErrorDetails, isRequestFailure } from "./logErrors";
 
+/** 旧详情缺少错误正文时仍可复制已记录的诊断，无诊断保持为空。内存夹具无需清理。 */
+it("从详情元数据恢复可复制的失败证据", () => {
+  const failure = { kind: "timeout", phase: "upstream_request", transport_error: "context deadline exceeded" };
+  expect(fullErrorDetails({ response: {}, metadata: { upstream_response: { failure } } })).toContain("context deadline exceeded");
+  expect(fullErrorDetails({ response: {}, metadata: { upstream_response: { read_error: "unexpected EOF" } } })).toBe("unexpected EOF");
+});
+
 describe("request error diagnostics", () => {
   /** 前置成功、旧版和后台失败状态及 HTTP 错误；验证统一判定边界，纯函数无需清理。 */
   it.each([

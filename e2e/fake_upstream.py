@@ -197,6 +197,9 @@ class Handler(BaseHTTPRequestHandler):
         if req is None and task in self.ark_tasks:
             # 特定生命周期夹具第一次查询保持运行，下一次完成；其他既有调用保持立即完成。
             facts = self.ark_tasks[task]
+            if any(item.get("text") == "Return an empty polling error." for item in facts.get("content", [])):
+                self._response(502, b"", "text/plain")
+                return True
             controlled = any(item.get("text") in ("e2e-task-lifecycle", "e2e-task-failure") for item in facts.get("content", []))
             failed = any(item.get("text") == "e2e-task-failure" for item in facts.get("content", []))
             polls = facts.get("_test_polls", 0)
@@ -327,11 +330,31 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
         if req.get("model") == "e2e-empty-messages" and self.path.split("?")[0] == "/v1/messages":
-            # 包含触发文本时返回空 200；其他消息返回带用量的合法响应。
-            if any(m.get("content") == "Trigger empty response." for m in req.get("messages", [])):
+            # 区分首包前断连、空错误正文和空成功正文；其他消息返回带用量的合法响应。
+            contents = [m.get("content") for m in req.get("messages", [])]
+            if "Disconnect before response." in contents:
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_WR)
+            elif "Return an empty 502." in contents:
+                self._response(502, b"", "text/plain")
+            elif "End the stream early." in contents:
+                self._response(200, b'event: ping\ndata: {"type":"ping"}\n\n', "text/event-stream")
+            elif "Trigger empty response." in contents:
                 self._response(200, b"", "application/json")
             else:
                 self._json({"id": "msg_recovered", "type": "message", "role": "assistant", "model": "e2e-empty-messages", "content": [{"type": "text", "text": "Recovered"}], "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 2}})
+            return
+        # 隔离透传失败夹具只匹配测试专用上游模型。
+        fixture_path = urlsplit(self.path)
+        if req.get("model") == "e2e-native-diagnostics" or "/models/e2e-native-diagnostics:" in fixture_path.path:
+            if fixture_path.query == "fixture=invalid-field":
+                self._response(400, b'{"error":{"code":400,"message":"Invalid request","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","input":"private-echo"}]}]}}', "application/json")
+            elif fixture_path.query == "fixture=incomplete":
+                self._sse([{"type": "response.incomplete", "response": {"id": "resp_e2e_audit", "status": "incomplete", "incomplete_details": {"reason": "content_filter"}}}])
+            elif fixture_path.query == "fixture=embedded-error":
+                self._json({"error": {"code": "embedded_failure", "message": "Generation failed"}})
+            else:
+                self._response(200, b"", "application/json")
             return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":

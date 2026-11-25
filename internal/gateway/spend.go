@@ -321,9 +321,8 @@ func (s *Server) recordSpend(w http.ResponseWriter, p *auth.Principal, callID, a
 		// 生命周期直接事务持久化，避免 Redis 首个不可变事件吞掉后续状态和结算。
 		// 原请求的归属是更新授权边界，费用仅在数据库锁内首次成功结算时累加。
 		row.RequestID, row.Status = note.TaskRequestID, note.TaskStatus
-		// 任务失败可能由 HTTP 200 的查询响应表达，不能只按 HTTP 状态判断。
-		// 失败任务保留有界错误摘要；原始正文只由已授权的正文策略保存。
-		if row.Status == "failed" {
+		// HTTP 失败已经生成摘要（包括没有正文的 HTTP 错误）；HTTP 200 的任务失败从状态正文补记。
+		if row.Status == "failed" && status < 400 {
 			row.Error = requestlog.FailureSummary(ex.rawResponse)
 		}
 		rec := usageFromSpend(row, spend, ex.messages, row.Response, ex.proxy, start, end)

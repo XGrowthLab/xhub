@@ -496,7 +496,8 @@ test("退役接口不进入模型日志且真实推理错误继续可见", async
   }
   await openLogDetails(page, callId);
   const diagnostic = page.getByRole("dialog").getByRole("region", { name: /完整错误详情|全部错误详情|Full Error Details/ }).locator("pre");
-  expect(await diagnostic.textContent()).toBe(await rejected.text());
+  // 关闭正文捕获后持久化的是有界 JSON 摘要，比较诊断字段而非 HTTP 编码器追加的换行。
+  expect(JSON.parse((await diagnostic.textContent()) ?? "")).toEqual(await rejected.json());
 });
 }
 /** 用途：注册独立场景「错误日志独立记录并显示诊断：text」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
@@ -618,7 +619,8 @@ test("错误日志独立记录并显示诊断：rejected", async ({ page }) => {
       } else if (kind === "network") {
         await expect(diagnostic).toContainText(/EOF|connection|network/i);
       } else {
-        expect(await diagnostic.textContent()).toBe(await response.text());
+        // 正文捕获关闭时，校验结构化摘要完整保留错误字段。
+        expect(JSON.parse((await diagnostic.textContent()) ?? "")).toEqual(await response.json());
       }
     } finally {
       if (deployment) {

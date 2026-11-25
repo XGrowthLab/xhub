@@ -77,6 +77,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
   const earlyClose = metadata.upstream_response?.usage_parse_error === "upstream body closed before EOF";
   const hasError = isRequestFailure(logEntry);
   const errorDetails = hasError ? fullErrorDetails(logEntry) : "";
+  const errorSummary = hasError ? logErrorSummary(logEntry, (status) => t("logsUX.upstreamEmptyErrorBody", { status })) : "";
   const errorInfo = hasError ? metadata.error_information : null;
   const isClassifier =
     metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
@@ -118,7 +119,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
         },
       };
     }
-    return loggedResponse(formatData(logEntry.response));
+    return null;
   };
 
   return (
@@ -132,9 +133,11 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
           <CircleAlert className="size-4 shrink-0 text-destructive" />
           <div>
             <div className="font-medium text-destructive">{t(logOutcomeKey(logEntry))}</div>
-            <p className="text-muted-foreground">{t("logsUX.causeUnknown")}</p>
             {metadata.http_status != null && <div>{t("HTTP Status")}: {metadata.http_status}</div>}
-            {errorInfo ? <ErrorDescription errorInfo={errorInfo} /> : <p className="mt-1 break-words">{logErrorSummary(logEntry)}</p>}
+            {errorInfo ? <ErrorDescription errorInfo={errorInfo} /> : errorSummary && <p className="mt-1 break-words">{errorSummary}</p>}
+            {(!errorSummary || errorSummary === "upstream request failed") && !errorInfo && (
+              <p className="text-muted-foreground">{t("logsUX.causeUnknown")}</p>
+            )}
           </div>
         </div>
       )}
@@ -221,6 +224,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
         <RequestResponseSection
           hasResponse={hasResponse}
           hasError={hasError}
+          errorSummary={errorSummary}
           getRawRequest={() => rawRequest}
           getFormattedResponse={getFormattedResponse}
           logEntry={logEntry}
@@ -725,14 +729,17 @@ function JsonPanel({
 interface RequestResponseSectionProps {
   hasResponse: boolean;
   hasError: boolean;
+  errorSummary: string;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
   logEntry: LogEntry;
 }
 
+/** 展示调用记录的请求与响应；输入为日志及已格式化内容，返回可切换的详情区。JSON 模式明确标记未采集字段。 */
 function RequestResponseSection({
   hasResponse,
   hasError,
+  errorSummary,
   getRawRequest,
   getFormattedResponse,
   logEntry,
@@ -740,6 +747,9 @@ function RequestResponseSection({
   const t = useT();
   const [open, setOpen] = useState(true);
   const [viewMode, setViewMode] = useState<"pretty" | "json">("pretty");
+  const request = getRawRequest();
+  const body = requestBody(request);
+  const hasBody = body != null && (typeof body !== "object" || checkHasMessages(body));
 
   const totalSpend = logEntry.spend ?? 0;
   const promptTokens = logEntry.prompt_tokens || 0;
@@ -785,8 +795,9 @@ function RequestResponseSection({
             <div>
               <TabsContent value="pretty">
                 <PrettyMessagesView
-                  request={getRawRequest()}
+                  request={request}
                   response={getFormattedResponse()}
+                  responseError={errorSummary}
                   model={logEntry.model}
                   metrics={{
                     prompt_tokens: promptTokens,
@@ -798,8 +809,8 @@ function RequestResponseSection({
               </TabsContent>
               <TabsContent value="json">
                 <div className="space-y-4 p-4">
-                  <JsonPanel title={t("Headers")} data={requestHeaders(getRawRequest()) ?? {}} copyLabel={t("Copy headers")} />
-                  <JsonPanel title={t("Request")} data={requestBody(getRawRequest())} copyLabel={t("Copy request")} />
+                  <JsonPanel title={t("Headers")} data={requestHeaders(request)} copyLabel={t("Copy headers")} empty={t("No headers recorded")} />
+                  <JsonPanel title={t("Request")} data={hasBody ? body : null} copyLabel={t("Copy request")} empty={t("No request body recorded")} />
                   <JsonPanel
                     title={t("Response")}
                     data={hasResponse || hasError ? getFormattedResponse() : null}

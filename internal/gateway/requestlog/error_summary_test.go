@@ -52,3 +52,18 @@ func TestFailureSummaryBoundsVendorExtensions(t *testing.T) {
 		t.Fatalf("长错误摘要未保留首尾或未限制长度: %s", got)
 	}
 }
+
+// TestFailureSummaryGoogleFieldViolations 验证已知 Google 字段错误保留具体原因与字段，未声明的扩展和回显仍被丢弃。
+// 参数 t 为测试上下文；使用内存错误 JSON，不访问外部供应商或写库，无需清理。
+func TestFailureSummaryGoogleFieldViolations(t *testing.T) {
+	raw := `{"error":{"code":400,"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generationConfig.temperature","description":"Outside the range","reason":"INVALID_VALUE","input":"private-value"},{"field":{"data":"private-object"}},42]},{"@type":"custom","fieldViolations":[{"field":"private-other"}]}]}}`
+	got := FailureSummary(raw)
+	for _, want := range []string{"google.rpc.BadRequest", "generationConfig.temperature", "Outside the range", "INVALID_VALUE"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("字段诊断遗漏 %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "private-") {
+		t.Fatalf("不应记录未知诊断或请求回显: %s", got)
+	}
+}

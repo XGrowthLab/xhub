@@ -23,7 +23,24 @@ XHub 包含两个服务：Go API 网关默认监听 `4000`，Next.js 控制台�
 
 *图 1：部署入口与各服务职责。浏览器打开控制台，应用直接请求网关；连接关系以正文配置为准。*
 
-克隆仓库，在本机构建服务，再启动：
+### 在 Linux 安装并启用版本检查
+
+使用带 systemd 的 Linux 主机和 Python 3.10 或更高版本，同时准备上表列出的构建工具与 Docker。
+
+```bash
+git clone https://github.com/qiniu/xhub.git
+cd xhub
+bash deploy/build.sh
+sudo python3 -B deploy/install.py
+```
+
+安装命令启动本地构建的网关、控制台及 PostgreSQL 和 Redis，将部署配置保存到 `/opt/xhub`，并启动 systemd 更新执行器。发布端口默认仅监听本机地址。对外开放前请修改初始管理员密码。
+
+打开「管理员设置 → 版本更新」即可检查发布。默认使用正式版渠道。界面一键切换要求有成套发布镜像和镜像仓库访问权限。需要从 x86-64 发布镜像起步时，在新服务器上给 root Docker 登录 GHCR，再运行 `sudo python3 -B deploy/install.py --release`。仓库只有预发布时，`--release` 使用最新预发布镜像首装。需要持续接收预发布时，在安装时加 `--beta`。已有部署与自定义环境见[版本更新指南](development/zh-CN/version-updates.md)。
+
+### 源码构建 Compose 镜像
+
+在 Docker Desktop 或本地开发环境中，可直接运行源码构建的 Compose 服务。Linux 上也可以用前面的安装命令同时启动更新执行器。
 
 ```bash
 git clone https://github.com/qiniu/xhub.git

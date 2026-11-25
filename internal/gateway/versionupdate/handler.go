@@ -35,27 +35,36 @@ type candidate struct {
 	Compatible bool   `json:"compatible"`
 }
 
+// runningBuild 记录两份运行镜像共有的提交，仅供展示，不是可回退的发布。
+type runningBuild struct {
+	Revision string `json:"revision"`
+	Main     bool   `json:"main,omitempty"`
+}
+
 // statusReply 只公开控制台所需字段，从不代理进程路径、配置或原始错误。
 type statusReply struct {
-	Enabled          bool       `json:"enabled"`
-	Channel          string     `json:"channel,omitempty"`
-	Stage            string     `json:"stage,omitempty"`
-	Current          *string    `json:"current,omitempty"`
-	Candidate        *candidate `json:"candidate,omitempty"`
-	Previous         *string    `json:"previous,omitempty"`
-	Error            string     `json:"error,omitempty"`
-	RecoveryRequired bool       `json:"recovery_required,omitempty"`
-	Checked          int64      `json:"checked,omitempty"`
-	UpdatedAt        int64      `json:"updated_at,omitempty"`
+	Enabled              bool          `json:"enabled"`
+	Channel              string        `json:"channel,omitempty"`
+	ChannelSwitchEnabled bool          `json:"channel_switch_enabled,omitempty"`
+	Stage                string        `json:"stage,omitempty"`
+	Current              *string       `json:"current,omitempty"`
+	CurrentBuild         *runningBuild `json:"current_build,omitempty"`
+	Candidate            *candidate    `json:"candidate,omitempty"`
+	Previous             *string       `json:"previous,omitempty"`
+	Error                string        `json:"error,omitempty"`
+	RecoveryRequired     bool          `json:"recovery_required,omitempty"`
+	Checked              int64         `json:"checked,omitempty"`
+	UpdatedAt            int64         `json:"updated_at,omitempty"`
 }
 
 // targetRequest 是浏览器确认过的目标。操作身份从会话取得。
 type targetRequest struct {
 	Version  string `json:"version,omitempty"`
 	Revision string `json:"revision,omitempty"`
+	Channel  string `json:"channel,omitempty"`
 }
 
-// Mount 注册检查、升级和回退入口。socket 为空时只返回功能未启用，且不会连接网络。
+// Mount 注册检查、升级、回退和渠道设置入口。socket 为空时只返回功能未启用，且不会连接网络。
 // 根路径用于状态查询，操作走固定子路径；每次请求单独校验平台管理员会话。
 func Mount(reg util.Registrar, guard AdminGuard, socket string) {
 	var client *http.Client
@@ -72,7 +81,7 @@ func Mount(reg util.Registrar, guard AdminGuard, socket string) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	for _, operation := range []string{"status", "check", "apply", "rollback"} {
+	for _, operation := range []string{"status", "check", "apply", "rollback", "channel"} {
 		pattern := "POST " + Path + "/" + operation
 		if operation == "status" {
 			pattern = "GET " + Path
@@ -135,6 +144,10 @@ func handler(guard AdminGuard, client *http.Client, operation string) http.Handl
 			util.WriteError(w, 409, "update_conflict", "Deployment is busy or the selected version changed")
 			return
 		}
+		if operation == "channel" && response.StatusCode == http.StatusForbidden {
+			util.WriteError(w, 403, "update_channel_locked", "The release channel is controlled by the host")
+			return
+		}
 
 		var state statusReply
 		data, err := io.ReadAll(io.LimitReader(response.Body, 32769))
@@ -148,6 +161,9 @@ func handler(guard AdminGuard, client *http.Client, operation string) http.Handl
 			util.WriteError(w, 502, "update_agent_invalid_response", "Invalid version update service response")
 			return
 		}
+		if build := state.CurrentBuild; build != nil && (state.Current != nil || !revisionPattern.MatchString(build.Revision)) {
+			state.CurrentBuild = nil
+		}
 		util.WriteJSON(w, response.StatusCode, state)
 	}
 }
@@ -157,15 +173,15 @@ func validVersion(version string) bool {
 	return len(version) <= 48 && versionPattern.MatchString(version)
 }
 
-// expectedStatus 区分同步读状态与持久化任务已接收，拒绝其他成功码。
+// expectedStatus 区分同步读取或保存渠道与后台任务已接收，拒绝其他成功码。
 func expectedStatus(operation string) int {
-	if operation == "status" {
+	if operation == "status" || operation == "channel" {
 		return 200
 	}
 	return 202
 }
 
-// decodeTarget 限制请求大小和字段，检查不同操作所需的版本、提交；非法输入不会连接主机执行器。
+// decodeTarget 限制请求大小和字段，校验各操作所需的版本、提交或渠道；非法输入不会连接主机执行器。
 func decodeTarget(w http.ResponseWriter, r *http.Request, operation string) (targetRequest, error) {
 	var target targetRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
@@ -175,6 +191,15 @@ func decodeTarget(w http.ResponseWriter, r *http.Request, operation string) (tar
 	}
 	if decoder.Decode(new(any)) != io.EOF {
 		return target, errors.New("unexpected trailing JSON")
+	}
+	if operation == "channel" {
+		if (target.Channel == "stable" || target.Channel == "beta") && target.Version == "" && target.Revision == "" {
+			return target, nil
+		}
+		return target, errors.New("invalid release channel")
+	}
+	if target.Channel != "" {
+		return target, errors.New("unexpected release channel")
 	}
 	switch operation {
 	case "check":

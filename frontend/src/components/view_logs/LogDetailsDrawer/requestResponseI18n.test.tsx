@@ -121,7 +121,9 @@ describe("请求日志详情双语组件", () => {
   it("LogDetailContent 在 JSON 视图显示英文请求响应标签", async () => {
     setActiveLocale("en");
     const user = userEvent.setup();
-    render(<LogDetailContent logEntry={logEntry()} />);
+    render(<LogDetailContent logEntry={logEntry({ proxy_server_request: {
+      method: "POST", headers: { "x-request-id": "stored-id" }, body: { messages: [{ role: "user", content: "hello" }] },
+    } })} />);
     await user.click(screen.getByRole("tab", { name: "JSON", exact: true }));
     expect(screen.getByText("Headers")).toBeVisible();
     expect(screen.getByText("Request", { selector: "h4" })).toBeVisible();
@@ -141,5 +143,26 @@ describe("请求日志详情双语组件", () => {
     expect(responseSection).not.toBeNull();
     expect(within(responseSection!).getByText(/upstream failed/)).toBeVisible();
     expect(within(responseSection!).getByRole("button", { name: "复制响应" })).toBeEnabled();
+  });
+
+  /** 仅有超时诊断时，两种语言都显示明确原因；JSON 缺失字段显示空状态，组件卸载并恢复语言。 */
+  it.each(["zh-CN", "en"] as const)("LogDetailContent 展示超时证据和未记录字段 %s", async (locale) => {
+    setActiveLocale(locale);
+    const user = userEvent.setup();
+    render(<LogDetailContent logEntry={logEntry({
+      status: "error", messages: {}, response: {}, body_capture_status: "disabled",
+      metadata: { http_status: 502, upstream_response: { status_code: 0, failure: {
+        phase: "upstream_request", kind: "timeout", transport_error: "context deadline exceeded",
+      } } },
+    })} />);
+    const zh = locale === "zh-CN";
+    expect(screen.getByRole("alert")).toHaveTextContent(zh ? "上游请求超时" : "Upstream request timed out");
+    expect(screen.getByRole("alert")).toHaveTextContent("context deadline exceeded");
+    const responseSection = screen.getByText(zh ? "响应" : "Response", { selector: "h4" }).closest("section");
+    expect(responseSection).toHaveTextContent("context deadline exceeded");
+    expect(within(responseSection!).queryByText(zh ? "无可用响应数据" : "No response data available")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "JSON", exact: true }));
+    expect(screen.getByText(zh ? "未记录请求头" : "No headers recorded")).toBeVisible();
+    expect(screen.getByText(zh ? "未记录请求正文" : "No request body recorded")).toBeVisible();
   });
 });

@@ -1,5 +1,6 @@
 """更新清单和事务状态的确定性测试。Docker 实际替换由浏览器回归另行验证。"""
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from deploy.update_manifest import MANIFEST_NAME, NAMESPACE, validate_manifest, version_key
-from deploy.update_agent import ACTIVE, Agent, Compose, Releases, save_json
+from deploy.update_agent import ACTIVE, Agent, Compose, Releases, UntrackedRelease, save_json, valid_health_url
 
 
 def manifest(number, compatibility="a"):
@@ -119,6 +120,97 @@ class UpdateTests(unittest.TestCase):
         source.github = lambda path, asset=False: self.base if asset else rows
         with self.assertRaises(ValueError):
             source.latest()
+
+    def test_running_main_image_can_check_but_cannot_apply(self):
+        """核对两份运行镜像的 main 提交，允许查询且拒绝切换；混用构建时不展示单一提交。"""
+        labels = {
+            "org.opencontainers.image.version": "main",
+            "org.opencontainers.image.revision": self.base["revision"],
+            "io.xhub.database-compatibility": self.base["database_compatibility"],
+        }
+        ids = {"gateway": "1" * 12, "console": "2" * 12}
+        images = {identifier: {"Config": {"Labels": dict(labels)}} for identifier in ids.values()}
+        compose = Compose(self.root / "compose.yml", self.root / "override.json", "test", NAMESPACE, ())
+        with patch.object(compose, "compose", side_effect=lambda *args: ids[args[-1]]), \
+                patch.object(compose, "run", side_effect=lambda _, image: json.dumps([{
+                    "State": {"Running": True}, "Image": image, "Config": {"Image": "test:main"},
+                }])), patch.object(compose, "image", side_effect=images.__getitem__), patch.object(compose, "switch") as switch:
+            self.agent = Agent(self.root, compose, self.releases)
+            expected = {"revision": self.base["revision"], "main": True}
+            self.assertEqual(self.agent.status()["current_build"], expected)
+            status = self.check()
+            self.assertIsNone(status["current"])
+            self.assertEqual(status["current_build"], expected)
+            self.assertEqual(status["candidate"]["version"], self.next["version"])
+            self.assertFalse(status["candidate"]["compatible"])
+            code, _ = self.agent.submit("apply", {"actor": "admin", "version": self.next["version"],
+                                                  "revision": self.next["revision"]})
+            self.assertEqual(code, 409)
+            switch.assert_not_called()
+            images[ids["console"]]["Config"]["Labels"]["org.opencontainers.image.revision"] = "a" * 40
+            self.assertIsNone(self.check()["current_build"])
+        with self.assertRaises(UntrackedRelease):
+            Compose.release_labels({})
+
+    def test_build_identity_ignores_missing_or_untrusted_labels(self):
+        """空标签、畸形提交或未知标签不伪装成发布；合法本地构建只返回受限的标识。"""
+        key = "org.opencontainers.image.revision"
+        labels = {"gateway": {}, "console": None}
+        self.assertIsNone(Compose.build_identity(labels))
+        labels = {"gateway": {key: "invalid"}, "console": {key: "invalid"}}
+        self.assertIsNone(Compose.build_identity(labels))
+        self.assertEqual(Compose.build_identity({"gateway": {key: "a" * 40}, "console": {key: "a" * 40}}),
+                         {"revision": "a" * 40, "main": False})
+
+    def test_health_targets_stay_on_local_network(self):
+        """验证回环与私网地址可用，同时拒绝 DNS、公共 IP、非法端口和重定向参数，无外部请求。"""
+        for url in ("http://127.0.0.1:4000/health/readiness", "http://192.168.1.2:3000/login",
+                    "http://10.0.0.1:65535/login", "http://172.31.1.8:1/login"):
+            self.assertTrue(valid_health_url(url), url)
+        for url in ("http://169.254.169.254:80/latest", "http://8.8.8.8:4000/login", "http://localhost:3000/login",
+                    "http://192.168.1.999:3000/login", "http://127.0.0.1:65536/login",
+                    "http://127.0.0.1:0/login", "http://127.0.0.1:3000/login?a=1"):
+            self.assertFalse(valid_health_url(url), url)
+
+    def test_channel_change_resets_preview_and_survives_restart(self):
+        """在临时状态目录测试切换、缓存失效、重启和关闭主机开关，结束清理状态。"""
+        def new_agent(allow_switch=True):
+            """以正式渠道启动执行器，返回复用临时状态的实例，不修改运行镜像。"""
+            return Agent(self.root, self.compose, Releases(file=self.source), allow_switch)
+
+        self.agent = new_agent()
+        self.assertIsNone(self.check()["candidate"])
+        code, beta = self.agent.submit("channel", {"channel": "beta", "actor": "platform-admin"})
+        self.assertEqual((code, beta["channel"], beta["checked"]), (200, "beta", 0))
+        self.agent = new_agent()
+        self.assertEqual(self.agent.status()["channel"], "beta")
+        self.assertEqual(self.agent.state["channel_changed_by"], "platform-admin")
+        self.assertEqual(self.check()["candidate"]["version"], self.next["version"])
+        code, stable = self.agent.submit("channel", {"channel": "stable", "actor": "platform-admin"})
+        self.assertEqual((code, stable["channel"], stable["checked"]), (200, "stable", 0))
+        self.assertIsNone(stable["candidate"])
+        self.assertEqual(self.agent.submit("apply", {"actor": "admin", "version": self.next["version"],
+                                                    "revision": self.next["revision"]}), (409, "invalid_target"))
+        locked = new_agent(False)
+        self.assertFalse(locked.status()["channel_switch_enabled"])
+        self.assertEqual(locked.submit("channel", {"channel": "beta", "actor": "admin"}), (403, "channel_locked"))
+        self.assertEqual(self.compose.switched, [])
+
+    def test_channel_change_rejects_busy_invalid_and_failed_write(self):
+        """无效输入、操作中或写盘失败都保留原渠道；临时状态与并发线程在用例结束清理。"""
+        self.agent = Agent(self.root, self.compose, self.releases, True)
+        self.assertEqual(self.agent.submit("channel", {"channel": "custom", "actor": "admin"}), (400, "invalid_channel"))
+        self.check()
+        self.compose.release.clear()
+        self.apply()
+        self.assertTrue(self.compose.started.wait(2))
+        self.assertEqual(self.agent.submit("channel", {"channel": "stable", "actor": "admin"}), (409, "busy"))
+        self.compose.release.set()
+        self.await_idle()
+        with patch.object(self.agent, "record", side_effect=OSError("read-only state")), self.assertLogs(level="ERROR"):
+            self.assertEqual(self.agent.submit("channel", {"channel": "stable", "actor": "admin"}),
+                             (503, "update_agent_unavailable"))
+        self.assertEqual(self.agent.status()["channel"], "beta")
 
     def test_concurrent_upgrade_restart_and_manual_rollback(self):
         """拉取被阻塞时拒绝第二项任务。完成版本重开执行器可见，并能使用上一版本回退。"""

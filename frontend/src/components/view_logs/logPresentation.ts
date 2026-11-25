@@ -1,10 +1,13 @@
 import type { LogEntry } from "./columns";
 
-/** 从已记录的错误正文提取短摘要；参数为日志，返回最多 240 字符，供详情首屏使用。
- * 优先结构化 message，未知格式保留原始文本片段；不推断责任方，完整正文仍由原始错误区域展示。
+/** 从已记录的错误正文提取短摘要；参数为日志和可选的空正文翻译回调，返回至多 240 字符和截断标记，供详情首屏使用。
+ * 有具体错误正文时优先展示；正文缺失或只有网关通用错误时查已记录的传输诊断。不推断责任方。
  */
-export function logErrorSummary(log: Pick<LogEntry, "error" | "response" | "metadata">): string {
-  let payload: unknown = log.error || log.response;
+export function logErrorSummary(
+  log: Pick<LogEntry, "error" | "response" | "metadata">,
+  formatMissingBody?: (status: number) => string,
+): string {
+  let payload: unknown = log.error?.trim() || log.response;
   if (typeof payload === "string") {
     try {
       payload = JSON.parse(payload);
@@ -14,9 +17,17 @@ export function logErrorSummary(log: Pick<LogEntry, "error" | "response" | "meta
   }
   const object = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const error = object.error && typeof object.error === "object" ? (object.error as Record<string, unknown>) : {};
-  const candidate = log.metadata?.error_information?.error_message ?? error.message ?? object.message ?? payload;
-  if (typeof candidate !== "string") return "";
-  const text = candidate.replace(/\s+/g, " ").trim();
+  if (formatMissingBody && error.type === "upstream_empty_error_body" && typeof error.status_code === "number") {
+    return formatMissingBody(error.status_code);
+  }
+  const textError = typeof object.error === "string" ? object.error : undefined;
+  const candidate = log.metadata?.error_information?.error_message ?? error.message ?? textError ?? object.message ?? payload;
+  const summary = typeof candidate === "string" ? candidate.replace(/\s+/g, " ").trim() : "";
+  const upstream = log.metadata?.upstream_response;
+  const recordedTransportError = upstream?.failure?.transport_error || upstream?.read_error;
+  const text = (!summary || summary === "upstream request failed") && typeof recordedTransportError === "string"
+    ? recordedTransportError.replace(/\s+/g, " ").trim() || summary
+    : summary;
   return text.length > 240 ? `${text.slice(0, 240)}…` : text;
 }
 
@@ -26,6 +37,10 @@ export function logOutcomeKey(log: Pick<LogEntry, "metadata">): string {
   if (log.metadata?.upstream_response?.failure?.kind === "client_write_error") return "logsUX.clientWriteFailed";
   const status = Number(log.metadata?.http_status);
   if (status === 499) return "logsUX.interrupted";
+  const failure = log.metadata?.upstream_response?.failure;
+  if (failure?.kind === "timeout" && ["upstream_request", "response_transfer"].includes(failure.phase)) {
+    return "logsUX.upstreamTimeout";
+  }
   if (status === 429) return "logsUX.limited";
   if (status === 413) return "logsUX.bodyRejected";
   if (status === 401 || status === 403) return "logsUX.denied";

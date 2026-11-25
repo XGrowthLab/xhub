@@ -2,7 +2,9 @@ package requestlog
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	dpdiagnostics "github.com/sunqirui1987/xhub/internal/dataplane/diagnostics"
 )
@@ -52,9 +54,9 @@ func diagnosticHeaders(headers http.Header) http.Header {
 	return result
 }
 
-// FailureJSON 优先返回 HTTP 成功后流内明确失败的独立错误快照，避免 2 MiB 正文捕获上限吞掉尾部错误。
-// 参数 upstream 为观测事实、fallback 为原失败正文；recordSpend 调用，返回日志错误详情；不改客户端或响应正文。
-// 非流内供应商错误或序列化失败沿用原文，不能用 HTTP 成功握手替换最终失败状态。
+// FailureJSON 选取流内明确错误、原失败正文或空正文时已观测到的诊断，避免失败日志只剩状态。
+// 参数 upstream 为观测事实、fallback 为原失败正文；recordSpend 调用，返回日志错误详情，不修改客户端响应或正文捕获。
+// 非空 HTTP 错误正文优先；只有收到上游错误状态且没有正文或读取错误时，才生成缺失正文的说明。
 func FailureJSON(upstream *dpdiagnostics.UpstreamDiagnostics, fallback string) string {
 	// 取消不能把整个部分 SSE 当作错误原因；保留独立供应商错误，未观测到时显式为 null。
 	if upstream != nil && upstream.Failure != nil && upstream.Failure.Kind == "request_canceled" {
@@ -70,12 +72,24 @@ func FailureJSON(upstream *dpdiagnostics.UpstreamDiagnostics, fallback string) s
 			return string(raw)
 		}
 	}
-	if upstream == nil || upstream.StatusCode >= 400 || upstream.Error == nil {
+	if upstream == nil {
 		return fallback
 	}
-	raw, err := json.Marshal(upstream.Error)
-	if err != nil {
-		return fallback
+	if upstream.StatusCode < 400 && upstream.Error != nil {
+		if raw, err := json.Marshal(upstream.Error); err == nil {
+			return string(raw)
+		}
 	}
-	return string(raw)
+	if failure := upstream.Failure; failure != nil && failure.Phase == "response_transfer" && upstream.StatusCode < 400 && failure.TransportError != "" {
+		// 已开始输出的流可能没有供应商错误帧；用观测到的中断原因解释失败，生成内容仍走正文策略。
+		return failure.TransportError
+	}
+	if upstream.ReadError != "" && (upstream.StatusCode < 400 || strings.TrimSpace(fallback) == "") {
+		// 截断的成功正文可能含模型输出，使用独立读取错误作为失败摘要。
+		return upstream.ReadError
+	}
+	if upstream.StatusCode >= 400 && strings.TrimSpace(fallback) == "" {
+		return fmt.Sprintf(`{"error":{"type":"upstream_empty_error_body","status_code":%d,"message":"upstream returned HTTP %d without an error body"}}`, upstream.StatusCode, upstream.StatusCode)
+	}
+	return fallback
 }
