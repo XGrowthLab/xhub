@@ -152,3 +152,39 @@ func TestResponsesIncompleteObservation(t *testing.T) {
 		})
 	}
 }
+
+// TestObserveCompleteErrorBody 校验 HTTP 读取失败时只接受完整、已识别且有界的上游错误。
+// 参数 t 为测试上下文；使用内存 JSON，检查原状态和读取失败证据仍保留，无外部资源。
+func TestObserveCompleteErrorBody(t *testing.T) {
+	const complete = `{ "error": {"message":"Vendor saturated","type":"overloaded_error"}, "request_id":"vendor-502" }`
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"complete", 502, complete, true},
+		{"non-error-status", 200, complete, false},
+		{"fragment", 503, `{"error":{"message":"damaged"`, false},
+		{"unrelated-object", 503, `{"message":"ordinary result"}`, false},
+		{"size-limit", 429, complete + strings.Repeat(" ", 1<<20), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &UpstreamDiagnostics{StatusCode: tc.status, ReadError: "unexpected EOF", Error: map[string]any{"request_id": "previous"}}
+			if got := d.ObserveCompleteErrorBody([]byte(tc.body)); got != tc.want {
+				t.Fatalf("完整上游错误识别=%t，期望 %t", got, tc.want)
+			}
+			wantID := "previous"
+			if tc.want {
+				wantID = "vendor-502"
+			}
+			if d.StatusCode != tc.status || d.ReadError != "unexpected EOF" || d.Error["request_id"] != wantID {
+				t.Fatalf("错误观察覆盖了原诊断事实: %+v", d)
+			}
+		})
+	}
+	var missing *UpstreamDiagnostics
+	if missing.ObserveCompleteErrorBody([]byte(complete)) {
+		t.Fatal("没有 HTTP 诊断时不能归因给供应商")
+	}
+}

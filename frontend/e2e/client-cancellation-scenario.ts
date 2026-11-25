@@ -14,7 +14,9 @@ export function registerClientScenario(locale: Locale) {
     test.setTimeout(90000);
     const tr = (key: string) => translate(locale, key);
     let started = 0,
-      stopped = 0;
+      stopped = 0,
+      rejected = 0;
+    const supplierError = "e2e-preread-error-" + locale;
     const upstream = createServer((req, res) => {
       let raw = "";
       req.on("data", (part) => {
@@ -22,7 +24,11 @@ export function registerClientScenario(locale: Locale) {
       });
       req.on("end", () => {
         const body = JSON.parse(raw);
-        if (body.stream) {
+        if (body.messages?.at(-1)?.content === "Cancel while reading the upstream error.") {
+          res.writeHead(503, { "Content-Type": "application/json", "Content-Length": "1024" });
+          res.write(JSON.stringify({ error: { message: supplierError, type: "api_error" } }));
+          rejected++;
+        } else if (body.stream) {
           started++;
           res.writeHead(200, { "Content-Type": "text/event-stream" });
           res.write(
@@ -225,6 +231,44 @@ export function registerClientScenario(locale: Locale) {
       await stableGoto(page, "/logs?log_id=" + bypassCall.id);
       await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
 
+      await page.keyboard.press("Escape");
+
+      // 浏览器在网关预读到完整的 503 错误后中断，按上游原始原因找到双语的 499 日志。
+      const pendingError = page.evaluate(async ({ token, model }) => {
+        const controller = new AbortController();
+        document.addEventListener("cancel-preread-fixture", () => controller.abort(), { once: true });
+        try {
+          await fetch("/gw/v1/chat/completions", {
+            method: "POST", headers: { Authorization: token, "Content-Type": "application/json" },
+            body: JSON.stringify({ model, stream: true, messages: [{ role: "user", content: "Cancel while reading the upstream error." }] }),
+            signal: controller.signal,
+          });
+          return "completed";
+        } catch (error) {
+          return error instanceof Error ? error.name : String(error);
+        }
+      }, { token: headers.Authorization, model: name });
+      await expect.poll(() => rejected).toBe(1);
+      await page.evaluate(() => document.dispatchEvent(new Event("cancel-preread-fixture")));
+      expect(await pendingError).toBe("AbortError");
+      const filter = new URLSearchParams({ status_filter: "error", error_code: "499", error_message: supplierError });
+      let canceledErrorID = "";
+      await expect.poll(async () => {
+        const reply = await page.request.get(GATEWAY + "/spend/logs/ui?" + filter, { headers });
+        const rows = reply.ok() ? (await reply.json()).data : [];
+        canceledErrorID = rows[0]?.request_id ?? "";
+        return rows.length;
+      }).toBe(1);
+      expect(rejected).toBe(1);
+      const canceledError = await page.request.get(GATEWAY + "/spend/logs/ui/" + canceledErrorID, { headers });
+      expect(await canceledError.json()).toMatchObject({
+        status: "error", spend: 0, error: expect.stringContaining(supplierError),
+        metadata: { http_status: 499, upstream_response: { status_code: 503, failure: { phase: "response_transfer", kind: "request_canceled" } } },
+      });
+      await stableGoto(page, "/logs?log_id=" + canceledErrorID);
+      const canceledAlert = page.getByRole("dialog").getByRole("alert");
+      await expect(canceledAlert).toContainText(translate(locale, "logDiagnostics.canceledDuringUpstreamResponse", { status: 503 }));
+      await expect(canceledAlert).toContainText(supplierError);
       await page.keyboard.press("Escape");
 
       // 通过只存在于隔离测试网关的写入器注入刷新失败，验证真实日志页面与零费用。

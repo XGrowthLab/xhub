@@ -5,7 +5,6 @@ package transport
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,19 +175,9 @@ func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, addre
 	if err == nil && len(result.Body) > 64<<20 {
 		err = fmt.Errorf("bypass response exceeds 64 MiB")
 	}
-	if err != nil && result.StatusCode >= 400 && len(result.Body) <= 1<<20 {
-		// 连接可能在完整 JSON 错误到达后、HTTP 正文结束标记之前断开。要求整段字节可解码，
-		// 避免把 JSON 残片、空响应或普通生成内容当成完整的上游错误。
-		var doc map[string]any
-		if json.Unmarshal(result.Body, &doc) == nil {
-			if known := dpdiagnostics.ExtractUpstreamError(doc); known != nil {
-				result.Diagnostics.Error = known.Envelope
-				if r.Context().Err() == nil {
-					// 调用仍可接收响应时按原来的 HTTP 错误路由规则处理；诊断保留实际读错误。
-					return result, nil
-				}
-			}
-		}
+	if err != nil && result.Diagnostics.ObserveCompleteErrorBody(result.Body) && r.Context().Err() == nil {
+		// 完整错误先于 HTTP 结束标记到达；调用仍可接收时按实际 HTTP 错误路由，诊断保留读取失败。
+		return result, nil
 	}
 	return result, err
 }

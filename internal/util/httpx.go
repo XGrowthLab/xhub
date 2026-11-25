@@ -67,38 +67,47 @@ func WriteTypedFieldError(w http.ResponseWriter, path string, status int, typ, m
 		w.Header().Set("Retry-After", "1")
 	}
 	w.WriteHeader(status)
+	_, _ = w.Write(TypedErrorBody(path, status, typ, msg, field))
+}
+
+// TypedErrorBody 根据入站路径、状态、错误类型、消息及可选字段生成网关错误正文。
+// 返回包含行尾换行的 JSON；供网关响应和失败日志共用，确保两处使用同一错误包络。只编码固定结构和标量，不写响应。
+func TypedErrorBody(path string, status int, typ, msg, field string) []byte {
 	p := strings.ToLower(path)
+	var doc map[string]any
 	switch {
 	case isAnthropicMessagesPath(p):
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		doc = map[string]any{
 			"type": "error",
 			"error": map[string]any{
 				"type":    typ,
 				"message": msg,
 			},
-		})
+		}
 	case isGeminiNativePath(p):
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		doc = map[string]any{
 			"error": map[string]any{
 				"code":    status,
 				"message": msg,
 				"status":  googleRPCStatus(status),
 			},
-		})
+		}
 	default:
 		var param any
 		if field != "" {
 			param = field
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		doc = map[string]any{
 			"error": map[string]any{
 				"message": msg,
 				"type":    typ,
 				"param":   param,
 				"code":    strconv.Itoa(status),
 			},
-		})
+		}
 	}
+	body, _ := json.Marshal(doc)
+	return append(body, '\n')
 }
 
 // isAnthropicMessagesPath reports whether the path uses the Anthropic error envelope instead of the OpenAI error object.

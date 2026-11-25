@@ -210,6 +210,10 @@ func TestNativeResponsesFailureNoReplay(t *testing.T) {
 			if log["status"] != "error" {
 				t.Fatal("失败未记入日志")
 			}
+			switch kind {
+			case "malformed", "connection-lost", "body-truncated":
+				assertSearchableResponsesFailure(t, h, admin, got, "upstream_error")
+			}
 			if spend, ok := log["spend"].(float64); !ok || spend != 0 {
 				t.Fatalf("失败请求应为零费用: %v", log["spend"])
 			}

@@ -363,6 +363,19 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._response(200, b"", "application/json")
             return
+        # 日志回归用隔离夹具依次验证非对象错误、无效终态和成功后存储失败。
+        if req.get("model") == "e2e-json-null-error":
+            self._response(503, b'"null"', "application/json")
+            return
+        if req.get("model") == "e2e-native-log-failure":
+            if "Check invalid terminal response." in str(req.get("input", "")):
+                self._json({"id": "resp_queued", "status": "queued", "output": []})
+            else:
+                self._json({"id": "resp_log_completed", "object": "response", "status": "completed",
+                            "output": [{"type": "message", "role": "assistant",
+                                        "content": [{"type": "output_text", "text": "Generated content"}]}],
+                            "usage": {"input_tokens": 3, "output_tokens": 2}})
+            return
         # 计数独立于生成：验证模型映射和服务端凭据，不要求 max_tokens。
         if self.path.split("?")[0] == "/v1/messages/count_tokens":
             valid = req.get("model") == "count-upstream" and isinstance(req.get("messages"), list) and self.headers.get("x-api-key") == "sk-fake"
