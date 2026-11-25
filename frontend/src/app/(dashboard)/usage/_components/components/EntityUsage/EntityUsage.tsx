@@ -352,8 +352,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const chev = "size-3 text-muted-foreground";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
-  /** 渲染费用与请求指标，供实体概览调用。展开项接受键盘操作，保留完整数值和费率说明。 */
-  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
+  /** 渲染实体用量总览卡片及当前语言的费率提示。展开与提示按钮都可通过键盘访问。 */
+  const renderSummaryTile = ({ title, value, className, tooltipKey, expandable }: SummaryTile) => (
     <div key={title} className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
       <div className="flex items-start justify-between gap-1.5">
         {expandable ? (
@@ -367,10 +367,16 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             {expandIcon}
           </button>
         ) : <h3 className="min-w-0 text-sm font-medium text-muted-foreground">{title}</h3>}
-        {tooltip && (
+        {tooltipKey && (
           <Tooltip>
-            <TooltipTrigger render={<Info className="size-4 shrink-0 text-muted-foreground" />} />
-            <TooltipContent>{t(tooltip)}</TooltipContent>
+            <TooltipTrigger
+              type="button"
+              aria-label={t("usagePolish.costHelp", { title })}
+              className="shrink-0 rounded-sm text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Info aria-hidden className="size-4" />
+            </TooltipTrigger>
+            <TooltipContent>{t(tooltipKey)}</TooltipContent>
           </Tooltip>
         )}
       </div>

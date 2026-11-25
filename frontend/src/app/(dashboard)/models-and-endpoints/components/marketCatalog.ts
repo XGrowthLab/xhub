@@ -51,19 +51,23 @@ export type MarketPrice = {
   tier: number;
   range: string;
 };
-/** 展开所有上下文档位和变体；参数为目录行和当前界面翻译函数，返回双币价格及原始档位，不合并范围或把缺失价格当成免费。 */
+/** 展开目录行的档位和计费变体，返回双币价格及本地化区间。旧版及新版开放上界统一显示，价格和排序沿用原规则。 */
 export function marketPrices(row: PriceCatalogRow, t: TFunction = translate): MarketPrice[] {
   if (!Array.isArray(row.raw.pricing_rules_v2)) return [];
   return row.raw.pricing_rules_v2.flatMap((rule, tier) => {
     if (!rule || typeof rule !== "object") return [];
     const ranges = [rule.input_range, rule.output_range]
-      .map((range, i) =>
-        Array.isArray(range) && range.length === 2 && range.every((n) => typeof n === "number" && Number.isFinite(n))
-          ? t(i ? "marketSync.detail.outputRange" : "marketSync.detail.inputRange", {
-              range: range.map((n: number) => n.toLocaleString()).join("–"),
-            })
-          : "",
-      )
+      .map((range, i) => {
+        if (!Array.isArray(range) || range.length !== 2 ||
+          !range.every((n) => typeof n === "number" && Number.isFinite(n))) return "";
+        const [from, to] = range as [number, number];
+        const start = from.toLocaleString();
+        // Modelink 旧数据使用 99999999，新数据使用 -1，两者都表示没有有限上界。
+        const formatted = to === -1 || to === 99_999_999
+          ? t("marketSync.detail.openRange", { start })
+          : `${start}–${to.toLocaleString()}`;
+        return t(i ? "marketSync.detail.outputRange" : "marketSync.detail.inputRange", { range: formatted });
+      })
       .filter(Boolean)
       .join(" · ");
     const details = rule.details_v2;

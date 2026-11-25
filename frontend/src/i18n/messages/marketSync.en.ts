@@ -127,6 +127,7 @@ export const marketSync = {
     unitAmount: "{size} {unit}",
     inputRange: "Input {range}",
     outputRange: "Output {range}",
+    openRange: "{start} and above",
     defaultTier: "Default tier",
     missingPrice: "Not provided",
     noPrice: "The market has not provided pricing.",

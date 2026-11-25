@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { translate } from "@/i18n";
 import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost } from "./entityUsageSummary";
 
 const metadata = {
@@ -40,7 +41,7 @@ describe("buildSummaryTiles", () => {
     expect(first.title).toBe("Total Cost");
     expect(first.value).toBe("$140.00");
     expect(first.expandable).toBe(true);
-    expect(first.tooltip).toBeTruthy();
+    expect(first.tooltipKey).toBe("usagePolish.totalCostTooltip");
   });
 
   it("never renders the breakdown titles in the top row", () => {
@@ -68,10 +69,16 @@ describe("buildCostBreakdownTiles", () => {
     expect(parts[0] + parts[1]).toBe(parse(buildSummaryTiles(metadata, true)[0].value));
   });
 
-  it("explains each part, including that flat cost is outside budgets", () => {
-    const byTitle = Object.fromEntries(buildCostBreakdownTiles(metadata).map((t) => [t.title, t.tooltip]));
-    expect(byTitle["Request Cost"]).toBeTruthy();
-    expect(byTitle["Flat Cost"]).toContain("budget");
+  /** 预留费用非零时验证三条语义键可被中英词典解析，并保留预算说明。纯函数，无需清理。 */
+  it("resolves all cost tooltip keys in both languages", () => {
+    const keys = [buildSummaryTiles(metadata, true)[0], ...buildCostBreakdownTiles(metadata)].map(({ tooltipKey }) => tooltipKey);
+    expect(keys).toEqual(["usagePolish.totalCostTooltip", "usagePolish.requestCostTooltip", "usagePolish.flatCostTooltip"]);
+    for (const key of keys) {
+      expect(translate("zh-CN", key!)).toMatch(/[\u4e00-\u9fff]/);
+      expect(translate("en", key!)).not.toBe(key);
+    }
+    expect(translate("zh-CN", "usagePolish.flatCostTooltip")).toContain("预算均排除这项费用");
+    expect(translate("en", "usagePolish.flatCostTooltip")).toContain("budgets exclude it");
   });
 
   it("treats a missing flat cost as zero", () => {

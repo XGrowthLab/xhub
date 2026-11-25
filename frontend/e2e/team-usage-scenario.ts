@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 import { formatConsoleMoney } from "../src/components/console/money";
 import { translate } from "../src/i18n/translate";
 
@@ -27,11 +27,51 @@ async function assertUsageTiles(page: import("@playwright/test").Page, metadata:
     : formatConsoleMoney(metadata.total_spend, "zh-CN");
   await expect(spendValue).toHaveText(expectedSpend);
 }
+
+/** 在真实团队用量响应上补入测试预留费用，浏览器验收双语费用提示。退出时移除拦截，实际账单保持接口原值。 */
+async function assertLocalizedTeamCostHelp(page: Page) {
+  const activityRoute = /\/team\/daily\/activity\/aggregated(?:\?|$)/;
+  /** 读取真实网关的聚合与状态，仅为当前暂未产生固定费用的分支补入测试金额。 */
+  const withFlatCost = async (route: Route) => {
+    const original = new URL(route.request().url());
+    const response = await route.fetch({ url: GATEWAY + original.pathname.replace(/^\/gw\//, "/") + original.search });
+    expect(response.status(), await response.text()).toBe(200);
+    const current = await response.json();
+    expect(current.metadata.total_api_requests).toBeGreaterThan(0);
+    expect(current.metadata.total_flat_cost).toBe(0);
+    await route.fulfill({ response, json: { ...current, metadata: { ...current.metadata, total_flat_cost: 0.25 } } });
+  };
+  await page.route(activityRoute, withFlatCost);
+  try {
+    await stableGoto(page, "/usage");
+    await page.getByRole("tab", { name: t("pages.usage.team"), exact: true }).click();
+    await page.getByRole("tab", { name: t("pages.usage.cost"), exact: true }).click();
+    for (const locale of ["zh-CN", "en"] as const) {
+      if (locale === "en") await page.getByRole("button", { name: translate("zh-CN", "language.en"), exact: true }).click();
+      const total = page.getByRole("button", { name: translate(locale, "Total Cost"), exact: true });
+      await expect(total).toBeVisible();
+      if (await total.getAttribute("aria-expanded") !== "true") await total.click();
+      for (const [title, key] of [
+        ["Total Cost", "usagePolish.totalCostTooltip"],
+        ["Request Cost", "usagePolish.requestCostTooltip"],
+        ["Flat Cost", "usagePolish.flatCostTooltip"],
+      ]) {
+        const help = translate(locale, "usagePolish.costHelp", { title: translate(locale, title) });
+        await page.getByRole("button", { name: help, exact: true }).hover();
+        await expect(page.getByText(translate(locale, key), { exact: true })).toBeVisible();
+      }
+    }
+  } finally {
+    await page.unroute(activityRoute, withFlatCost);
+  }
+}
+
 /** 用途：注册独立场景「team usage displays recorded calls without requesting the removed Agent endpoint」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC242() {
 
 
 test("team usage displays recorded calls without requesting the removed Agent endpoint", async ({ page }) => {
+  test.setTimeout(90_000);
   await loginAdmin(page);
   const guard = watchGateway(page);
   const headers = { Authorization: "Bearer " + await sessionBearer(page) };
@@ -103,6 +143,7 @@ test("team usage displays recorded calls without requesting the removed Agent en
     }
     expect(agentRequests, "团队用量不得请求已移除的 Agent 接口").toEqual([]);
     expect(errors, "用量请求应成功且无控制台异常").toEqual([]);
+    await assertLocalizedTeamCostHelp(page);
     await guard.assertOk();
   } finally {
     if (key) expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [key] } })).status()).toBe(200);

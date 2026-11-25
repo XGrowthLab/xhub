@@ -117,6 +117,7 @@ export const marketSync = {
     unitAmount: "{size} {unit}",
     inputRange: "输入 {range}",
     outputRange: "输出 {range}",
+    openRange: "{start} 及以上",
     defaultTier: "默认档位",
     missingPrice: "未提供",
     noPrice: "市场尚未提供定价。",
