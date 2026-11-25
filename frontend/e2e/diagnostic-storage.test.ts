@@ -53,7 +53,7 @@ for (const locale of ["en", "zh-CN"] as const) test("Read packed diagnostic in l
 });
 
 /** 在私有 PG、真实网关和浏览器中查看三种失败：上游 JSON 字符串、原生 Responses 无效终态、历史表写入失败。
- * 同一条日志对照实际 HTTP 响应、数据库错误筛选以及中英详情；finally 恢复测试表、配置和日志选项并删除临时模型。 */
+ * 同一条日志对照实际 HTTP 响应、数据库错误筛选以及中英详情；finally 移除测试约束、恢复配置和日志选项并删除临时模型。 */
 test("Failure details match the gateway response and survive scalar upstream errors", async ({ page }) => {
   await loginAdmin(page);
   const headers = { Authorization: "Bearer " + await sessionBearer(page) };
@@ -69,7 +69,7 @@ test("Failure details match the gateway response and survive scalar upstream err
   }));
   const deployments: string[] = [];
   let nativeEnabled = false;
-  let historyRenamed = false;
+  let rejectHistoryWrites = false;
   try {
     expect((await page.request.put(GATEWAY + "/account/log-capture", { headers, data: { enabled: true } })).ok()).toBeTruthy();
     for (const [index, { alias, upstream }] of models.entries()) {
@@ -101,9 +101,12 @@ test("Failure details match the gateway response and survive scalar upstream err
     ];
     for (const failure of failures) {
       if (failure.query === "history_unavailable") {
-        // 只改变当前运行的隔离 schema，原表及已有测试数据在断言后仍可恢复。
-        runStorageSQL("ALTER TABLE conversation_history_blocks RENAME TO e2e_hidden_history_blocks");
-        historyRenamed = true;
+        // 只拒绝当前隔离 schema 的新历史写入。旧格式、压缩格式及 CI 的账号灰度使用同一夹具。
+        runStorageSQL(`BEGIN;
+          ALTER TABLE kv ADD CONSTRAINT e2e_reject_history CHECK (kind <> 'conversation_state' OR id NOT LIKE 'session_route:v1:history:%') NOT VALID;
+          ALTER TABLE conversation_history_manifests ADD CONSTRAINT e2e_reject_history CHECK (false) NOT VALID;
+          COMMIT;`);
+        rejectHistoryWrites = true;
       }
       const reply = await page.request.post(GATEWAY + failure.path, {
         headers, data: { model: failure.model, ...failure.payload },
@@ -138,7 +141,10 @@ test("Failure details match the gateway response and survive scalar upstream err
       await page.keyboard.press("Escape");
     }
   } finally {
-    if (historyRenamed) runStorageSQL("ALTER TABLE e2e_hidden_history_blocks RENAME TO conversation_history_blocks");
+    if (rejectHistoryWrites) runStorageSQL(`BEGIN;
+      ALTER TABLE kv DROP CONSTRAINT e2e_reject_history;
+      ALTER TABLE conversation_history_manifests DROP CONSTRAINT e2e_reject_history;
+      COMMIT;`);
     if (nativeEnabled) expect((await page.request.post(GATEWAY + "/config/field/delete", {
       headers, data: { field_name: "native_responses" },
     })).ok()).toBeTruthy();
