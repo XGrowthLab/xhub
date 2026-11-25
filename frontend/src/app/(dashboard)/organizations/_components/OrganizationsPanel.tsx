@@ -28,7 +28,7 @@ interface OrganizationsPanelProps {
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
   const t = useT();
   const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
-  const [editOrg, setEditOrg] = useState(false);
+  const [editingOrgId, setEditingOrgId] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -108,15 +108,12 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
       {selectedOrgId ? (
         <OrganizationInfoView
           organizationId={selectedOrgId}
-          onClose={() => {
-            void setSelectedOrgId(null);
-            setEditOrg(false);
-          }}
+          onClose={() => void setSelectedOrgId(null)}
           accessToken={accessToken}
           is_org_admin={false}
           is_proxy_admin={userRole === "Admin"}
           userModels={userModels}
-          editOrg={editOrg}
+          editOrg={false}
         />
       ) : (
         <>
@@ -141,17 +138,17 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={(organizationId) => {
-              setEditOrg(false);
-              void setSelectedOrgId(organizationId);
-            }}
-            onEditClick={(organizationId) => {
-              void setSelectedOrgId(organizationId);
-              setEditOrg(true);
-            }}
+            onOrganizationClick={(organizationId) => void setSelectedOrgId(organizationId)}
+            onEditClick={setEditingOrgId}
             onDeleteClick={handleDelete}
           />
         </>
+      )}
+
+      {editingOrgId && accessToken && (
+        <OrganizationInfoView key={editingOrgId} organizationId={editingOrgId} accessToken={accessToken}
+          onClose={() => setEditingOrgId(null)} is_org_admin={false} is_proxy_admin={userRole === "Admin"}
+          userModels={userModels} editOrg editorOnly />
       )}
 
       <OrgCreateDialog open={isOrgModalVisible} onOpenChange={setIsOrgModalVisible} accessToken={accessToken || ""} />

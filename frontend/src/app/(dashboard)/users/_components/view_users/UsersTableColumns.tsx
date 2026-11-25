@@ -31,13 +31,13 @@ function isScimInactive(user: UserInfo): boolean {
 
 interface UserRowActionsProps {
   user: UserInfo;
-  onUserClick: (userId: string, openInEditMode?: boolean) => void;
+  onEditUser?: (userId: string) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (user: UserInfo) => void;
 }
 
 /** 用户行操作菜单；接收账户及编辑/删除/密码回调，返回菜单，编辑时通知列表打开该账户的编辑视图。 */
-function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
+function UserRowActions({ user, onEditUser, onDeleteUser, onResetPassword }: UserRowActionsProps) {
   const t = useT();
   return (
     <DropdownMenu>
@@ -49,9 +49,11 @@ function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: Us
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem onClick={() => onUserClick(user.user_id, true)} data-testid="user-action-edit">
-          <Pencil />{t("pages.users.editUser")}
-        </DropdownMenuItem>
+        {onEditUser && (
+          <DropdownMenuItem onClick={() => onEditUser(user.user_id)} data-testid="user-action-edit">
+            <Pencil />{t("pages.users.editUser")}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           onClick={() => void copyToClipboard(user.user_id, t("pages.users.userIdCopied"))}
           data-testid="user-action-copy"
@@ -76,14 +78,17 @@ function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: Us
 export interface UsersTableColumnsDeps {
   possibleUIRoles: Record<string, Record<string, string>> | null;
   includeSelection: boolean;
-  onUserClick: (userId: string, openInEditMode?: boolean) => void;
+  onUserClick: (userId: string) => void;
+  onEditUser?: (userId: string) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (user: UserInfo) => void;
 }
 
+/** 根据目录回调生成列；身份链接进入详情，编辑菜单在具备账户编辑权限时独立打开弹窗。 */
 export const getUsersTableColumns = ({
   includeSelection,
   onUserClick,
+  onEditUser,
   onDeleteUser,
   onResetPassword,
 }: UsersTableColumnsDeps): ColumnDef<UserInfo>[] => {
@@ -99,7 +104,7 @@ export const getUsersTableColumns = ({
         <IdentityCell
           title={row.original.user_id}
           titleClassName="font-mono text-xs text-primary"
-          onClick={() => onUserClick(row.original.user_id, false)}
+          onClick={() => onUserClick(row.original.user_id)}
         />
       ),
     },
@@ -287,7 +292,7 @@ export const getUsersTableColumns = ({
         <div className="flex justify-end">
           <UserRowActions
             user={row.original}
-            onUserClick={onUserClick}
+            onEditUser={onEditUser}
             onDeleteUser={onDeleteUser}
             onResetPassword={onResetPassword}
           />

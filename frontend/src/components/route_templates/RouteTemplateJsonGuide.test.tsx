@@ -11,15 +11,14 @@ const renderGuide = (locale: "en" | "zh-CN" = "zh-CN") =>
 describe("RouteTemplateJsonGuide", () => {
   /** 目的：验证严格顶层字段在中英文界面一致；前置静态指南；结果不把废弃字段当成可导入字段，DOM 自动清理。 */
   it.each([
-    ["zh-CN", "路由模板 JSON 说明", "完整字段"],
-    ["en", "Route-template JSON guide", "Complete fields"],
-  ] as const)("renders the strict contract in %s", (locale, title, tab) => {
+    ["zh-CN", "JSON 指南分区", "字段"],
+    ["en", "JSON guide sections", "Fields"],
+  ] as const)("renders the strict contract in %s", (locale, tabList, tab) => {
     renderGuide(locale);
-    expect(screen.getByText(title)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: tab })).toBeInTheDocument();
-    for (const field of ["model_routes", "retry_policy", "routing_groups", "fallbacks"])
-      expect(screen.getByRole("cell", { name: field, exact: true })).toBeInTheDocument();
-    expect(screen.queryByRole("cell", { name: "num_retries", exact: true })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("tablist", { name: tabList })).getByRole("tab", { name: tab, selected: true })).toBeVisible();
+    const fields = screen.getAllByRole("term").map((term) => term.textContent);
+    expect(fields).toEqual(expect.arrayContaining(["model_routes", "retry_policy", "routing_groups", "fallbacks"]));
+    expect(fields).not.toContain("num_retries");
   });
 
   /** 目的：验证公开示例可被前端严格解析且旧字段被拒绝；前置共享 JSON；纯函数无外部数据与清理。 */
@@ -31,8 +30,8 @@ describe("RouteTemplateJsonGuide", () => {
 
   /** 目的：验证中英文复制成功与失败反馈；前置可控剪贴板；示例正文保持完整，测试后恢复方法。 */
   it.each([
-    ["zh-CN", "可导入示例", "完整路由模板正文", "复制示例", "已复制", "复制失败，请手动选择代码复制。"],
-    ["en", "Importable example", "Complete route-template document", "Copy example", "Copied", "Copy failed. Select the code and copy it manually."],
+    ["zh-CN", "导入示例", "完整路由模板正文", "复制示例", "已复制", "复制失败，请手动选择代码复制。"],
+    ["en", "Import example", "Complete route-template document", "Copy example", "Copied", "Copy failed. Select the code and copy it manually."],
   ] as const)("reports clipboard outcomes in %s", async (locale, tab, region, copy, copied, failed) => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValueOnce().mockRejectedValueOnce(new Error("denied"));

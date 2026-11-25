@@ -1104,7 +1104,7 @@ export const zhCN = {
     mcpServers: "MCP 服务器",
     teams: "团队",
   },
-  directoryForm: { limitHelp: "额度与限流说明", teamModelHint: "留空时继承组织的可用模型。选择模型可进一步收窄团队的访问范围。", identity: "基本信息", modelAccess: "模型访问", limits: "预算与速率限制" },
+  directoryForm: { editDenied: "你无权编辑这些设置。", limitHelp: "额度与限流说明", teamModelHint: "留空时继承组织的可用模型。选择模型可进一步收窄团队的访问范围。", identity: "基本信息", modelAccess: "模型访问", limits: "预算与速率限制" },
   pages: {
     apiKeys: {
       title: "虚拟密钥",
@@ -1311,6 +1311,7 @@ export const zhCN = {
       teamMembership: "团队成员",
       addUserToTeam: "将用户加入团队",
       memberRole: "成员角色",
+      memberRoleForTeam: "成员角色 — {team}",
       adding: "正在添加…",
       addToTeam: "加入团队",
       selectModels: "选择模型",
@@ -1523,6 +1524,8 @@ export const zhCN = {
       garden: "护栏花园",
       playground: "测试调试台",
       submitted: "已提交护栏",
+      localEditorDescription: "配置敏感词拦截和文本脱敏，参考区提供可复制的正则示例。",
+      xgoEditorDescription: "使用 Go / XGo 编写规则，可从函数卡片复制示例。",
     },
     prompts: {
       title: "提示词",

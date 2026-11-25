@@ -1,6 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { UsageHistoryNote } from "../UsageHistoryNote";
-import { BarChart } from "@/components/shared/charts";
+import { UsageRankingBars } from "../UsageRankingBars";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
@@ -171,14 +171,14 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
   const columns = showTags ? [...baseColumns, tagsColumn, spendColumn] : [...baseColumns, spendColumn];
 
-  // 图表标签保留可辨识长度；名称缺失时区分有标识的未命名密钥与未关联记录，不覆盖原始历史字段。
-  const processedTopKeys = topKeys.map((key) => {
-    let displayAlias = t(key.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey");
-    if (key.key_alias && key.key_alias !== "-") {
-      displayAlias = key.key_alias.length > 24 ? `${key.key_alias.slice(0, 24)}…` : key.key_alias;
-    }
-    return { ...key, display_key_alias: displayAlias };
-  });
+  // 历史统计可以没有密钥 ID；仅为仍关联的记录保留详情动作。
+  const rankedKeys = topKeys.map((key, index) => ({
+    id: key.api_key || "unlinked:" + index,
+    label: key.key_alias && key.key_alias !== "-" ? key.key_alias : t(key.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey"),
+    value: key.spend,
+    details: key.api_key ? [t("Key ID"), key.api_key] : undefined,
+    interactive: Boolean(key.api_key),
+  }));
 
   return (
     <>
@@ -189,12 +189,12 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
           aria-label={t("Number of top keys to show")}
           value={String(topKeysLimit)}
           onValueChange={(limit: unknown) => setTopKeysLimit(Number(limit))}
-          className="inline-flex w-fit shrink-0 items-center gap-1 rounded-lg bg-muted p-[3px]"
+          className="inline-flex max-w-full shrink-0 flex-wrap items-center gap-1 rounded-lg bg-muted p-[3px]"
         >
           {TOP_KEYS_LIMITS.map((limit) => (
             <Label
               key={limit}
-              className="cursor-pointer rounded-md px-3 py-1 font-medium text-foreground/60 transition-colors has-data-checked:bg-background has-data-checked:text-foreground has-data-checked:shadow-sm"
+              className="flex h-8 cursor-pointer items-center rounded-md px-3 text-sm font-medium text-foreground/60 transition-colors has-data-checked:bg-background has-data-checked:text-foreground has-data-checked:shadow-sm"
             >
               <RadioGroupItem value={String(limit)} className="sr-only" />
               {limit}
@@ -205,14 +205,14 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
           <button
             onClick={() => setViewMode("table")}
             aria-pressed={viewMode === "table"}
-            className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
+            className={`shrink-0 h-8 whitespace-nowrap rounded-md px-3 text-sm ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             {t("usagePolish.table")}
           </button>
           <button
             onClick={() => setViewMode("chart")}
             aria-pressed={viewMode === "chart"}
-            className={`shrink-0 whitespace-nowrap px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
+            className={`shrink-0 h-8 whitespace-nowrap rounded-md px-3 text-sm ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             {t("usagePolish.chart")}
           </button>
@@ -220,44 +220,14 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       </div>
 
       {viewMode === "chart" ? (
-        <div className="relative max-h-[600px] overflow-y-auto">
-          <BarChart
-            className="mt-4 cursor-pointer hover:opacity-90"
-            style={{ height: Math.min(processedTopKeys.length, topKeysLimit) * 52 }}
-            data={processedTopKeys}
-            index="display_key_alias"
-            categories={["spend"]}
-            colors={["cyan"]}
-            yAxisWidth="auto"
-            tickGap={5}
-            layout="vertical"
-            showLegend={false}
-            valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-            onValueChange={(item) => handleKeyClick(item)}
-            showTooltip={true}
-            customTooltip={(props) => {
-              const item = props.payload?.[0]?.payload;
-              return (
-                <div className="relative z-floating p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
-                  <div className="space-y-1.5">
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">{t("usagePolish.recordedName")} </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.key_alias || t(item?.api_key ? "usagePolish.unnamedKey" : "usagePolish.unlinkedKey")}</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">{t("Key ID:")} </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-muted-foreground">{t("Spend:")} </span>
-                      <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            }}
-          />
-        </div>
+        <UsageRankingBars
+          items={rankedKeys}
+          formatValue={value => "$" + formatNumberWithCommas(value, 2)}
+          onSelect={id => {
+            const key = topKeys.find(item => item.api_key === id);
+            if (key) void handleKeyClick(key);
+          }}
+        />
       ) : (
         <DataTable columns={columns} data={topKeys} isLoading={false} maxBodyHeight={600} size="compact" />
       )}

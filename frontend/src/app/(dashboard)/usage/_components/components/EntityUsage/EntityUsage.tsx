@@ -21,7 +21,7 @@ import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
-import { useT } from "@/i18n";
+import { useI18n } from "@/i18n";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -125,7 +125,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   dateValue,
   isOrgAdmin = false,
 }) => {
-  const t = useT();
+  const { t, locale } = useI18n();
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // 请求切换范围或失败时内容会卸载，选中标签保留在页面状态中，恢复后继续当前视图。
@@ -254,13 +254,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }));
   };
 
-  const getFilterLabel = (entityType: string) => {
-    return `Filter by ${entityType}`;
-  };
-
-  const getFilterPlaceholder = (entityType: string) => {
-    return `Select ${entityType} to filter...`;
-  };
+  const entityLabel = t("usagePolish.scopeNames." + entityType);
+  const filterLabel = t("usagePolish.filterByScope", { scope: entityLabel });
+  const filterPlaceholder = t("usagePolish.searchScope", { scope: entityLabel });
 
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
@@ -270,7 +266,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
   const filterSlot = entityFilterSlots[entityType];
 
-  const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const userSpendTeamIds = useMemo(
     () =>
@@ -283,7 +278,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
       {
-        header: capitalizedEntityLabel,
+        header: entityLabel,
         accessorKey: "metadata.alias",
         cell: ({ row }) => row.original.metadata.alias,
       },
@@ -312,7 +307,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
       },
     ],
-    [capitalizedEntityLabel, t],
+    [entityLabel, t],
   );
   const providerSpendColumns = useMemo<ColumnDef<ProviderSpendRow>[]>(
     () => [
@@ -357,26 +352,38 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const chev = "size-3 text-muted-foreground";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
-  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
-    <ShadcnCard
-      key={title}
-      className={expandable ? "cursor-pointer hover:bg-accent transition-colors" : undefined}
-      onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
-    >
-      <CardContent>
-        <div className="flex items-center gap-2">
-          <h3 className="text-lg font-medium text-foreground">{title}</h3>
-          {tooltip ? (
-            <Tooltip>
-              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
-              <TooltipContent>{tooltip}</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {expandable ? expandIcon : null}
-        </div>
-        <p className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</p>
-      </CardContent>
-    </ShadcnCard>
+  /** 渲染实体用量总览卡片及当前语言的费率提示。展开与提示按钮都可通过键盘访问。 */
+  const renderSummaryTile = ({ title, value, className, tooltipKey, expandable }: SummaryTile) => (
+    <div key={title} className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
+      <div className="flex items-start justify-between gap-1.5">
+        {expandable ? (
+          <button
+            type="button"
+            className="flex min-w-0 items-center gap-1.5 rounded-sm text-left text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            aria-expanded={showCostBreakdown}
+            onClick={() => setShowCostBreakdown(value => !value)}
+          >
+            {title}
+            {expandIcon}
+          </button>
+        ) : <h3 className="min-w-0 text-sm font-medium text-muted-foreground">{title}</h3>}
+        {tooltipKey && (
+          <Tooltip>
+            <TooltipTrigger
+              type="button"
+              aria-label={t("usagePolish.costHelp", { title })}
+              className="shrink-0 rounded-sm text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Info aria-hidden className="size-4" />
+            </TooltipTrigger>
+            <TooltipContent>{t(tooltipKey)}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      <p className={"mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] " + (className ?? "")} title={value}>
+        {value}
+      </p>
+    </div>
   );
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
@@ -385,18 +392,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
 
   const costPanel = (
-    <div className="grid grid-cols-2 gap-2 w-full">
-      <div className="col-span-2">
+    <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-4">
+      <div className="col-span-full min-w-0">
         <ShadcnCard>
           <CardContent>
-            <h3 className="text-lg font-medium text-foreground">{t("{capitalizedEntityLabel} Spend Overview", { capitalizedEntityLabel })}</h3>
-            <div className="grid grid-cols-5 gap-4 mt-4">{summaryTiles.map(renderSummaryTile)}</div>
+            <h3 className="text-lg font-medium text-foreground">{t("usagePolish.scopeSpend", { scope: entityLabel })}</h3>
+            <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))] gap-2.5">{summaryTiles.map(renderSummaryTile)}</div>
           </CardContent>
         </ShadcnCard>
       </div>
 
       {/* Daily Spend Chart */}
-      <div className="col-span-2">
+      <div className="col-span-full min-w-0">
         <ShadcnCard>
           <CardHeader>
             <CardTitle className="text-base font-semibold">{t("Daily Spend")}</CardTitle>
@@ -415,7 +422,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               colors={showFlatCost ? ["cyan", "violet"] : ["cyan"]}
               stack={showFlatCost}
               valueFormatter={valueFormatterSpend}
-              yAxisWidth={100}
+              yAxisWidth="auto"
               showLegend={showFlatCost}
               customTooltip={({ payload, active }) => {
                 if (!active || !payload?.[0]) return null;
@@ -438,14 +445,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <p className="text-info">{t("Total Spend: ${value0}", { value0: (formatNumberWithCommas(data.metrics.spend, 2)) })}</p>
                     )}
                     <p className="text-muted-foreground">{t("Total Requests: {value0}", { value0: (data.metrics.api_requests) })}</p>
-                    <p className="text-muted-foreground">{t("Successful")}: {data.metrics.successful_requests}</p>
-                    <p className="text-muted-foreground">{t("Failed")}: {data.metrics.failed_requests}</p>
+                    <p className="text-muted-foreground">{t("usagePolish.successful", { count: data.metrics.successful_requests.toLocaleString(locale) })}</p>
+                    <p className="text-muted-foreground">{t("usagePolish.failed", { count: data.metrics.failed_requests.toLocaleString(locale) })}</p>
                     <p className="text-muted-foreground">{t("Total Tokens: {value0}", { value0: (data.metrics.total_tokens) })}</p>
                     <p className="text-muted-foreground">
-                      {t("Total {capitalizedEntityLabel}s: {entityCount}", { capitalizedEntityLabel, entityCount })}
+                      {t("usagePolish.entityCount", { count: entityCount.toLocaleString(locale) })}
                     </p>
                     <div className="mt-2 border-t pt-2">
-                      <p className="font-semibold">{t("Spend by {capitalizedEntityLabel}:", { capitalizedEntityLabel })}</p>
+                      <p className="font-semibold">{t("usagePolish.spendByScope", { scope: entityLabel })}</p>
                       {Object.entries(data.breakdown.entities || {})
                         .sort(([, a], [, b]) => {
                           const spendA = (a as EntityMetrics).metrics.spend;
@@ -475,18 +482,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       </div>
 
       {/* Entity Breakdown Section */}
-      <div className="col-span-2">
+      <div className="col-span-full min-w-0">
         <ShadcnCard>
           <CardContent className="flex flex-col space-y-4">
             <div className="flex flex-col space-y-2">
-              <h3 className="text-lg font-medium text-foreground">{t("Spend Per {capitalizedEntityLabel}", { capitalizedEntityLabel })}</h3>
+              <h3 className="text-lg font-medium text-foreground">{t("usagePolish.spendPerScope", { scope: entityLabel })}</h3>
               <p className="text-xs text-muted-foreground">{t("Showing Top 5 by Spend")}</p>
-              <div className="flex items-center text-sm text-muted-foreground">
-                <span>{t("Get Started by Tracking cost per {capitalizedEntityLabel}", { capitalizedEntityLabel })} </span>
-
-                  {t("here")}
-
-              </div>
             </div>
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div>
@@ -499,18 +500,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   valueFormatter={valueFormatterSpend}
                   layout="vertical"
                   showLegend={false}
-                  yAxisWidth={150}
+                  yAxisWidth="auto"
                   customTooltip={({ payload, active }) => {
                     if (!active || !payload?.[0]) return null;
                     const data = payload[0].payload;
                     return (
                       <div className="bg-card p-4 shadow-lg rounded-lg border">
                         <p className="font-bold">{data.metadata.alias}</p>
-                        <p className="text-info">{t("Spend")}: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                        <p className="text-muted-foreground">{t("Requests")}: {data.metrics.api_requests.toLocaleString()}</p>
-                        <p className="text-success">{t("Successful")}: {data.metrics.successful_requests.toLocaleString()}</p>
-                        <p className="text-destructive">{t("Failed")}: {data.metrics.failed_requests.toLocaleString()}</p>
-                        <p className="text-muted-foreground">{t("Tokens")}: {data.metrics.total_tokens.toLocaleString()}</p>
+                        <p className="text-info">{t("usagePolish.spendValue", { amount: valueFormatterSpend(data.metrics.spend) })}</p>
+                        <p className="text-muted-foreground">{t("usagePolish.requests", { count: data.metrics.api_requests.toLocaleString(locale) })}</p>
+                        <p className="text-success">{t("usagePolish.successful", { count: data.metrics.successful_requests.toLocaleString(locale) })}</p>
+                        <p className="text-destructive">{t("usagePolish.failed", { count: data.metrics.failed_requests.toLocaleString(locale) })}</p>
+                        <p className="text-muted-foreground">{t("usagePolish.tokens", { count: data.metrics.total_tokens.toLocaleString(locale) })}</p>
                       </div>
                     );
                   }}
@@ -523,7 +524,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   data={getEntityBreakdown()}
                   getRowId={(row) => row.metadata.id}
                   maxBodyHeight={208}
-                  noDataMessage={t("No {entityType} spend data", { entityType })}
+                  noDataMessage={t("usagePolish.noScopeSpend", { scope: entityLabel })}
                   size="compact"
                 />
               </div>
@@ -533,7 +534,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       </div>
 
       {entityType === "team" && (
-        <div className="col-span-2">
+        <div className="col-span-full min-w-0">
           <TeamUserSpendCard
             accessToken={accessToken}
             startTime={startTime}
@@ -579,11 +580,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       </div>
 
       {/* Spend by Provider */}
-      <div className="col-span-2">
+      <div className="col-span-full min-w-0">
         <ShadcnCard>
           <CardContent className="flex flex-col space-y-4">
             <h3 className="text-lg font-medium text-foreground">{t("Provider Usage")}</h3>
-            <div className="grid grid-cols-2">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] [&>*]:min-w-0">
               <div>
                 <DonutChart
                   className="mt-4 h-40"
@@ -636,7 +637,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   ];
 
   return (
-    <div style={{ width: "100%" }} className="relative">
+    <div className="relative min-w-0 space-y-4">
       <PaginationStatusAlerts
         isFetchingMore={isFetchingMore}
         cancelled={cancelled}
@@ -645,7 +646,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       />
       {!hasData && (!canViewEntity ? <p role="alert">{t("usageLoad.denied")}</p> : error ? <div role="alert" className="rounded-lg border border-destructive p-4 space-y-3">
         <p>{t("usageLoad.failed")}</p><Button variant="outline" onClick={retry}>{t("usageLoad.retry")}</Button>
-      </div> : <p role="status">{t("usageLoad.loading")}</p>)}
+      </div> : <p role="status" className="rounded-lg border bg-card px-4 py-5 text-sm text-muted-foreground">{t("usageLoad.loading")}</p>)}
       {canViewEntity && <UsageExportHeader
         disableExport={!hasData || !!error || cancelled || isFetchingMore}
         dateValue={dateValue}
@@ -653,8 +654,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         spendData={spendData}
         showFilters={filterSlot === undefined && entityList !== null}
         filterSlot={filterSlot}
-        filterLabel={getFilterLabel(entityType)}
-        filterPlaceholder={getFilterPlaceholder(entityType)}
+        filterLabel={filterLabel}
+        filterPlaceholder={filterPlaceholder}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
@@ -666,9 +667,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <Button variant="outline" onClick={retry}>{t("usageLoad.retry")}</Button>
       </div>}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="mt-1">
+        <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
           {tabs.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none px-3">
+            <TabsTrigger key={key} value={key} className="h-9 flex-none px-3">
               {label}
             </TabsTrigger>
           ))}

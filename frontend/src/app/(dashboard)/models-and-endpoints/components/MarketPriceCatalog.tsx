@@ -2,14 +2,16 @@
 import { ConsoleSelect } from "@/components/console/ConsoleSelect";
 import { useState } from "react";
 import Link from "next/link";
-import { Boxes, Filter, Search } from "lucide-react";
+import { Filter, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
+import { ModelAvatar } from "@/components/molecules/models/ModelAvatar";
 import type { PriceCatalogRow } from "./priceCatalogRows";
 import {
   CAPABILITIES,
   MODALITY_NAMES,
+  marketBrandLabel,
   marketCapability,
   marketModalities,
   marketMoney,
@@ -24,7 +26,7 @@ import type { PriceCatalogProps } from "./PriceCatalog";
 function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogProps & { row: PriceCatalogRow }) {
   const t = useT();
   // 首屏优先展示输入和输出价格；缓存和分辨率变体仍完整保留在详情，避免按接口字段顺序误导用户。
-  const prices = marketPrices(row)
+  const prices = marketPrices(row, t)
     .filter((price) => price.tier === 0)
     .sort((a, b) => {
       const priority = (key: string) => ({ ncache: 0, input: 0, output: 1 })[key] ?? 2;
@@ -40,20 +42,18 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
         onClick={() => onDetail?.(row)}
         aria-label={t("marketSync.detailLabel", { name: row.displayName || row.id })}
       >
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-600">
-          <Boxes className="size-5" />
-        </span>
+        <ModelAvatar model={row.id} avatar={row.raw.avatar} issuer={row.raw.issuer} provider={row.provider} className="size-10" />
         <span className="min-w-0">
           <h3 className="text-lg font-semibold">{row.displayName || row.id}</h3>
           <span className="text-xs text-muted-foreground">
-            {String(row.raw.issuer || row.provider || t("marketSync.custom"))}
+            {marketBrandLabel(row, t)}
           </span>
         </span>
       </button>
       <p className="mt-3 break-all text-xs text-muted-foreground">{row.id}</p>
-      <p className="mt-3 line-clamp-2 min-h-10 text-xs leading-5 text-muted-foreground">
-        {String(row.raw.description || "")}
-      </p>
+      {typeof row.raw.description === "string" && row.raw.description.trim() && (
+        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{row.raw.description}</p>
+      )}
       <div className="my-3 flex flex-wrap gap-1.5 text-xs">
         {marketFeatures(row)
           .slice(0, 3)
@@ -78,7 +78,7 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
           <div className="flex justify-between gap-2 text-xs" key={price.key}>
             <dt>{price.label}</dt>
             <dd className="shrink-0 font-semibold text-cyan-700 dark:text-cyan-300">
-              {marketMoney(price.usd)} <span className="font-normal text-muted-foreground">/ {price.unit}</span>
+              {marketMoney(price.usd, "$", t)} <span className="font-normal text-muted-foreground">/ {price.unit}</span>
             </dd>
           </div>
         ))}
@@ -95,14 +95,14 @@ function MarketCard({ row, onDetail, onEdit, onDelete, onReset }: PriceCatalogPr
         <p>
           {t("marketSync.side.input")}:
           {marketModalities(row, "input")
-            .map((m) => (MODALITY_NAMES[m] ? t("marketSync.modality." + m) : m))
-            .join("、") || t("marketSync.notDeclared")}
+            .map((m) => (Object.hasOwn(MODALITY_NAMES, m) ? t("marketSync.modality." + m) : m))
+            .join(" · ") || t("marketSync.notDeclared")}
         </p>
         <p>
           {t("marketSync.side.output")}:
           {marketModalities(row, "output")
-            .map((m) => (MODALITY_NAMES[m] ? t("marketSync.modality." + m) : m))
-            .join("、") || t("marketSync.notDeclared")}
+            .map((m) => (Object.hasOwn(MODALITY_NAMES, m) ? t("marketSync.modality." + m) : m))
+            .join(" · ") || t("marketSync.notDeclared")}
         </p>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
@@ -146,13 +146,13 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
       )
     : active;
   const suppliers = [
-    ...new Set(pool.map((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")))),
+    ...new Set(pool.map((row) => marketBrandLabel(row, t))),
   ].sort();
   const features = [...new Set(pool.flatMap(marketFeatures))];
   const visible = pool
     .filter(
       (row) =>
-        (!provider || String(row.raw.issuer || row.provider || t("marketSync.custom")) === provider) &&
+        (!provider || marketBrandLabel(row, t) === provider) &&
         (!input || marketModalities(row, "input").includes(input)) &&
         (!output || marketModalities(row, "output").includes(output)) &&
         (!capability || marketCapability(row, capability)) &&
@@ -299,7 +299,7 @@ export function MarketPriceCatalog(props: PriceCatalogProps) {
                     {p}
                     <span className="text-muted-foreground">
                       {
-                        pool.filter((row) => String(row.raw.issuer || row.provider || t("marketSync.custom")) === p)
+                        pool.filter((row) => marketBrandLabel(row, t) === p)
                           .length
                       }
                     </span>

@@ -593,7 +593,7 @@ describe("UsagePage", () => {
   });
 
   /** 单日费用柱保持有限宽度和费用色，避免铺满图表；使用真实图表组件，DOM 由测试框架回收。 */
-  it("should render the daily spend and top models charts with cyan bars", async () => {
+  it("renders a narrow daily bar and an accessible model spending ranking", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -610,7 +610,7 @@ describe("UsagePage", () => {
     };
 
     await waitFor(() => {
-      expect(spendBars()).toHaveLength(2);
+      expect(spendBars()).toHaveLength(1);
     });
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
@@ -620,7 +620,7 @@ describe("UsagePage", () => {
     expect(Number(dailyBar?.getAttribute("width"))).toBeLessThanOrEqual(48);
 
     expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("top-models-spend")).toHaveTextContent("gpt-4");
   });
 
   /** 微量费用仍有可读值，不能显示为零；前置两次已计费请求，仅验证显示，不改账单，DOM 自动清理。 */

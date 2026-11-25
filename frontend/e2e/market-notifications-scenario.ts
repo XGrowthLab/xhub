@@ -1,8 +1,19 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+
+/** 核对刷新后真实目录的开放档位。参数为已登录管理员的页面和语言，返回完成断言，不写价格。 */
+async function assertOpenMarketRange(page: Page, locale: "en" | "zh-CN") {
+  await stableGoto(page, "/price-data");
+  const name = "e2e-market-chat";
+  await page.getByRole("button", { name: translate(locale, "marketSync.detailLabel", { name }), exact: true }).click();
+  const pricing = page.getByRole("dialog", { name, exact: true })
+    .getByRole("table", { name: translate(locale, "marketSync.detail.fullPricing"), exact: true });
+  const range = translate(locale, "marketSync.detail.openRange", { start: "0" });
+  await expect(pricing).toContainText(translate(locale, "marketSync.detail.outputRange", { range }));
+}
 
 /** 注册双语市场消息浏览器闭环；通过本地来源、真实同步和生产扫描器产生数据，隔离 schema 自动清理。 */
 export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
@@ -22,6 +33,8 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       const created = await page.request.post(GATEWAY + "/user/new", { headers: admin, data: { user_email: email, password } });
       expect(created.status(), await created.text()).toBe(200); userID = (await created.json()).user_id;
       await setVariant(false); await refresh(); await scan();
+      if (locale === "en") await page.getByRole("button", { name: translate("zh-CN", "language.en"), exact: true }).click();
+      await assertOpenMarketRange(page, locale);
       const beforeResponse = await page.request.get(GATEWAY + "/notifications?limit=100", { headers: admin });
       expect(beforeResponse.status()).toBe(200);
       const before = new Set((await beforeResponse.json()).items.map((item: { id: string }) => item.id));
@@ -30,11 +43,13 @@ export function registerMarketNotificationsScenario(locale: "en" | "zh-CN") {
       expect(response.status()).toBe(200);
       const createdMessages = (await response.json()).items.filter((item: { id: string; type: string }) => item.type === "market_update" && !before.has(item.id));
       expect(createdMessages).toHaveLength(1);
+      // 来源同时切换所有模型的开放上界写法，只有新增项和真实调价应进入消息。
+      expect(createdMessages[0].data.changes).toHaveLength(2);
       expect(createdMessages[0].data.changes).toEqual(expect.arrayContaining([
         expect.objectContaining({ kind: "added", model: newModel }),
         expect.objectContaining({ kind: "price_changed", model: "e2e-market-chat" }),
       ]));
-      if (locale === "en") await page.getByRole("button", { name: "English", exact: true }).click();
+      await assertOpenMarketRange(page, locale);
       await stableGoto(page, "/message-center");
       const tr = (key: string) => translate(locale, key);
       await expect(page.getByRole("heading", { name: tr("notifications.marketTitle") }).first()).toBeVisible();

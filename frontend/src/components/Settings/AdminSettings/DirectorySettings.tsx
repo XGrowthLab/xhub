@@ -8,11 +8,11 @@ import IntegrationOverview from "./IntegrationOverview";
 import LoggingSettings from "./LoggingSettings/LoggingSettings";
 import VersionUpdates from "./VersionUpdates";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Copy, ShieldCheck, Inbox, Users, Trash2 } from "lucide-react";
+import { Archive, Copy, ShieldCheck, Inbox, Users, Trash2, Package } from "lucide-react";
 import SettingsSelect from "./SettingsSelect";
 import { useT } from "@/i18n";
 import { createDirectoryConnection, deleteDirectoryConnection, listDirectoryConnections, configureDirectoryConnection, listDirectoryOrganizations, listDirectoryTeams, enterprisePublicOrigin, type DirectoryOrganization, type DirectoryTeam, type DirectoryConnection } from "@/lib/http/directory";
@@ -105,39 +105,38 @@ export default function DirectorySettings() {
   return <section aria-labelledby="directory-title">
     <h2 id="directory-title" className="sr-only">{t("directory.title")}</h2>
     <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="gap-6">
-    <div className="overflow-x-auto border-b pb-1.5">
-      <TabsList variant="line" activateOnFocus aria-label={t("enterprise.settingsTabs")} className="group-data-horizontal/tabs:h-auto items-stretch gap-4">
-        <div role="group" aria-label={t("enterprise.identitySection")}>
-          <p aria-hidden="true" className="px-2 text-xs font-medium text-muted-foreground">{t("enterprise.identitySection")}</p>
-          <div className="flex h-9 gap-1">
-            <TabsTrigger value="sso" className="flex-none">{t("enterprise.tabs.sso")}</TabsTrigger>
-            <TabsTrigger value="scim" className="flex-none">{t("enterprise.tabs.scim")}</TabsTrigger>
-          </div>
-        </div>
-        <div role="group" aria-label={t("enterprise.storageSection")} className="border-s ps-3">
-          <p aria-hidden="true" className="whitespace-nowrap px-2 text-xs font-medium text-muted-foreground">{t("enterprise.storageSection")}</p>
-          <div className="flex h-9">
-            <TabsTrigger value="logs" className="flex-none">{t("enterprise.tabs.logs")}</TabsTrigger>
-          </div>
-        </div>
-        <div className="flex h-9 self-end border-s ps-3">
-          <TabsTrigger value="versions" className="flex-none">{t("versionUpdates.title")}</TabsTrigger>
-        </div>
-      </TabsList>
-    </div>
+    <TabsList
+      variant="line"
+      activateOnFocus
+      aria-label={t("enterprise.settingsTabs")}
+      className="w-full min-w-0 flex-wrap justify-start gap-1 border-b px-0 pb-1 group-data-horizontal/tabs:h-auto sm:gap-2"
+    >
+      <div role="group" aria-label={t("enterprise.identitySection")} className="flex flex-wrap gap-1">
+        <TabsTrigger value="sso" className="min-h-9 flex-none px-3"><ShieldCheck aria-hidden="true" />{t("enterprise.tabs.sso")}</TabsTrigger>
+        <TabsTrigger value="scim" className="min-h-9 flex-none px-3"><Users aria-hidden="true" />{t("enterprise.tabs.scim")}</TabsTrigger>
+      </div>
+      <div role="group" aria-label={t("enterprise.storageSection")} className="flex flex-wrap gap-1">
+        <TabsTrigger value="logs" className="min-h-9 flex-none px-3"><Archive aria-hidden="true" />{t("enterprise.tabs.logs")}</TabsTrigger>
+      </div>
+      <TabsTrigger value="versions" className="min-h-9 flex-none px-3"><Package aria-hidden="true" />{t("versionUpdates.title")}</TabsTrigger>
+    </TabsList>
     {/* 保留页签实例与归属快照；一次性凭据仅存在 SCIM 弹窗内存，关闭即清除。 */}
-    <TabsContent value="sso" keepMounted className="space-y-6">
-      {ssoError ? <p role="alert">{t("enterprise.error")}</p> : ssoLoading ? <p role="status">{t("enterprise.loadingConfiguration")}</p> : ssoRows.length === 0 ? <div className="rounded-xl border bg-card p-6">
+    <TabsContent value="sso" keepMounted className="space-y-4">
+      {ssoError ? <p role="alert">{t("enterprise.error")}</p> : ssoLoading ? <p role="status">{t("enterprise.loadingConfiguration")}</p> : ssoRows.length === 0 ? <div className="rounded-xl border bg-card p-4 sm:p-5">
       <div className="flex items-start gap-3"><ShieldCheck aria-hidden="true" className="mt-0.5 size-5 text-muted-foreground" /><div><h3 className="text-base font-semibold">{t("enterprise.ssoHeading")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("enterprise.ssoDescription")}</p></div></div>
-      <div className="mt-6 flex min-h-72 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center"><Inbox aria-hidden="true" className="mb-2 size-10 text-muted-foreground/40" /><h4 className="text-lg font-semibold">{t("enterprise.ssoEmpty")}</h4><p className="max-w-xl text-sm text-muted-foreground">{t("enterprise.ssoEmptyHint")}</p><Button type="button" className="mt-2" onClick={() => setSSOSetup(true)}>{t("enterprise.configureSSO")}</Button></div></div> : <><div className="flex justify-end"><Button onClick={()=>setSSOSetup(true)}>{t("enterprise.configureSSO")}</Button></div>{ssoRows.map((row) => <IntegrationOverview key={row.connection_id} id={row.connection_id} name={row.name} onDeleted={()=>setSSORows((items)=>items.filter((item)=>item.connection_id!==row.connection_id))} />)}</>}
+      <div className="mt-6 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-7 text-center"><Inbox aria-hidden="true" className="mb-2 size-10 text-muted-foreground/40" /><h4 className="text-lg font-semibold">{t("enterprise.ssoEmpty")}</h4><p className="max-w-xl text-sm text-muted-foreground">{t("enterprise.ssoEmptyHint")}</p><Button type="button" className="mt-2" onClick={() => setSSOSetup(true)}>{t("enterprise.configureSSO")}</Button></div></div> : <><header className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">{t("enterprise.ssoHeading")}</h3>
+        <Button size="sm" variant="outline" onClick={() => setSSOSetup(true)}>{t("enterprise.configureSSO")}</Button>
+      </header>{ssoRows.map((row) => <IntegrationOverview key={row.connection_id} id={row.connection_id} name={row.name} onDeleted={()=>setSSORows((items)=>items.filter((item)=>item.connection_id!==row.connection_id))} />)}</>}
     </TabsContent>
-    <TabsContent value="scim" keepMounted className="rounded-xl border bg-card p-6 [&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_summary]:cursor-pointer [&_summary]:text-sm [&_summary]:font-medium">
+    <TabsContent value="scim" keepMounted className="rounded-xl border bg-card p-4 sm:p-5 [&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_summary]:cursor-pointer [&_summary]:text-sm [&_summary]:font-medium">
     <div className="mb-6 flex items-start gap-3"><Users aria-hidden="true" className="mt-1 size-5 text-muted-foreground" /><div><h3 className="text-lg font-semibold">{t("enterprise.scimHeading")}</h3><p className="mt-1 text-sm text-muted-foreground">{t("enterprise.scimBrief")}</p></div></div>
     {error && <p role="alert">{t("directory.error")}</p>}
-    {rows.length === 0 && !error && <div className="mb-6 flex min-h-72 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center"><Inbox aria-hidden="true" className="mb-2 size-10 text-muted-foreground/40" /><h4 className="text-lg font-semibold">{t("enterprise.scimEmpty")}</h4><p className="max-w-xl text-sm text-muted-foreground">{t("enterprise.scimEmptyHint")}</p><Button className="mt-2" onClick={() => setSCIMSetup(true)}>{t("enterprise.configureSCIM")}</Button></div>}
+    {rows.length === 0 && !error && <div className="mb-6 flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-4 py-7 text-center"><Inbox aria-hidden="true" className="mb-2 size-10 text-muted-foreground/40" /><h4 className="text-lg font-semibold">{t("enterprise.scimEmpty")}</h4><p className="max-w-xl text-sm text-muted-foreground">{t("enterprise.scimEmptyHint")}</p><Button className="mt-2" onClick={() => setSCIMSetup(true)}>{t("enterprise.configureSCIM")}</Button></div>}
     {rows.length>0 && <div className="mb-4 flex justify-end"><Button onClick={()=>setSCIMSetup(true)}>{t("enterprise.newConnection")}</Button></div>}
-    <Dialog open={scimSetup || !!editing} onOpenChange={(open)=>{if(!open)closeSCIM();}}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl [&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm"><DialogTitle>{t("enterprise.configureSCIM")}</DialogTitle><DialogDescription>{t("enterprise.scimBrief")}</DialogDescription>
-    {(scimSetup || editing) && <>
+    <Dialog open={scimSetup || !!editing} onOpenChange={(open)=>{if(!open)closeSCIM();}}><DialogContent className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl [&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm">
+    <DialogHeader className="border-b px-5 py-4 pe-12 sm:px-6 sm:pe-14"><DialogTitle className="text-lg font-semibold">{t("enterprise.configureSCIM")}</DialogTitle><DialogDescription>{t("enterprise.scimBrief")}</DialogDescription></DialogHeader>
+    {(scimSetup || editing) && <div className="min-h-0 space-y-3 overflow-y-auto px-5 py-4 sm:px-6">
     <div className="max-w-2xl">
     <label>{t("enterprise.publicURL")}<Input type="url" placeholder="https://console.example.com" value={publicURL} onChange={(event) => setPublicURL(event.target.value)} /></label>
     <details className="mt-2 text-sm text-muted-foreground"><summary>{t("enterprise.setupHelp")}</summary><p className="mt-3">{t("enterprise.publicURLHint")}</p><p className="mt-3">{t("directory.scope")}</p><p className="mt-3">{t("enterprise.scimSteps")}</p></details>
@@ -160,22 +159,35 @@ export default function DirectorySettings() {
     {copyResult && <p role={copyResult === "copyError" || copyResult === "tokenCopyError" ? "alert" : "status"}>{t("enterprise." + copyResult)}</p>}
     {error && <p role="alert">{t("directory.error")}</p>}
     <div className="flex justify-end"><Button variant="outline" disabled={busy} onClick={closeSCIM}>{t("enterprise.closeConfiguration")}</Button></div>
-    </>}
+    </div>}
     </DialogContent></Dialog>
     <ul className="space-y-4">{rows.map((connection) => <li key={connection.id} className="rounded-lg border p-4">
-      <div className="mb-4 flex items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-3"><span className="font-medium">{connection.name}</span><span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">{t(connection.enabled ? "directory.enabled" : "directory.disabled")}</span></div>
-      <div className="flex items-center gap-3"><Switch checked={connection.enabled} disabled={busy} onCheckedChange={() => toggle(connection)}
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-3"><span className="font-medium">{connection.name}</span><span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">{t(connection.enabled ? "directory.enabled" : "directory.disabled")}</span></div>
+      <div className="flex flex-wrap items-center gap-2"><Switch checked={connection.enabled} disabled={busy} onCheckedChange={() => toggle(connection)}
         aria-label={t(connection.enabled ? "directory.disableName" : "directory.enableName", { name: connection.name })}
       />
-      <Button variant="outline" disabled={busy} onClick={()=>setEditing(connection)} aria-label={t("enterprise.editSCIMName",{name:connection.name})}>{t("enterprise.editConfiguration")}</Button>
-      <Button variant="outline" type="button" disabled={busy} className="text-destructive" onClick={() => {setDeleting(connection); setDeleteError(false);}} aria-label={t("directory.deleteName", {name:connection.name})}><Trash2 aria-hidden="true" />{t("directory.delete")}</Button></div>
+      <Button variant="outline" size="sm" disabled={busy} onClick={()=>setEditing(connection)} aria-label={t("enterprise.editSCIMName",{name:connection.name})}>{t("enterprise.editConfiguration")}</Button>
+      <Button variant="ghost" size="sm" type="button" disabled={busy} className="text-destructive" onClick={() => {setDeleting(connection); setDeleteError(false);}} aria-label={t("directory.deleteName", {name:connection.name})}><Trash2 aria-hidden="true" />{t("directory.delete")}</Button></div>
       </div>
     </li>)}</ul>
     </TabsContent>
     <TabsContent value="logs" keepMounted className="space-y-6"><IntegrationOverview /><LoggingSettings /></TabsContent>
     <TabsContent value="versions"><VersionUpdates /></TabsContent>
     </Tabs>
-    <Dialog open={ssoSetup} onOpenChange={setSSOSetup}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"><DialogTitle>{t("enterprise.configureSSO")}</DialogTitle><DialogDescription>{t("enterprise.ssoDescription")}</DialogDescription>{ssoSetup && <EnterpriseConfiguration sso organizations={organizations} embedded onSaved={(saved)=>{setSSORows((items)=>[...items,{connection_id:String(saved.connection_id),name:String(saved.name),enabled:!!saved.enabled}]);setSSOSetup(false);}}/>}</DialogContent></Dialog>
+    <Dialog open={ssoSetup} onOpenChange={setSSOSetup}>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <DialogHeader className="border-b px-5 py-4 pe-12 sm:px-6 sm:pe-14">
+          <DialogTitle className="text-lg font-semibold">{t("enterprise.configureSSO")}</DialogTitle>
+          <DialogDescription>{t("enterprise.ssoDescription")}</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto px-5 py-4 sm:px-6">
+          {ssoSetup && <EnterpriseConfiguration sso organizations={organizations} embedded onSaved={(saved) => {
+            setSSORows((items) => [...items, { connection_id: String(saved.connection_id), name: String(saved.name), enabled: !!saved.enabled }]);
+            setSSOSetup(false);
+          }} />}
+        </div>
+      </DialogContent>
+    </Dialog>
     <Dialog open={!!deleting} onOpenChange={(open) => {if (!open && !busy) setDeleting(null);}}><DialogContent><DialogTitle>{t("directory.deleteName", {name:deleting?.name ?? ""})}</DialogTitle><DialogDescription>{t("directory.deleteHint")}</DialogDescription>{deleteError && <p role="alert" className="text-sm text-destructive">{t("directory.error")}</p>}<div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => setDeleting(null)}>{t("directory.cancel")}</Button><Button variant="destructive" disabled={busy} onClick={remove}>{t("directory.confirmDelete")}</Button></div></DialogContent></Dialog>
   </section>;
 }

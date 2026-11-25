@@ -92,17 +92,18 @@ export default function EnterpriseConfiguration({ id, sso = false, organizations
    setResult("metadataDownloaded");
   } catch {setResult("error");} finally {if (url) URL.revokeObjectURL(url); setBusy(false);}
  }
- return <section className={(oidc || embedded ? "" : "rounded-xl border bg-card p-6 ") + "[&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_summary]:cursor-pointer [&_summary]:text-sm [&_summary]:font-medium"} aria-label={embedded ? undefined : t("enterprise." + titleKey + "Title")}>
-  <h3 className="text-base font-semibold">{t("enterprise." + titleKey + "Title")}</h3>
-  <p className="mt-1 text-sm text-muted-foreground">{t("enterprise." + titleKey + "Brief")}</p>
-  <details className="my-4 text-muted-foreground"><summary>{t("enterprise.setupHelp")}</summary><p className="mt-3 text-sm">{t("enterprise." + titleKey + "Hint")}</p><ol className="mt-3 space-y-2 text-sm">{[1,2,3].map((step) => <li key={step}>{t("enterprise." + titleKey + "Step" + step)}</li>)}</ol>{oidc && <p className="mt-3 text-sm">{t("enterprise.providerHint")}</p>}</details>
+ return <section className={(oidc || embedded ? "" : "rounded-xl border bg-card p-6 ") + "[&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_label]:font-medium [&_label]:min-w-0 [&_summary]:cursor-pointer [&_summary]:text-sm [&_summary]:font-medium"} aria-label={embedded ? undefined : t("enterprise." + titleKey + "Title")}>
+  {/* 弹窗已有通用标题，选择 SAML 后保留当前协议的明确标题。 */}
+  {(!embedded || saml) && <h3 className="mb-2 text-base font-semibold">{t("enterprise." + titleKey + "Title")}</h3>}
+  {!embedded && <p className="mb-3 text-sm text-muted-foreground">{t("enterprise." + titleKey + "Brief")}</p>}
+  <details className="mb-4 rounded-lg border bg-muted/30 px-3 py-2 text-muted-foreground"><summary>{t("enterprise.setupHelp")}</summary><p className="mt-3 text-sm">{t("enterprise." + titleKey + "Hint")}</p><ol className="mt-3 space-y-2 text-sm">{[1,2,3].map((step) => <li key={step}>{t("enterprise." + titleKey + "Step" + step)}</li>)}</ol>{oidc && <p className="mt-3 text-sm">{t("enterprise.providerHint")}</p>}</details>
   <div className="flex flex-wrap gap-2">
   {oidc && <label className="w-full max-w-xl">{t("enterprise.publicURL")}<Input type="url" value={publicURL} placeholder="https://console.example.com" onChange={(event)=>setPublicURL(event.target.value)} /></label>}
   {oidc && <Button variant="outline" type="button" disabled={!origin || busy} onClick={generateURLs}>{t(saml ? "enterprise.generateSAMLURLs" : "enterprise.generateURLs")}</Button>}
   {(!oidc || id) && <Button variant="outline" type="button" disabled={busy} onClick={load}>{t("enterprise.load")}</Button>}
   {saml && <Button variant="outline" type="button" disabled={!savedID || !savedSAML || busy} onClick={downloadMetadata}>{t("enterprise.downloadMetadata")}</Button>}
   </div>
-  <form onSubmit={save} className="my-5 grid max-w-3xl gap-4 sm:grid-cols-2">
+  <form onSubmit={save} className="my-4 grid min-w-0 gap-4 sm:grid-cols-2">
    {oidc && !id && <label>{t("directory.organization")}<SettingsSelect required value={String(value.organization_id ?? "")} onChange={(event)=>setValue((old)=>({...old,organization_id:event.target.value}))}><option value="">{t("directory.choose")}</option>{organizations.map((org)=><option key={org.organization_id} value={org.organization_id}>{org.organization_alias || org.organization_id}</option>)}</SettingsSelect></label>}
    {oidc && <label>{t("enterprise.ssoName")}<Input required value={String(value.name ?? "")} onChange={(event)=>setValue((old)=>({...old,name:event.target.value}))} /></label>}
    {oidc && <label className="sm:col-span-2">{t("enterprise.provider")}<SettingsSelect disabled={!!savedID && loadedConfiguration} value={provider} onChange={(event) => changeProvider(event.target.value)}>{["oidc", "entra", "okta", "keycloak", "auth0", "saml"].map((id) => <option key={id} value={id}>{t("enterprise.providers." + id)}</option>)}</SettingsSelect></label>}

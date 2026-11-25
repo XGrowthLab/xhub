@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { setActiveLocale } from "@/i18n/runtime";
@@ -6,6 +6,25 @@ import { MarketPriceCatalog } from "./MarketPriceCatalog";
 import { priceCatalogRows } from "./priceCatalogRows";
 
 beforeEach(() => setActiveLocale("zh-CN"));
+
+/** 前置市场与当地无头像模型；验证目录资产优先且坏链回退到同一品牌，纯 DOM 事件不发网络请求。 */
+it("模型广场展示市场头像并能回退到本地品牌", () => {
+  const rows = priceCatalogRows({ models: {
+    "x-ai/grok-4.5": { market_catalog: true, issuer: "xAI", avatar: "https://static.qiniu.com/model-icons/grok.png" },
+    "claude-opus": { market_catalog: true },
+    "moonshotai/kimi-k3.1-pro": { market_catalog: true, litellm_provider: "openai" },
+  } });
+  render(<MarketPriceCatalog rows={rows} />);
+  const marketAvatar = within(screen.getByTestId("price-row-x-ai/grok-4.5")).getByTestId("model-avatar");
+  const localAvatar = within(screen.getByTestId("price-row-claude-opus")).getByTestId("model-avatar");
+  expect(marketAvatar).toHaveAttribute("data-avatar-kind", "market");
+  expect(localAvatar).toHaveAttribute("data-avatar-kind", "provider");
+  const kimi = within(screen.getByTestId("price-row-moonshotai/kimi-k3.1-pro"));
+  expect(kimi.getByText("Moonshot AI", { exact: true })).toBeVisible();
+  expect(kimi.getByTestId("model-avatar").querySelector("img")).toHaveAttribute("src", expect.stringContaining("moonshot"));
+  fireEvent.error(marketAvatar.querySelector("img")!);
+  expect(marketAvatar).toHaveAttribute("data-avatar-kind", "provider");
+});
 /** 前置缓存字段排在输入输出之前的真实价格结构；验证卡片优先展示主要费用，完整缓存价仍由详情提供；DOM自动清理。 */
 it("卡片优先显示输入输出价格", () => {
   const rows = priceCatalogRows({

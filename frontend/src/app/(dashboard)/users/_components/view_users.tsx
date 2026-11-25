@@ -33,6 +33,7 @@ import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 
 import { UsersTable } from "./view_users/UsersTable";
 import UserInfoView from "./view_users/user_info_view";
+import UserAccountEditDialog from "./view_users/UserAccountEditDialog";
 import { UserInfo, UserListResponse } from "@/components/networking";
 
 interface ViewUserDashboardProps {
@@ -75,7 +76,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false);
 
   const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
-  const [openInEditMode, setOpenInEditMode] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
@@ -139,19 +140,15 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     setRowSelection({});
   }, []);
 
-  const handleUserClick = useCallback(
-    (userId: string, openInEdit: boolean = false) => {
-      void setSelectedUserId(userId);
-      setOpenInEditMode(openInEdit);
-    },
-    [setSelectedUserId],
-  );
+  /** 用户点击身份列时按 userId 打开详情；编辑入口由列表独立处理。 */
+  const handleUserClick = useCallback((userId: string) => {
+    void setSelectedUserId(userId);
+  }, [setSelectedUserId]);
 
   /** 关闭详情并刷新用户目录；无参数和返回值，供详情返回按钮调用，使账号和团队编辑在列表立即可见。 */
   const handleCloseUserInfo = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["userList"] });
     void setSelectedUserId(null);
-    setOpenInEditMode(false);
   }, [setSelectedUserId, queryClient]);
 
   const handleDelete = useCallback((user: UserInfo) => {
@@ -293,8 +290,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         accessToken={accessToken}
         userRole={userRole}
         possibleUIRoles={possibleUIRoles}
-        initialTab={openInEditMode ? 1 : 0}
-        startInEditMode={openInEditMode}
       />
     );
   }
@@ -318,6 +313,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       rowSelection={rowSelection}
       onRowSelectionChange={setRowSelection}
       onUserClick={handleUserClick}
+      onEditUser={isProxyAdmin ? setEditingUserId : undefined}
       onDeleteUser={handleDelete}
       onResetPassword={handleResetPassword}
     />
@@ -373,6 +369,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
       <QuotaGuide scope="person" />
       {usersTable}
+
+      {editingUserId && accessToken && isProxyAdmin && (
+        <UserAccountEditDialog userId={editingUserId} accessToken={accessToken}
+          onClose={() => setEditingUserId(null)}
+          onSaved={() => queryClient.invalidateQueries({ queryKey: ["userList"] })} />
+      )}
 
       {/* Existing Modals */}
       <DeleteResourceModal

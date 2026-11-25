@@ -5,6 +5,7 @@ import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { I18nProvider, translate } from "@/i18n";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -265,7 +266,8 @@ test("model badges stay non-clickable", async () => {
   expect(screen.queryByRole("link", { name: "gpt-4o-mini" })).not.toBeInTheDocument();
 });
 
-test("should keep unsaved settings edits when switching tabs and back", async () => {
+/** 已打开组织设置页为前置条件，验证取消弹窗保留该页签、丢弃草稿，测试框架清理组件与替身。 */
+test("cancels a settings draft without leaving the current tab", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
   const user = userEvent.setup();
@@ -284,17 +286,48 @@ test("should keep unsaved settings edits when switching tabs and back", async ()
   await user.click(screen.getByRole("tab", { name: "Settings" }));
   await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
 
-  const alias = await screen.findByLabelText(/Organization Name/i);
+  const dialog = await screen.findByRole("dialog", { name: "Organization Settings" });
+  const alias = within(dialog).getByRole("textbox", { name: "Organization Name" });
+  const savedName = alias.getAttribute("value");
   await user.clear(alias);
-  fireEvent.change(alias, { target: { value: "Renamed Org" } });
+  await user.type(alias, "Renamed Org");
   expect(alias).toHaveValue("Renamed Org");
 
-  await user.click(screen.getByRole("tab", { name: "Overview" }));
-  await user.click(screen.getByRole("tab", { name: "Settings" }));
-
-  expect(screen.getByLabelText(/Organization Name/i)).toHaveValue("Renamed Org");
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("button", { name: "Edit Settings" }));
+  expect(await screen.findByRole("textbox", { name: "Organization Name" })).toHaveValue(savedName);
 });
 
+/** 前置为可编辑的组织设置弹窗，验证从弹窗内切换语言后原样保留元数据草稿；测试卸载后不提交更改。 */
+test("switches the edit dialog language without changing the metadata draft", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+  const user = userEvent.setup();
+  renderWithProviders(
+    <I18nProvider initialLocale="en">
+      <OrganizationInfoView
+        organizationId="org_123"
+        onClose={() => {}}
+        accessToken="test-token"
+        is_org_admin={false}
+        is_proxy_admin={true}
+        userModels={[]}
+        editOrg={true}
+      />
+    </I18nProvider>,
+  );
+  const draft = '{"note":"保留原文"}';
+  const dialog = within(await screen.findByRole("dialog", { name: "Organization Settings" }));
+  fireEvent.change(dialog.getByRole("textbox", { name: "Metadata" }), { target: { value: draft } });
+  await user.click(dialog.getByRole("button", { name: "中文", exact: true }));
+  expect(dialog.getByRole("heading", { name: translate("zh-CN", "Organization Settings") })).toBeVisible();
+  expect(dialog.getByRole("textbox", { name: translate("zh-CN", "Metadata") })).toHaveValue(draft);
+  await user.click(dialog.getByRole("button", { name: "English", exact: true }));
+  expect(dialog.getByRole("textbox", { name: "Metadata" })).toHaveValue(draft);
+});
+
+/** 零速率上限显式显示为零；前置两个以零配置的限流字段，检查概览和设置的键值语义，测试框架清理。 */
 test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never as Unlimited", async () => {
   const zeroLimitOrg = {
     ...mockOrg,
@@ -318,13 +351,13 @@ test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never
   );
 
   const overview = await screen.findByRole("tabpanel", { name: "Overview" });
-  expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
-  expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+  for (const label of ["Tokens per minute Limit (TPM)", "Requests per minute Limit (RPM)"]) {
+    expect(within(overview).getByText(label).nextElementSibling).toHaveTextContent(/^0$/);
+  }
 
   await user.click(screen.getByRole("tab", { name: "Settings" }));
   const settings = await screen.findByRole("tabpanel", { name: "Settings" });
-  expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
-  expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
-  expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
-  expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+  for (const label of ["Tokens per minute Limit (TPM)", "Requests per minute Limit (RPM)"]) {
+    expect(within(settings).getByText(label).nextElementSibling).toHaveTextContent(/^0$/);
+  }
 });

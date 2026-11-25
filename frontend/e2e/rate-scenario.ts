@@ -58,10 +58,22 @@ test("层级限流 " + scenario, async ({ page }) => {
     expect(baseline.status(),await baseline.text()).toBe(200);
     let saved: ReturnType<typeof page.waitForResponse>;
     if (scenario === "organization-edit") {
-    // 组织页面持久化 RPM/TPM；通过稳定标签操作完整保存流程。
+    // 列表编辑在独立弹窗打开；取消后仍是同一目录，修改值不进入账面额度。
+    await stableGoto(page, "/organizations");
+    const organizationListURL = page.url();
+    await page.getByTestId("organization-actions-" + orgID).click();
+    await page.getByTestId("organization-action-edit").click();
+    const editOrganization = page.getByRole("dialog", { name: t("Organization Settings") });
+    await expect(editOrganization.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true })).toHaveValue("10");
+    await editOrganization.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true }).fill("19");
+    await editOrganization.getByRole("button", { name: t("Cancel"), exact: true }).click();
+    await expect(editOrganization).toBeHidden();
+    await expect(page).toHaveURL(organizationListURL);
+    // 详情页持久化 RPM/TPM，同时验证从目录取消的草稿未生效。
     await stableGoto(page, "/organizations?org=" + orgID);
     await page.getByRole("tab", { name: t("Settings"), exact: true }).click();
     await page.getByRole("button", { name: t("Edit Settings"), exact: true }).click();
+    await expect(editOrganization.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true })).toHaveValue("10");
     await page.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true }).fill("12");
     await page.getByLabel(t("Tokens per minute Limit (TPM)"), { exact: true }).fill("768");
     saved = page.waitForResponse(r => r.url().endsWith("/organization/update") && r.request().method() === "PATCH");
@@ -71,12 +83,24 @@ test("层级限流 " + scenario, async ({ page }) => {
     expect(await info.json()).toMatchObject({rpm_limit:12,tpm_limit:768});
     }
     if (scenario === "team-edit") {
-    // 团队页面保存两种分配并读取真实持久化结果。
+    // 团队列表入口可真正编辑且取消只关闭弹窗。
+    await stableGoto(page, "/teams");
+    const teamListURL = page.url();
+    await page.getByTestId("team-actions-" + teamID).click();
+    await page.getByTestId("team-action-edit").click();
+    const editTeam = page.getByRole("dialog", { name: t("Team Settings") });
+    await expect(editTeam.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true })).toHaveValue("6");
+    await editTeam.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true }).fill("9");
+    await editTeam.getByRole("button", { name: t("Cancel"), exact: true }).click();
+    await expect(editTeam).toBeHidden();
+    await expect(page).toHaveURL(teamListURL);
+    // 详情页继续保存两种分配并读取后台。
     await stableGoto(page, "/teams?team=" + teamID);
     await page.getByRole("tab", { name: t("Settings"), exact: true }).click();
     await page.getByRole("button", { name: t("Edit Settings"), exact: true }).click();
     await expect(page.getByRole("group", { name: t("directoryForm.limits"), exact:true }).getByLabel(t("Max Budget (USD)"))).toBeVisible();
     if (process.env.E2E_SHOTS) await page.screenshot({ path: process.env.E2E_SHOTS + "/ui-team-edit.png", animations: "disabled" });
+    await expect(editTeam.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true })).toHaveValue("6");
     await page.getByLabel(t("Requests per minute Limit (RPM)"), { exact: true }).fill("8");
     await page.getByLabel(t("Tokens per minute Limit (TPM)"), { exact: true }).fill("512");
     saved = page.waitForResponse(r => r.url().endsWith("/team/update") && r.request().method() === "POST");

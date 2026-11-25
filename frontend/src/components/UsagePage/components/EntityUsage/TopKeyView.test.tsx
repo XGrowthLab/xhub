@@ -1,5 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse } from "../../../key_team_helpers/key_list";
@@ -129,14 +129,15 @@ describe("TopKeyView", () => {
     expect(chartViewButton).toHaveClass("bg-info/15");
   });
 
-  it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
+  /** 前置历史别名和仍可访问的关联密钥；从榜单按键打开详情，组件和请求模拟由测试框架清理。 */
+  it("renders the exact recorded alias and opens key details from the ranking", async () => {
     const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
     mockKeyInfoV1Call.mockResolvedValue(mockKeyInfo);
     mockTransformKeyInfo.mockReturnValue(mockTransformedData);
 
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <TopKeyView
         {...baseProps}
         topKeys={[
@@ -151,12 +152,10 @@ describe("TopKeyView", () => {
 
     await user.click(screen.getByRole("button", { name: "Chart" }));
 
-    const bars = container.querySelectorAll("path.recharts-rectangle");
-    expect(bars).toHaveLength(1);
-    expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
-    expect(screen.getAllByText("A Very Long Key Alias").length).toBeGreaterThan(0);
-
-    fireEvent.click(bars[0]);
+    const row = screen.getByRole("button", { name: /^A Very Long Key Alias/ });
+    expect(within(row).getByText("$100.00")).toBeVisible();
+    row.focus();
+    await user.keyboard("{Enter}");
 
     await waitFor(() => {
       expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "key-123");

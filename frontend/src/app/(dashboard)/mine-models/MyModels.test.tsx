@@ -109,7 +109,7 @@ describe("MyModels", () => {
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     screen.getByRole("combobox", { name: "Provider" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(screen.getByRole("option", { name: "openai", exact: true }));
+    await user.click(screen.getByRole("option", { name: "OpenAI", exact: true }));
     expect(screen.getByTestId("my-model-gpt-allowed")).toBeInTheDocument();
     expect(screen.queryByTestId("my-model-eye-allowed")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
@@ -121,6 +121,23 @@ describe("MyModels", () => {
       "my-model-unpriced",
       "my-model-eye-allowed",
     ]);
+  });
+
+  /** 同时放入 Kimi 和 GPT 的 OpenAI 兼容接口夹具，验证原厂名称、图标、筛选和详情一致，DOM 自动卸载。 */
+  it("shows and filters Kimi under Moonshot AI instead of its OpenAI protocol", async () => {
+    const user = userEvent.setup();
+    const kimi = { ...cards[0], id: "moonshotai/kimi-k3.1-pro" };
+    render(<MyModels models={[cards[0], kimi]} />);
+    const card = screen.getByTestId("my-model-" + kimi.id);
+    expect(within(card).getByText("Moonshot AI", { exact: true })).toBeVisible();
+    expect(within(card).getByTestId("model-avatar").querySelector("img")).toHaveAttribute("src", expect.stringContaining("moonshot"));
+    await user.click(screen.getByRole("button", { name: "Filters", exact: true }));
+    screen.getByRole("combobox", { name: "Provider" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(screen.getByRole("option", { name: "Moonshot AI", exact: true }));
+    expect(screen.queryByTestId("my-model-gpt-allowed")).not.toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Model details", exact: true }));
+    expect(within(screen.getByRole("dialog", { name: kimi.id })).getByText("Moonshot AI", { exact: true })).toBeVisible();
   });
 
   /** 前置同一列表混有 llm/chat 和不同类型；验证中英文仅一个对话分组及筛选，且不丢模型、不修改原始类别；自动卸载清理。 */

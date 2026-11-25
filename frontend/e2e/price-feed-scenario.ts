@@ -29,6 +29,10 @@ export function registerSC111() {
     await expect(prompt.getByRole("link", { name: "添加此模型" })).toHaveCount(2);
     await prompt.getByRole("button", { name: "暂不添加" }).click();
     await expect(page.getByTestId("price-row-e2e-market-chat")).toBeVisible();
+    const marketAvatar = page.getByTestId("price-row-e2e-market-chat").getByTestId("model-avatar");
+    await expect(marketAvatar).toHaveAttribute("data-avatar-kind", "market");
+    await expect.poll(() => marketAvatar.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+    await expect(page.getByTestId("price-row-e2e-market-video").getByTestId("model-avatar")).toHaveAttribute("data-avatar-kind", "provider");
     await expect(page.getByTestId("price-row-e2e-market-private")).toHaveCount(0);
     await expect(page.getByTestId("price-row-e2e-market-retired")).toHaveCount(0);
     const features = page.getByRole("group", { name: "特性标签" });
@@ -38,6 +42,7 @@ export function registerSC111() {
     await page.getByRole("button", { name: t("priceCatalog.reset"), exact: true }).click();
     await page.getByRole("button", { name: "查看 e2e-market-chat 详情" }).click();
     const detail = page.getByRole("dialog", { name: "e2e-market-chat", exact: true });
+    await expect(detail.getByTestId("model-avatar")).toHaveAttribute("data-avatar-kind", "market");
     await expect(detail.getByRole("table", { name: "完整市场价格" })).toContainText("$2");
     await detail.getByRole("tab", { name: "接入信息", exact: true }).click();
     await expect(detail.getByText(/尚未部署此模型/)).toBeVisible();
@@ -77,6 +82,35 @@ export function registerSC111() {
         },
       });
       expect(response.status(), await response.text()).toBe(200);
+
+      // 目录绑定的部署沿用同一头像。展开长接口名称时，表头和标题均不得重新换行。
+      await page.keyboard.press("Escape");
+      await stableGoto(page, "/models-and-endpoints");
+      await page.getByRole("tab", { name: t("pages.models.all") }).click();
+      await page.getByRole("textbox", { name: t("providerGuideUI.search") }).fill("e2e-market-automatic-bypass");
+      const group = page.getByRole("region", { name: "公开模型 e2e-market-automatic-bypass", exact: true });
+      await expect(group.getByTestId("model-avatar")).toHaveAttribute("data-avatar-kind", "market");
+      const headings = group.getByRole("columnheader");
+      const widths = await headings.evaluateAll((cells) => cells.map((cell) => cell.getBoundingClientRect().width));
+      const headingHeight = await group.getByRole("heading", { name: "e2e-market-automatic-bypass" }).evaluate((el) => el.getBoundingClientRect().height);
+      const toggle = group.getByRole("button", { name: "1 个调用接口" });
+      await toggle.click();
+      const endpoints = page.getByRole("dialog", { name: "1 个调用接口" });
+      await expect(endpoints.getByRole("listitem")).toHaveCount(1);
+      expect(await headings.evaluateAll((cells) => cells.map((cell) => cell.getBoundingClientRect().width))).toEqual(widths);
+      expect(await group.getByRole("heading", { name: "e2e-market-automatic-bypass" }).evaluate((el) => el.getBoundingClientRect().height)).toBe(headingHeight);
+      await page.keyboard.press("Escape");
+      await expect(endpoints).toBeHidden();
+      await expect(toggle).toBeFocused();
+
+      await stableGoto(page, "/price-data");
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await page.getByRole("button", { name: "View e2e-market-chat details", exact: true }).click();
+      await expect(detail.getByRole("table", { name: "Full market pricing" })).toBeVisible();
+      await expect(detail.getByRole("tab", { name: "Deployment access", exact: true })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "中文", exact: true }).click();
+      await page.getByRole("button", { name: "查看 e2e-market-chat 详情", exact: true }).click();
     } finally {
       const removed = await page.request.post(GATEWAY + "/model/delete", { headers, data: { id: modelID } });
       expect(removed.status(), await removed.text()).toBe(200);

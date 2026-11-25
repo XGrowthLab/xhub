@@ -251,7 +251,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
-  const [editTeam, setEditTeam] = useState<boolean>(false);
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
   const [isTeamModalVisible, setIsTeamModalVisible] = useState(false);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -482,13 +482,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             onSelectTeam={(team) => {
               setSelectedTeam(team);
               void setSelectedTeamId(team.team_id);
-              setEditTeam(false);
             }}
-            onEditTeam={(team) => {
-              setSelectedTeam(team);
-              void setSelectedTeamId(team.team_id);
-              setEditTeam(true);
-            }}
+            onEditTeam={setEditingTeam}
             onDeleteTeam={handleDelete}
           />
 
@@ -536,13 +531,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           onClose={() => {
             setSelectedTeam(null);
             void setSelectedTeamId(null);
-            setEditTeam(false);
           }}
           accessToken={accessToken}
           is_team_admin={is_team_admin(selectedTeam?.team_id === selectedTeamId ? selectedTeam : null)}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
-          editTeam={editTeam}
+          editTeam={false}
           premiumUser={premiumUser}
         />
       ) : (
@@ -584,6 +578,22 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             </TabsContent>
           ))}
         </Tabs>
+      )}
+
+      {editingTeam && accessToken && (
+        <TeamInfoView
+          key={editingTeam.team_id}
+          teamId={editingTeam.team_id}
+          onUpdate={() => refreshTeams()}
+          onClose={() => setEditingTeam(null)}
+          accessToken={accessToken}
+          is_team_admin={is_team_admin(editingTeam)}
+          is_proxy_admin={userRole === "Admin"}
+          userModels={userModels}
+          editTeam={false}
+          editorOnly
+          premiumUser={premiumUser}
+        />
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (

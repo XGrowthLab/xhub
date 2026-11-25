@@ -14,20 +14,17 @@ export default function RouteTemplateGuide() {
   const t = useT();
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/20 px-4 py-3">
-        <p className="text-sm text-muted-foreground">{t("pages.routeTemplates.jsonGuide.openSummary")}</p>
-        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-          <BookOpen />
-          {t("pages.routeTemplates.jsonGuide.openButton")}
-        </Button>
-      </div>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        <BookOpen />
+        {t("pages.routeTemplates.jsonGuide.openButton")}
+      </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>{t("pages.routeTemplates.jsonGuide.openButton")}</DialogTitle>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="border-b px-5 py-4 pe-12 sm:px-6 sm:pe-14">
+            <DialogTitle className="text-lg font-semibold">{t("pages.routeTemplates.jsonGuide.openButton")}</DialogTitle>
             <DialogDescription>{t("pages.routeTemplates.jsonGuide.dialogDescription")}</DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 overflow-y-auto pr-1">
+          <div className="min-h-0 overflow-y-auto px-5 py-4 sm:px-6">
             <RouteTemplateJsonGuide />
           </div>
         </DialogContent>

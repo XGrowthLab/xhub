@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import TopModelView from "./TopModelView";
@@ -16,7 +16,7 @@ describe("TopModelView", () => {
     await user.click(screen.getByText(label));
   };
 
-  const showsChart = (container: HTMLElement) => container.querySelector(".recharts-wrapper") !== null;
+  const showsChart = (container: HTMLElement) => container.querySelector("ul") !== null;
 
   it("should render", () => {
     render(<TopModelView topModels={[]} topModelsLimit={5} setTopModelsLimit={mockSetTopModelsLimit} />);
@@ -96,9 +96,9 @@ describe("TopModelView", () => {
     expect(screen.getByText("Spend (USD)")).toBeInTheDocument();
   });
 
-  it("renders one cyan bar per model with model names on the axis in chart view", async () => {
+  it("renders the submitted models and costs in the chart ranking", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <TopModelView
         topModels={[
           {
@@ -123,12 +123,10 @@ describe("TopModelView", () => {
 
     await clickControl(user, "Chart");
 
-    const bars = container.querySelectorAll("path.recharts-rectangle");
-    expect(bars).toHaveLength(2);
-    const fills = new Set(Array.from(bars).map((bar) => bar.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
-    expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("claude-3").length).toBeGreaterThan(0);
+    const ranking = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(ranking).toHaveLength(2);
+    expect(ranking[0]).toHaveTextContent("gpt-4");
+    expect(ranking[1]).toHaveTextContent("claude-3");
   });
 
   it("should call setTopModelsLimit when the limit control is changed", async () => {

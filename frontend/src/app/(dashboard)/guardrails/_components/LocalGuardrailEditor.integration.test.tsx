@@ -17,6 +17,22 @@ beforeEach(() => {
 });
 const props = { visible: true, accessToken: "token", onSuccess: vi.fn(), onClose: vi.fn() };
 describe("关键词 / 正则编辑器", () => {
+  /** 前置英文界面和空表单，验证标题、英文调试示例和取消。组件卸载由测试框架处理，无持久化。 */
+  it("本地化弹窗操作并使用英文示例，取消时不保存", () => {
+    setActiveLocale("en");
+    render(<LocalGuardrailModal {...props} />);
+    expect(screen.getByRole("dialog", { name: "Create keyword / regex guardrail" })).toBeVisible();
+    const sample = screen.getByLabelText("Test text");
+    fireEvent.change(sample, { target: { value: "原始文本 unchanged" } });
+    expect(sample).toHaveValue("原始文本 unchanged");
+    fireEvent.change(screen.getByLabelText("Template"), { target: { value: "block" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load request example" }));
+    expect((sample as HTMLTextAreaElement).value).toContain("internal secret");
+    expect(screen.getByLabelText("Keywords (one per line)")).toHaveValue("internal secret\nconfidential information");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onClose).toHaveBeenCalledOnce();
+    expect(createGuardrailCall).not.toHaveBeenCalled();
+  });
   it("保存前测试模板，并用同一配置保存", async () => {
     vi.mocked(applyGuardrail).mockResolvedValue({ action: "modify", response_text: "[手机号已隐藏]" } as never);
     vi.mocked(createGuardrailCall).mockResolvedValue({} as never);

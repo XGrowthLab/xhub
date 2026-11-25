@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { translate, type TFunction } from "@/i18n";
 import { priceCatalogRows } from "./priceCatalogRows";
 import {
   marketSale,
@@ -42,6 +43,7 @@ describe("市场目录及内部接入", () => {
   });
   /** 完整档位、单位换算、缺失和非法金额均验证；确定性数据，无清理。 */
   it("保留档位与缺失价格", () => {
+    const chinese: TFunction = (key, params) => translate("zh-CN", key, params);
     const prices = marketPrices(
       row({
         pricing_rules_v2: [
@@ -54,10 +56,10 @@ describe("市场目录及内部接入", () => {
           },
           { details_v2: { output: { unit_name: "token", unit_size: 1000000, unit_price_usd: -1 } } },
         ],
-      }),
+      }), chinese,
     );
     expect(prices).toHaveLength(3);
-    expect(prices[0]).toMatchObject({ usd: 2, cny: null, unit: "1M tokens", tier: 0 });
+    expect(prices[0]).toMatchObject({ usd: 2, cny: null, unit: "百万 Token", tier: 0 });
     expect(prices[1].unit).toBe("1 次");
     expect(prices[2].usd).toBeNull();
     expect(
@@ -68,7 +70,24 @@ describe("市场目录及内部接入", () => {
       )[0].range,
     ).toBe("");
     expect(marketPrices(row())).toEqual([]);
-    expect(marketMoney(null)).toBe("未提供");
+    expect(marketMoney(null, "$", chinese)).toBe("未提供");
+    expect(marketMoney(null, "$", (key, params) => translate("en", key, params))).toBe("Not provided");
+  });
+  /** 两种开放上界均按当前语言展示，有限区间保持上下限和价格。夹具为内存数据，无需清理。 */
+  it.each([
+    ["zh-CN", "输入 0–128,000 · 输出 0 及以上", "输入 128,000 及以上"],
+    ["en", "Input 0–128,000 · Output 0 and above", "Input 128,000 and above"],
+  ] as const)("formats open and finite market ranges in %s", (locale, first, second) => {
+    const localized: TFunction = (key, params) => translate(locale, key, params);
+    const details = { input: { unit_name: "token", unit_size: 1_000_000, unit_price_usd: 2 } };
+    const prices = marketPrices(row({ pricing_rules_v2: [
+      { input_range: [0, 128_000], output_range: [0, -1], details_v2: details },
+      { input_range: [128_000, 99_999_999], output_range: [null, null], details_v2: details },
+    ] }), localized);
+    expect(prices.map(({ range, usd }) => ({ range, usd }))).toEqual([
+      { range: first, usd: 2 },
+      { range: second, usd: 2 },
+    ]);
   });
   /** 能力只能取明确声明，坏输入返回空或false，无副作用。 */
   it("读取明确能力和模态", () => {

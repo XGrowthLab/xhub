@@ -62,7 +62,7 @@ describe("route template workflow", () => {
     expect(within(editor).getByLabelText("Timeout (seconds)")).toHaveValue(60);
     await user.type(within(editor).getByLabelText("Name"), "  Custom  ");
     fireEvent.change(within(editor).getByLabelText("Timeout (seconds)"), { target: { value: "30" } });
-    await user.click(within(editor).getByRole("button", { name: "保存模板" }));
+    await user.click(within(editor).getByRole("button", { name: translate("en", "pages.routeTemplates.save") }));
     await waitFor(() =>
       expect(createRouteTemplateCall).toHaveBeenCalledWith(
         "fixture",
@@ -116,7 +116,7 @@ describe("route template workflow", () => {
     expect(json).not.toHaveAttribute("readonly");
     const next = JSON.parse((json as HTMLTextAreaElement).value);
     expect(next.retry_policy.timeout_seconds).toBe(90);
-    await user.click(within(editor).getByRole("button", { name: "保存模板" }));
+    await user.click(within(editor).getByRole("button", { name: translate("en", "pages.routeTemplates.save") }));
     await waitFor(() =>
       expect(createRouteTemplateCall).toHaveBeenCalledWith("fixture", expect.objectContaining({ body: next })),
     );
@@ -132,7 +132,7 @@ describe("route template workflow", () => {
     Object.defineProperty(file, "text", { value: async () => '{"num_retries":2}' });
     fireEvent.change(within(editor).getByLabelText("Upload JSON"), { target: { files: [file] } });
     expect(await within(editor).findByRole("alert")).toBeVisible();
-    expect(within(editor).getByRole("button", { name: "保存模板" })).toBeDisabled();
+    expect(within(editor).getByRole("button", { name: translate("en", "pages.routeTemplates.save") })).toBeDisabled();
     expect(createRouteTemplateCall).not.toHaveBeenCalled();
   });
 
@@ -151,7 +151,7 @@ describe("route template workflow", () => {
     const input = within(editor).getByLabelText("Upload JSON");
     fireEvent.change(input, { target: { files: [file] } });
     expect(await within(editor).findByRole("alert")).toHaveTextContent("Cannot read the JSON file");
-    expect(within(editor).getByRole("button", { name: "保存模板" })).toBeDisabled();
+    expect(within(editor).getByRole("button", { name: translate("en", "pages.routeTemplates.save") })).toBeDisabled();
     expect(createRouteTemplateCall).not.toHaveBeenCalled();
   });
 
@@ -163,7 +163,7 @@ describe("route template workflow", () => {
     const editor = screen.getByRole("region", { name: "Edit" });
     await user.clear(within(editor).getByLabelText("Name"));
     await user.type(within(editor).getByLabelText("Name"), "Renamed");
-    await user.click(within(editor).getByRole("button", { name: "保存模板" }));
+    await user.click(within(editor).getByRole("button", { name: translate("en", "pages.routeTemplates.save") }));
     await waitFor(() =>
       expect(updateRouteTemplateCall).toHaveBeenCalledWith("fixture", "first", { name: "Renamed", body: document(20) }),
     );
@@ -177,7 +177,7 @@ describe("route template workflow", () => {
       screen.getByRole("button", { name: translate("en", "pages.routeTemplates.jsonGuide.openButton") }),
     );
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("cell", { name: "routing_groups" })).toBeInTheDocument();
+    expect(within(dialog).getByText("routing_groups", { selector: "dt" })).toBeInTheDocument();
     await user.click(
       within(dialog).getByRole("tab", { name: translate("en", "pages.routeTemplates.jsonGuide.tabExamples") }),
     );

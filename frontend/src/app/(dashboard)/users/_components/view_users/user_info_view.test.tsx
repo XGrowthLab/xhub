@@ -262,14 +262,11 @@ describe("UserInfoView", () => {
     expect(screen.queryByText("Add Team")).not.toBeInTheDocument();
   });
 
-  it("should show delete buttons for proxy admins", async () => {
+  /** 使用后台管理角色及团队夹具，确认可直接定位每个团队的移除按钮；卸载后清理页面。 */
+  it("should show named delete buttons for proxy admins", async () => {
     render(<UserInfoView {...defaultProps} userRole="proxy_admin" />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Alpha Team")).toBeInTheDocument();
-    });
-    // Should have the Actions column header
-    expect(screen.getByText("Actions")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Remove from Alpha Team", exact: true })).toBeVisible();
   });
 
   it("should not show delete buttons for non-proxy-admins", async () => {
@@ -305,10 +302,7 @@ describe("UserInfoView", () => {
       expect(screen.getByText("Alpha Team")).toBeInTheDocument();
     });
 
-    // Find the row with Alpha Team and click its delete button
-    const alphaRow = screen.getByText("Alpha Team").closest("tr")!;
-    const deleteButton = within(alphaRow).getByRole("button");
-    await user.click(deleteButton);
+    await user.click(screen.getByRole("button", { name: "Remove from Alpha Team", exact: true }));
 
     await waitFor(() => {
       expect(screen.getByText("Remove from Team")).toBeInTheDocument();
@@ -324,10 +318,7 @@ describe("UserInfoView", () => {
       expect(screen.getByText("Alpha Team")).toBeInTheDocument();
     });
 
-    // Click delete on Alpha Team
-    const alphaRow = screen.getByText("Alpha Team").closest("tr")!;
-    const deleteButton = within(alphaRow).getByRole("button");
-    await user.click(deleteButton);
+    await user.click(screen.getByRole("button", { name: "Remove from Alpha Team", exact: true }));
 
     // Confirm deletion
     await waitFor(() => {

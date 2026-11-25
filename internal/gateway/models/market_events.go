@@ -33,7 +33,7 @@ type MarketChangeEvent struct {
 }
 
 // marketPriceJSON 对来源的完整价格规则做确定性编码；只对顶层规则排序，不改规则内数组语义。
-// row 是来源模型行；ok 表示存在非空价格规则。供目录变化比较使用；编码异常返回错误。
+// row 是来源模型行；ok 表示存在非空价格规则。仅通知比较把旧开放上界与 -1 视为等价，不修改原报价或冻结费率。
 func marketPriceJSON(row map[string]any) (encoded string, ok bool, err error) {
 	value, exists := row["pricing_rules_v2"]
 	if !exists || value == nil {
@@ -55,6 +55,15 @@ func marketPriceJSON(row map[string]any) (encoded string, ok bool, err error) {
 		var normalized any
 		if err := json.Unmarshal(rule, &normalized); err != nil {
 			return "", false, err
+		}
+		// Modelink 曾用 99999999 表示开放上界。只处理两个区间的上界，
+		// 保留有限边界与同一规则中关联的计量单价，避免漏报真实分档变化。
+		if fields, ok := normalized.(map[string]any); ok {
+			for _, key := range []string{"input_range", "output_range"} {
+				if bounds, ok := fields[key].([]any); ok && len(bounds) == 2 && bounds[1] == float64(99999999) {
+					bounds[1] = -1
+				}
+			}
 		}
 		canonical, err := json.Marshal(normalized)
 		if err != nil {

@@ -19,7 +19,6 @@ import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useIsTeamAdminForAnyTeam } from "@/app/(dashboard)/hooks/sessionIdentity/useSessionIdentity";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles } from "@/utils/roles";
 import { useI18n } from "@/i18n";
 import { formatClosedRangeLabel } from "@/components/shared/advanced_date_picker";
@@ -53,6 +52,7 @@ import EntityUsage from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import { UsageRankingBars } from "@/components/UsagePage/components/UsageRankingBars";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
 interface UsagePageProps {
@@ -359,7 +359,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {isAdmin && usageView === "global" && (
             <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card px-4 py-3">
               <p className="text-sm text-muted-foreground">{t("pages.usage.filterByUser")}</p>
-              <div className="min-w-64 flex-1">
+              <div className="min-w-0 grow basis-56">
                 <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
               </div>
             </div>
@@ -371,7 +371,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <div role="alert" className="rounded-lg border border-destructive p-4 space-y-3">
               <p>{t("usageLoad.failed")}</p><Button variant="outline" onClick={retryUsage}>{t("usageLoad.retry")}</Button>
             </div>
-          ) : <p role="status">{t("usageLoad.loading")}</p>)}
+          ) : <p role="status" className="rounded-lg border bg-card px-4 py-5 text-sm text-muted-foreground">{t("usageLoad.loading")}</p>)}
           {paginatedResult.hasData && <>
           {(paginatedResult.error || paginatedResult.cancelled) && <div role="alert" className="rounded-lg border p-4 space-y-3">
             <p>{t("usageLoad.partial", { loaded: paginatedResult.progress.currentPage, total: paginatedResult.progress.totalPages })}</p>
@@ -405,8 +405,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </div>
                 {/* Cost Panel */}
                 <TabsContent value="cost" keepMounted>
-                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                    <div className="lg:col-span-2 rounded-lg border bg-card px-4 py-4">
+                  <div className="mt-4 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-4 [&>*]:min-w-0">
+                    <div className="col-span-full rounded-lg border bg-card px-4 py-4">
                       <p className="mb-3 text-sm text-muted-foreground">
                         {t("usageBudget.rangeSpend")}
                         {dateValue.from && dateValue.to ? ` · ${formatClosedRangeLabel(dateValue.from, dateValue.to)}` : ""}
@@ -414,19 +414,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <p className="text-2xl font-semibold tabular-nums">{formatConsoleMoney(totalSpend, locale)}</p>
                     </div>
 
-                    <div className="lg:col-span-2">
+                    <div className="col-span-full">
                       <h2 className="mb-3 text-sm font-medium text-muted-foreground">{t("pages.usage.usageMetrics")}</h2>
-                      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
-                        <div className="rounded-lg border bg-card px-4 py-3">
+                      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))] gap-2.5">
+                        <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                           <h3 className="text-sm font-medium text-muted-foreground">{t("Total Requests")}</h3>
-                          <p className="mt-1 text-2xl font-semibold tabular-nums">
+                          <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere]">
                             {(gatewayActivity
                               ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
                               : userSpendData.metadata?.total_api_requests
                             )?.toLocaleString() || 0}
                           </p>
                         </div>
-                        <div className="rounded-lg border bg-card px-4 py-3">
+                        <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                           <div className="flex items-center gap-2">
                             <h3 className="text-sm font-medium text-muted-foreground">{t("Successful Requests")}</h3>
                             {gatewayActivity && (
@@ -440,14 +440,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               </Tooltip>
                             )}
                           </div>
-                          <p className="mt-1 text-2xl font-semibold tabular-nums text-success">
+                          <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-success">
                             {(
                               gatewayActivity?.total_successful_requests ??
                               userSpendData.metadata?.total_successful_requests
                             )?.toLocaleString() || 0}
                           </p>
                         </div>
-                        <div className="rounded-lg border bg-card px-4 py-3">
+                        <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                           <div className="flex items-center gap-2">
                             <h3 className="text-sm font-medium text-muted-foreground">{t("Failed Requests")}</h3>
                             <Tooltip>
@@ -461,16 +461,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               </TooltipContent>
                             </Tooltip>
                           </div>
-                          <p className="mt-1 text-2xl font-semibold tabular-nums text-destructive">
+                          <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-destructive">
                             {(
                               gatewayActivity?.total_failed_requests ??
                               userSpendData.metadata?.total_failed_requests
                             )?.toLocaleString() || 0}
                           </p>
                         </div>
-                        <div className="rounded-lg border bg-card px-4 py-3">
+                        <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                           <h3 className="text-sm font-medium text-muted-foreground">{t("Average Cost per Request")}</h3>
-                          <p className="mt-1 text-2xl font-semibold tabular-nums">
+                          <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere]">
                             {formatConsoleMoney(
                               (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1), locale,
                             )}
@@ -478,7 +478,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         </div>
                             <button
                               type="button"
-                              className="rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:bg-accent"
+                              className="min-w-0 rounded-lg border bg-card px-3.5 py-3 text-left transition-colors hover:bg-accent"
+                              aria-expanded={showTokenBreakdown}
                               onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
                             >
                               <div className="flex items-center gap-2">
@@ -489,34 +490,34 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     <ChevronRight className="size-3 text-muted-foreground" />
                                   )}
                                 </div>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                                <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere]">
                                   {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
                                 </p>
                             </button>
                           </div>
                           {showTokenBreakdown && (
-                            <div className="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
-                              <div className="rounded-lg border bg-card px-4 py-3">
+                            <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,9.5rem),1fr))] gap-2.5">
+                              <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                                 <h3 className="text-sm font-medium text-muted-foreground">{t("Input Tokens")}</h3>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums text-info">
+                                <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-info">
                                   {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
                                 </p>
                               </div>
-                              <div className="rounded-lg border bg-card px-4 py-3">
+                              <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                                 <h3 className="text-sm font-medium text-muted-foreground">{t("Output Tokens")}</h3>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums text-info">
+                                <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-info">
                                   {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
                                 </p>
                               </div>
-                              <div className="rounded-lg border bg-card px-4 py-3">
+                              <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                                 <h3 className="text-sm font-medium text-muted-foreground">{t("Cache Read Tokens")}</h3>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums text-success">
+                                <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-success">
                                   {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
                                 </p>
                               </div>
-                              <div className="rounded-lg border bg-card px-4 py-3">
+                              <div className="min-w-0 rounded-lg border bg-card px-3.5 py-3">
                                 <h3 className="text-sm font-medium text-muted-foreground">{t("Cache Write Tokens")}</h3>
-                                <p className="mt-1 text-2xl font-semibold tabular-nums text-purple-600">
+                                <p className="mt-1.5 text-xl font-semibold tabular-nums [overflow-wrap:anywhere] text-purple-600">
                                   {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
                                 </p>
                               </div>
@@ -525,7 +526,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </div>
 
                     {/* Daily Spend Chart */}
-                    <div className="lg:col-span-2">
+                    <div className="col-span-full">
                       <ShadcnCard>
                         <CardHeader>
                           <CardTitle className="text-base font-semibold">{t("Daily Spend")}</CardTitle>
@@ -542,7 +543,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               categories={["metrics.spend"]}
                               colors={["cyan"]}
                               valueFormatter={valueFormatterSpend}
-                              yAxisWidth={100}
+                              yAxisWidth="auto"
                               showLegend={false}
                               customTooltip={({ payload, active }) => {
                                 if (!active || !payload?.[0]) return null;
@@ -576,7 +577,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </div>
                     {/* Gateway Requests by Endpoint (SGR) */}
                     {gatewayActivity && gatewayActivity.by_route.length > 0 && (
-                      <div className="lg:col-span-2">
+                      <div className="col-span-full">
                         <ShadcnCard data-testid="gateway-requests-by-endpoint">
                           <CardHeader>
                             <CardTitle className="text-base font-semibold">
@@ -604,7 +605,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               categories={["successful_requests", "failed_requests"]}
                               colors={["green", "red"]}
                               stack={true}
-                              yAxisWidth={100}
+                              yAxisWidth="auto"
                               showLegend={false}
                               valueFormatter={(value: number) => value.toLocaleString()}
                             />
@@ -653,48 +654,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           {loading ? (
                             <ChartLoader isDateChanging={isDateChanging} />
                           ) : (
-                            <div data-testid="top-models-spend" className="relative max-h-[600px] min-w-0 overflow-x-hidden overflow-y-auto">
-                              {(() => {
-                                const modelData = topModelGroups;
-                                return (
-                                  <BarChart
-                                    className="mt-4"
-                                    style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
-                                    data={modelData.map((row) => ({ ...row, key: usageModelLabel(row.key) }))}
-                                    index="key"
-                                    categories={["spend"]}
-                                    colors={["cyan"]}
-                                    valueFormatter={valueFormatterSpend}
-                                    layout="vertical"
-                                    yAxisWidth="auto"
-                                    showLegend={false}
-                                    customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-card p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-info">
-                                            {t("Spend")}: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-muted-foreground">
-                                            {t("Total Requests: {value0}", { value0: (data.requests.toLocaleString()) })}
-                                          </p>
-                                          <p className="text-success">
-                                            {t("Successful")}: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-destructive">
-                                            {t("Failed")}: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-muted-foreground">
-                                            {t("Tokens")}: {data.tokens.toLocaleString()}
-                                          </p>
-                                        </div>
-                                      );
-                                    }}
-                                  />
-                                );
-                              })()}
+                            <div data-testid="top-models-spend" className="min-w-0">
+                              <UsageRankingBars
+                                items={topModelGroups.map(model => ({
+                                  id: model.key,
+                                  label: usageModelLabel(model.key),
+                                  value: model.spend,
+                                  details: [
+                                    t("usagePolish.requests", { count: model.requests.toLocaleString(locale) }),
+                                    t("usagePolish.successful", { count: model.successful_requests.toLocaleString(locale) }),
+                                    t("usagePolish.failed", { count: model.failed_requests.toLocaleString(locale) }),
+                                    t("usagePolish.tokens", { count: model.tokens.toLocaleString(locale) }),
+                                  ],
+                                }))}
+                                formatValue={valueFormatterSpend}
+                              />
                             </div>
                           )}
                         </CardContent>
@@ -702,7 +676,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </div>
 
                     {/* Spend by Provider */}
-                    <div className="lg:col-span-2">
+                    <div className="col-span-full">
                       <SpendByProvider
                         loading={loading}
                         isDateChanging={isDateChanging}

@@ -52,7 +52,7 @@ const templates = {
     '    for i, text := range texts {\n        texts[i] = RegexReplace(text, "1[3-9][0-9]{9}", "[手机号已隐藏]")\n    }\n    return Modify(texts)\n}',
 };
 /**
- * 用途：提供截图布局的 XGo 自定义护栏编辑器、模板、测试区和 primitives 侧栏。
+ * 用途：提供 XGo 脚本、模板、测试和函数参考；正文独立滚动，始终保留弹窗操作。
  * 参数：组件属性：可见状态、令牌、可选规则、只读标志及关闭/成功回调。
  * 返回：React 弹窗；语言为 XGo，执行阶段固定 pre_call。
  * 调用：GuardrailsPanel、guardrail_info。
@@ -202,14 +202,14 @@ export default function CustomCodeModal({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="flex max-h-[94vh] w-[calc(100vw-2rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1600px)]">
-        <DialogHeader className="shrink-0 px-6 pb-5 pt-6 sm:px-8">
-          <DialogTitle className="text-xl font-semibold">
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(72rem,calc(100%-2rem))]">
+        <DialogHeader className="shrink-0 px-4 pt-5 pb-4 pr-12 sm:px-6 sm:pr-14">
+          <DialogTitle className="text-lg leading-tight font-semibold">
             {editData ? t("编辑 XGo 护栏") : t("创建 XGo 护栏")}
           </DialogTitle>
-          <DialogDescription>{t("使用 Go / XGo 语法定义自定义逻辑，右侧函数卡片可复制到代码中。")}</DialogDescription>
+          <DialogDescription>{t("pages.guardrails.xgoEditorDescription")}</DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto px-6 pb-6 sm:px-8">
+        <div className="@container min-h-0 overflow-y-auto px-4 pb-5 sm:px-6">
           {readOnly && (
             <p className="mb-4 rounded-md bg-muted p-3 text-sm">
               {t("该护栏仅供查看。YAML 规则请在配置文件中编辑；数据库规则需管理员权限。")}
@@ -217,14 +217,14 @@ export default function CustomCodeModal({
           )}
           <fieldset
             disabled={editorDisabled}
-            className="grid gap-5 border-b pb-6 sm:grid-cols-2 lg:grid-cols-[1fr_1.25fr_1fr_auto]"
+            className="grid min-w-0 gap-4 border-b pb-5 @lg:grid-cols-2 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_minmax(0,1fr)_auto]"
           >
             <label className="block space-y-2 text-sm font-medium text-muted-foreground">
               <span>{t("护栏名称")}</span>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. block-sensitive-data"
+                placeholder="block-sensitive-data"
                 className="text-foreground"
               />
             </label>
@@ -246,7 +246,7 @@ export default function CustomCodeModal({
                 </option>
               </select>
             </label>
-            <label className="flex items-center gap-3 sm:pt-7">
+            <label className="flex items-center gap-3 @lg:pt-7">
               <span className="text-sm text-muted-foreground">{t("默认启用")}</span>
               <Switch
                 checked={defaultOn}
@@ -256,7 +256,7 @@ export default function CustomCodeModal({
               />
             </label>
           </fieldset>
-          <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_310px] xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="mt-5 grid min-w-0 gap-5 @3xl:grid-cols-[minmax(0,1fr)_clamp(16rem,30%,19rem)]">
             <div className="min-w-0 space-y-4">
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -390,9 +390,9 @@ export default function CustomCodeModal({
             <PrimitivesPanel />
           </div>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-background px-6 py-4 sm:px-8">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-3 sm:px-6">
           <p className="text-xs text-muted-foreground">{t("保存时编译校验；测试与实际请求共用执行器。")}</p>
-          <div className="flex shrink-0 gap-2">
+          <div className="ml-auto flex shrink-0 gap-2">
             <Button variant="outline" disabled={busy} onClick={onClose}>
               {t("Cancel")}
             </Button>

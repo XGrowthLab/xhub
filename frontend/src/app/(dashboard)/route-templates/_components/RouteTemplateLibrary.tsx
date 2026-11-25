@@ -49,7 +49,7 @@ export default function RouteTemplateLibrary({
   const filteredRows = rows.filter((row) => row.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   return (
     <Card>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 sm:px-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h3 className="font-semibold">{t("pages.routeTemplates.templates")}</h3>
@@ -77,9 +77,9 @@ export default function RouteTemplateLibrary({
             </Button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="max-w-full overflow-hidden rounded-lg border">
             <Table className="min-w-[640px]">
-              <TableHeader>
+              <TableHeader className="bg-muted/35">
                 <TableRow>
                   <TableHead>{t("pages.routeTemplates.name")}</TableHead>
                   <TableHead>{t("pages.routeTemplates.summary")}</TableHead>
@@ -95,7 +95,7 @@ export default function RouteTemplateLibrary({
                   <TableRow key={row.id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <span className="font-medium">{row.name}</span>
+                        <span className="max-w-52 wrap-anywhere font-medium">{row.name}</span>
                         {!row.writable && <Badge variant="outline">{t("pages.routeTemplates.readOnly")}</Badge>}
                       </div>
                     </TableCell>

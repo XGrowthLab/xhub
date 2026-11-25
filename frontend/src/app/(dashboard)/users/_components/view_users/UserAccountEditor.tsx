@@ -103,7 +103,7 @@ export default function UserAccountEditor({ user, accessToken, onSaved, onCancel
           <p>{t("quotaGuide.rates")}</p>
         </HelpDisclosure>
       </DirectoryFormSection>
-      <div className="mt-6 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2 border-t pt-4">
         <Button type="button" variant="secondary" onClick={onCancel}>{t("common.cancel")}</Button>
         <Button type="submit" aria-busy={saving}>{t("pages.users.saveChanges")}</Button>
       </div>

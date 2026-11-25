@@ -36,7 +36,8 @@ interface HarnessOverrides {
   rowCount?: number;
   isLoading?: boolean;
   selectionEnabled?: boolean;
-  onUserClick?: (userId: string, openInEditMode?: boolean) => void;
+  onUserClick?: (userId: string) => void;
+  onEditUser?: (userId: string) => void;
   onDeleteUser?: (user: UserInfo) => void;
   onResetPassword?: (user: UserInfo) => void;
   onSortingChange?: Mock;
@@ -52,6 +53,7 @@ function Harness({
   isLoading = false,
   selectionEnabled = false,
   onUserClick = vi.fn(),
+  onEditUser,
   onDeleteUser = vi.fn(),
   onResetPassword = vi.fn(),
   onSortingChange,
@@ -89,6 +91,7 @@ function Harness({
         rowSelection={rowSelection}
         onRowSelectionChange={setRowSelection}
         onUserClick={onUserClick}
+        onEditUser={onEditUser}
         onDeleteUser={onDeleteUser}
         onResetPassword={onResetPassword}
       />
@@ -165,17 +168,19 @@ describe("UsersTable", () => {
 
     await user.click(screen.getByRole("button", { name: /user-1/ }));
 
-    expect(onUserClick).toHaveBeenCalledWith("user-1", false);
+    expect(onUserClick).toHaveBeenCalledWith("user-1");
   });
 
-  /** 验证目录编辑入口；前置单个账户，点击编辑必须传入目标 ID 和编辑模式，组件卸载自动清理。 */
-  it("opens edit mode from the row menu", async () => {
+  /** 验证目录编辑入口；前置允许编辑的单个账户，点击只向编辑回调传入目标 ID，组件卸载自动清理。 */
+  it("uses the dedicated edit callback from the row menu", async () => {
     const user = userEvent.setup();
+    const onEditUser = vi.fn();
     const onUserClick = vi.fn();
-    render(<Harness onUserClick={onUserClick} />);
+    render(<Harness onUserClick={onUserClick} onEditUser={onEditUser} />);
     await openRowMenu(user, "user-1");
-    await user.click(await screen.findByTestId("user-action-edit"));
-    expect(onUserClick).toHaveBeenCalledWith("user-1", true);
+    await user.click(await screen.findByRole("menuitem", { name: "Edit user" }));
+    expect(onEditUser).toHaveBeenCalledWith("user-1");
+    expect(onUserClick).not.toHaveBeenCalled();
   });
 
   it("resets the password from the row menu", async () => {

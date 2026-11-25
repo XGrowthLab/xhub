@@ -1,6 +1,6 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Download } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -52,12 +52,12 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   filterOptions = [],
   filterSlot,
   customTitle,
-  compactLayout = false,
   teams = [],
   disableExport = false,
 }) => {
   const t = useT();
   const anchor = useComboboxAnchor();
+  const inputId = useId();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   useEffect(() => { if (disableExport) setIsExportModalOpen(false); }, [disableExport]);
@@ -103,6 +103,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           }
         </ComboboxValue>
         <ComboboxChipsInput
+          id={inputId}
           placeholder={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
           aria-label={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
         />
@@ -114,27 +115,24 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
 
   return (
     <>
-      <div className="mb-4">
-        {/**
-         * Use CSS grid with items-end so all cells (filter, button)
-         * align to the same baseline regardless of label heights. This removes
-         * vertical drift when the right column has a label above the input.
-         */}
-        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-4`}>
-          {hasFilters && (
-            <div>
-              {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
-              {filterSlot ?? builtInFilter}
-            </div>
-          )}
-
-          <div className="justify-self-end">
-            <Button disabled={disableExport} onClick={() => setIsExportModalOpen(true)}>
-              <Download />
-              {t("Export Data")}
-            </Button>
+      <div className={hasFilters ? "flex flex-wrap items-end gap-3 rounded-lg border bg-card px-4 py-3" : "flex justify-end"}>
+        {hasFilters && (
+          <div className="min-w-0 grow basis-56 space-y-1.5">
+            {filterLabel && (filterSlot == null
+              ? <label htmlFor={inputId} className="block text-sm font-medium text-muted-foreground">{filterLabel}</label>
+              : <p className="text-sm font-medium text-muted-foreground">{filterLabel}</p>)}
+            {filterSlot ?? builtInFilter}
           </div>
-        </div>
+        )}
+        <Button
+          variant="outline"
+          className="ml-auto shrink-0"
+          disabled={disableExport}
+          onClick={() => setIsExportModalOpen(true)}
+        >
+          <Download />
+          {t("Export Data")}
+        </Button>
       </div>
 
       <EntityUsageExportModal

@@ -238,15 +238,13 @@ export const OrgSettingsForm = ({
         </DirectoryFormSection>
       </FieldGroup>
 
-      <div className="sticky z-chrome bg-card p-4 border-t border-border -bottom-6 -inset-x-6 mt-6">
-        <div className="flex justify-end items-center gap-2">
-          <Button type="button" variant="outline" onClick={onCancel} disabled={mutation.isPending}>
-            {t("Cancel")}
-          </Button>
-          <Button type="submit" disabled={!isDirty || mutation.isPending}>
-            {mutation.isPending ? t("Saving...") : t("Save Changes")}
-          </Button>
-        </div>
+      <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={mutation.isPending}>
+          {t("Cancel")}
+        </Button>
+        <Button type="submit" disabled={!isDirty || mutation.isPending}>
+          {mutation.isPending ? t("Saving...") : t("Save Changes")}
+        </Button>
       </div>
     </form>
   );

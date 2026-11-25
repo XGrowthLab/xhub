@@ -3,6 +3,7 @@ import { GATEWAY, loginAdmin, t, uiPath, watchGateway } from "./helpers";
 import { recordPage } from "./report";
 import { discoverPages } from "./routes";
 import { requirePageSuccess } from "./assertions";
+import { translate } from "../src/i18n/translate";
 
 /** 用途：从已登录控制台 cookie 提取会话 bearer；参数为当前页面；返回会话 key，缺少 cookie 或非法 JWT 时抛错；供真实后台读接口使用，无写副作用。 */
 async function sessionBearer(page: Page): Promise<string> {
@@ -88,6 +89,45 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       if (rows.length === 0) await expect(page.getByText(t("logsUX.empty")).first()).toBeVisible({ timeout: 15_000 });
       else await expect(page.getByRole("table")).toBeVisible({ timeout: 15_000 });
     }
+    // 前置：用已登录管理员读取隔离网关的规则清单。在窄屏调试未保存规则，验证按钮可见以及取消后清单无变化。
+    if (item.route === "/guardrails") {
+      const listResponse = await page.request.get(GATEWAY + "/guardrails/list", { headers: authHeaders });
+      expect(listResponse.ok(), await listResponse.text()).toBe(true);
+      const originalIds = (await listResponse.json()).guardrails.map((row: { guardrail_id: string }) => row.guardrail_id);
+      await page.setViewportSize({ width: 520, height: 720 });
+      const tabs = page.getByRole("tablist");
+      await tabs.getByRole("tab", { name: t("pages.guardrails.garden"), exact: true }).click();
+      await expect(tabs.getByRole("tab", { name: t("pages.guardrails.playground"), exact: true })).toBeInViewport();
+      await expect.poll(() => tabs.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+      await page.getByRole("button", { name: /关键词 \/ 正则护栏/ }).click();
+      const localDialog = page.getByRole("dialog", { name: "创建关键词 / 正则护栏" });
+      await expect(localDialog).toBeVisible();
+      await expect(localDialog.getByRole("button", { name: t("Cancel"), exact: true })).toBeInViewport();
+      await expect(localDialog.getByRole("button", { name: t("保存护栏"), exact: true })).toBeInViewport();
+      await expect.poll(() => localDialog.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await localDialog.getByLabel("护栏名称", { exact: true }).fill("ui-audit-draft");
+      await localDialog.getByLabel("关键词（每行一个）", { exact: true }).fill("synthetic private marker");
+      await localDialog.getByLabel("测试文本", { exact: true }).fill("Contains a synthetic private marker.");
+      const trial = page.waitForResponse((r) => new URL(r.url()).pathname === "/guardrails/apply_guardrail");
+      await localDialog.getByRole("button", { name: "测试当前规则", exact: true }).click();
+      expect(await (await trial).json()).toMatchObject({ action: "block" });
+      await expect(localDialog.getByLabel("测试结果", { exact: true })).toContainText('"action": "block"');
+      await expect(localDialog.getByRole("button", { name: t("Cancel"), exact: true })).toBeInViewport();
+      await localDialog.getByRole("button", { name: t("Cancel"), exact: true }).click();
+      await expect(localDialog).toHaveCount(0);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.getByRole("button", { name: "English", exact: true }).click();
+      await page.getByRole("button", { name: /Custom XGo guardrail/ }).click();
+      const xgoDialog = page.getByRole("dialog", { name: "Create XGo guardrail" });
+      await expect(xgoDialog.getByLabel("XGo code", { exact: true })).toBeVisible();
+      await expect.poll(() => xgoDialog.evaluate((el) => el.offsetWidth)).toBeLessThan(1250);
+      await expect(xgoDialog.getByRole("button", { name: "Cancel", exact: true })).toBeInViewport();
+      await xgoDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(xgoDialog).toHaveCount(0);
+      const afterResponse = await page.request.get(GATEWAY + "/guardrails/list", { headers: authHeaders });
+      expect(afterResponse.ok(), await afterResponse.text()).toBe(true);
+      expect((await afterResponse.json()).guardrails.map((row: { guardrail_id: string }) => row.guardrail_id)).toEqual(originalIds);
+    }
     if (item.route === "/guardrails-monitor") {
       const guardrailsResponse = await page.request.get(GATEWAY + "/guardrails/usage/overview", { headers: authHeaders });
       expect(guardrailsResponse.status(), await guardrailsResponse.text()).toBe(200);
@@ -104,7 +144,44 @@ export function registerPageScenario(item: ReturnType<typeof discoverPages>[numb
       await expect(page.getByText("Total Evaluations", { exact: true })).toBeVisible();
       await expect(page.getByText("Request Outcomes Over Time", { exact: true })).toBeVisible();
     }
+    if (item.route === "/route-templates") {
+      await page.setViewportSize({ width: 760, height: 780 });
+      // 在实际模板库切换两种语言并打开指南，校验字段、说明、示例与弹窗宽度。
+      for (const locale of ["zh-CN", "en"] as const) {
+        if (locale === "en") await page.getByRole("button", { name: "English", exact: true }).click();
+        const tr = (key: string) => translate(locale, "pages.routeTemplates.jsonGuide." + key);
+        await page.getByRole("button", { name: tr("openButton") }).click();
+        const dialog = page.getByRole("dialog", { name: tr("openButton") });
+        await expect(dialog).toContainText("retry_policy");
+        await dialog.getByRole("tab", { name: tr("tabExecution") }).click();
+        await expect(dialog.getByRole("list")).toContainText("max_attempts");
+        await dialog.getByRole("tab", { name: tr("tabExamples") }).click();
+        await expect(dialog.getByRole("region", { name: tr("exampleTitle") })).toContainText("model_routes");
+        const box = await dialog.boundingBox();
+        expect(box && box.x >= 0 && box.x + box.width <= 760).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeHidden();
+      }
+    }
     if (item.route === "/admin-panel") {
+      // SSO 和 SCIM 实际读取隔离网关配置。表单展开并关闭时只验证控件，不提交写操作。
+      await page.setViewportSize({ width: 760, height: 800 });
+      await page.getByRole("button", { name: t("enterprise.configureSSO"), exact: true }).click();
+      const sso = page.getByRole("dialog", { name: t("enterprise.configureSSO") });
+      await expect(sso.getByLabel(t("enterprise.publicURL"))).toBeVisible();
+      const ssoBox = await sso.boundingBox();
+      expect(ssoBox && ssoBox.x >= 0 && ssoBox.x + ssoBox.width <= 760).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect(sso).toBeHidden();
+      await page.getByRole("tab", { name: "SCIM" }).click();
+      // 已经有连接时入口名称为「新建目录连接」，两种状态应打开同一创建表单。
+      await page.getByRole("button", { name: t("enterprise.configureSCIM"), exact: true })
+        .or(page.getByRole("button", { name: t("enterprise.newConnection"), exact: true })).click({ timeout: 15_000 });
+      const scim = page.getByRole("dialog", { name: t("enterprise.configureSCIM") });
+      await expect(scim.getByLabel(t("directory.name"))).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(scim).toBeHidden();
+
       await expect(page.getByRole("group", { name: t("enterprise.identitySection") }).getByRole("tab", { name: "SCIM" })).toBeVisible();
       const logs = page.getByRole("group", { name: t("enterprise.storageSection") }).getByRole("tab", { name: t("enterprise.tabs.logs") });
       await logs.click();

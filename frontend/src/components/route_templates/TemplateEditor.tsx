@@ -27,7 +27,7 @@ const NumberField: React.FC<{
   onChange: (value: string) => void;
 }> = ({ label, hint, value, onChange }) => (
   <label className="space-y-1">
-    <span className="text-xs font-medium uppercase tracking-wide text-foreground">{label}</span>
+    <span className="text-sm font-medium text-foreground">{label}</span>
     <p className="text-xs text-muted-foreground">{hint}</p>
     <Input
       type="number"
@@ -111,7 +111,7 @@ const TemplateEditor: React.FC<{
   return (
     <div className="space-y-4">
       <label className="block max-w-xl space-y-1">
-        <span className="text-xs font-medium uppercase tracking-wide text-foreground">
+        <span className="text-sm font-medium text-foreground">
           {t("pages.routeTemplates.name")}
         </span>
         <Input
@@ -129,9 +129,9 @@ const TemplateEditor: React.FC<{
           <TabsList
             variant="line"
             aria-label={t("pages.routeTemplates.editor.tabs")}
-            className="h-auto w-full flex-wrap justify-start border-b"
+            className="w-full flex-wrap justify-start border-b px-0 pb-1 group-data-horizontal/tabs:h-auto [&>[data-slot=tabs-trigger]]:min-h-9 [&>[data-slot=tabs-trigger]]:flex-none [&>[data-slot=tabs-trigger]]:px-3"
           >
-            <TabsTrigger value="basic" disabled={!!jsonError} className="!h-auto !flex-none px-4 py-2">
+            <TabsTrigger value="basic" disabled={!!jsonError}>
               {t("pages.routeTemplates.editor.balance")}
             </TabsTrigger>
             <TabsTrigger value="groups" disabled={!!jsonError}>
@@ -140,13 +140,13 @@ const TemplateEditor: React.FC<{
             <TabsTrigger value="fallbacks" disabled={!!jsonError}>
               {t("pages.routeTemplates.editor.fallbacks")}
             </TabsTrigger>
-            <TabsTrigger value="json" className="!h-auto !flex-none px-4 py-2">
+            <TabsTrigger value="json">
               {t("pages.routeTemplates.jsonTab")}
             </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
-            <TabsContent value="basic" className="pt-6 space-y-6">
+            <TabsContent value="basic" className="space-y-4 pt-4">
               <div>
                 <h3 className="text-lg font-semibold">{t("pages.routeTemplates.editor.balance")}</h3>
                 <p className="mt-2 text-sm text-muted-foreground">{t("pages.routeTemplates.editor.balanceHint")}</p>
@@ -156,7 +156,7 @@ const TemplateEditor: React.FC<{
                 deployments={deployments}
                 onChange={(model_routes) => patch({ model_routes })}
               />
-              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              <p className="text-sm leading-6 text-muted-foreground">
                 {t("pages.routeTemplates.editor.catalogHint")}
               </p>
 
@@ -191,17 +191,17 @@ const TemplateEditor: React.FC<{
                 />
               </div>
             </TabsContent>
-            <TabsContent value="groups" className="pt-6">
+            <TabsContent value="groups" className="pt-4">
               <TemplateGroups form={form} deployments={deployments} onChange={patch} />
             </TabsContent>
-            <TabsContent value="fallbacks" className="pt-6">
+            <TabsContent value="fallbacks" className="pt-4">
               <TemplateFallbacks form={form} deployments={deployments} onChange={patch} />
             </TabsContent>
             <TabsContent value="json" className="space-y-3 pt-4">
               <p className="text-xs text-muted-foreground">{t("pages.routeTemplates.editor.jsonHint")}</p>
               <textarea
                 aria-label={t("pages.routeTemplates.jsonTab")}
-                className="h-96 w-full rounded-md border border-border bg-transparent p-3 font-mono text-xs"
+                className="h-[clamp(14rem,46dvh,25rem)] w-full min-w-0 resize-y rounded-lg border bg-muted/25 p-3 font-mono text-xs leading-5"
                 value={jsonText}
                 spellCheck={false}
                 onChange={(event) => editJson(event.target.value)}

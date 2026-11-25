@@ -16,7 +16,7 @@ export function registerSC059() {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await loginAdmin(page);
     const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
-    let name = "e2e-mine-call-" + Date.now();
+    let name = "moonshotai/kimi-e2e-mine-call-" + Date.now();
     const priceID = "custom/" + name;
     let id = "";
     let key = "";
@@ -27,7 +27,7 @@ export function registerSC059() {
             headers,
             data: {
               id: priceID,
-              litellm_provider: "custom",
+              litellm_provider: "openai",
               input_cost_per_token: 0.000001,
               output_cost_per_token: 0.000002,
             },
@@ -68,12 +68,16 @@ export function registerSC059() {
       const available = await loaded;
       expect(available.status()).toBe(200);
       const cardData = (await available.json()).data.find((item: { id: string }) => item.id === name);
+      expect(cardData.provider).toBe("openai");
       expect(cardData.endpoints.some((item: { path: string }) => item.path === "/v1/chat/completions")).toBe(true);
       await page.getByRole("textbox", { name: t("Search"), exact: true }).fill(name);
       const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+      await expect(card.getByText("Moonshot AI", { exact: true })).toBeVisible();
+      await expect(card.getByTestId("model-avatar").locator("img")).toHaveAttribute("src", /moonshot/);
       // 精简卡片入口后，完整四项信息仍在详情标签中，权限和示例执行链不变。
       await card.getByRole("button", { name: "模型详情", exact: true }).click();
       const dialog = page.getByRole("dialog", { name, exact: true });
+      await expect(dialog.getByText("Moonshot AI", { exact: true })).toBeVisible();
       const prices = dialog.getByRole("table", { name: "模型价格" });
       await expect(prices.getByText("$1", { exact: true })).toBeVisible();
       await expect(prices.getByText("$2", { exact: true })).toBeVisible();
@@ -163,6 +167,7 @@ export function registerSC059() {
       await stableGoto(page, "/mine-models");
       await page.getByRole("textbox", { name: "Search", exact: true }).fill(name);
       const englishCard = page.getByRole("article").filter({ has: page.getByRole("heading", { name, exact: true }) });
+      await expect(englishCard.getByText("Moonshot AI", { exact: true })).toBeVisible();
       await expect(englishCard).toContainText("$1");
       await expect(englishCard).toContainText("$2");
       await page.getByRole("button", { name: "中文", exact: true }).click();

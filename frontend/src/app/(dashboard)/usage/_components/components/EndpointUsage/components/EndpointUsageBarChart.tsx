@@ -8,6 +8,7 @@ interface EndpointUsageBarChartProps {
   endpointData?: Record<string, MetricWithMetadata>;
 }
 
+/** 将汇总后的端点成功及失败数绘制为堆叠柱；空值由图表框架处理，随容器变化换行图例。 */
 const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointData }) => {
   const t = useT();
   // Transform endpoint data into chart format
@@ -28,7 +29,7 @@ const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointD
   return (
     <Card>
       <CardHeader>
-        <div className="flex justify-between items-center">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base font-semibold">{t("Success vs Failed Requests by Endpoint")}</CardTitle>
           <CustomLegend
             categories={["metrics.successful_requests", "metrics.failed_requests"]}
@@ -46,7 +47,7 @@ const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointD
           customTooltip={CustomTooltip}
           showLegend={false}
           stack={true}
-          yAxisWidth={60}
+          yAxisWidth="auto"
         />
       </CardContent>
     </Card>
