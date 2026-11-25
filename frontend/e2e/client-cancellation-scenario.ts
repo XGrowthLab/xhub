@@ -238,6 +238,7 @@ export function registerClientScenario(locale: Locale) {
         const controller = new AbortController();
         document.addEventListener("cancel-preread-fixture", () => controller.abort(), { once: true });
         try {
+          // eslint-disable-next-line no-restricted-syntax -- 验证浏览器原生断开信号确实传到网关。
           await fetch("/gw/v1/chat/completions", {
             method: "POST", headers: { Authorization: token, "Content-Type": "application/json" },
             body: JSON.stringify({ model, stream: true, messages: [{ role: "user", content: "Cancel while reading the upstream error." }] }),

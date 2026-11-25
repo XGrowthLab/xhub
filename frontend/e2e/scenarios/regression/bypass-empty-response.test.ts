@@ -24,6 +24,7 @@ test("empty native response fails without replay and leaves confirmed billing in
     const result = await page.evaluate(async ({ secret, name }) => {
       // 通过浏览器访问实际网关，返回线上的状态、关联 ID 和原始响应以便同数据库记录对照。
       const send = async (content: string, stream = false) => {
+        // eslint-disable-next-line no-restricted-syntax -- 从真实浏览器断言透传后的原始响应字节。
         const response = await fetch("/gw/bypass/anthropic/v1/messages", {
           method: "POST", headers: { "x-api-key": secret, "anthropic-version": "2023-06-01", "content-type": "application/json" },
           body: JSON.stringify({ model: name, messages: [{ role: "user", content }], max_tokens: 32, stream }),

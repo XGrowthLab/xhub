@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Info } from "lucide-react";
 import moment from "moment";
 
 // 日志时间格式是 Moment 协议格式，不随界面翻译。
@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../columns";
-import { logOutcomeKey, logErrorSummary } from "../logPresentation";
+import { logErrorSummary } from "../logPresentation";
 import { fullErrorDetails, isRequestFailure } from "../logErrors";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { formatLogCost } from "../formatLogCost";
@@ -53,6 +53,7 @@ import { AUTOROUTER_CLASSIFIER_ORIGIN } from "./ClassifyTag";
 import { useT } from "@/i18n";
 import { logPromptCacheTokens } from "./promptCacheMetrics";
 import { ProtocolRejectionDetail } from "./ProtocolRejectionDetail";
+import { RequestErrorAlert } from "./RequestErrorAlert";
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
@@ -79,9 +80,6 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
   const errorDetails = hasError ? fullErrorDetails(logEntry) : "";
   const errorSummary = hasError ? logErrorSummary(logEntry, (status) => t("logsUX.upstreamEmptyErrorBody", { status })) : "";
   const errorInfo = hasError ? metadata.error_information : null;
-  const upstream = metadata.upstream_response;
-  const cancellation = Number(metadata.http_status) === 499 ? upstream?.failure : undefined;
-  const observedError = cancellation && upstream?.error ? logErrorSummary({ response: upstream.error }) : "";
   const isClassifier =
     metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
     ["completion", "acompletion", "responses", "aresponses"].includes(logEntry.call_type);
@@ -127,32 +125,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
 
   return (
     <div style={{ padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
-      {/* Error Alert */}
-      {hasError && (
-        <div
-          role="alert"
-          className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
-        >
-          <CircleAlert className="size-4 shrink-0 text-destructive" />
-          <div>
-            <div className="font-medium text-destructive">{t(logOutcomeKey(logEntry))}</div>
-            {metadata.http_status != null && <div>{t("HTTP Status")}: {metadata.http_status}</div>}
-            {cancellation?.phase === "upstream_request" && upstream?.status_code === 0 && (
-              <p>{t("logDiagnostics.canceledWaitingForUpstream")}</p>
-            )}
-            {cancellation?.phase === "response_transfer" && Number(upstream?.status_code) > 0 && (
-              <p>{t("logDiagnostics.canceledDuringUpstreamResponse", { status: upstream.status_code })}</p>
-            )}
-            {observedError && (
-              <p className="break-words"><strong>{t("logDiagnostics.upstreamError")}</strong> · {observedError}</p>
-            )}
-            {errorInfo ? <ErrorDescription errorInfo={errorInfo} /> : errorSummary && <p className="mt-1 break-words">{errorSummary}</p>}
-            {(!errorSummary || errorSummary === "upstream request failed") && !errorInfo && (
-              <p className="text-muted-foreground">{t("logsUX.causeUnknown")}</p>
-            )}
-          </div>
-        </div>
-      )}
+      {hasError && <RequestErrorAlert logEntry={logEntry} summary={errorSummary} />}
       {hasError && errorDetails && !isLoadingDetails && (
         <section aria-label={t("Full Error Details")} className="mb-6 rounded-lg border border-destructive/30">
           <div className="flex items-center justify-between border-b px-3 py-2">
@@ -435,25 +408,6 @@ function CopyButton({
     >
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
     </Button>
-  );
-}
-
-/** 摘要展示已有错误代码与消息；长正文在原始错误中完整保留，避免顶部摘要撑满抽屉。参数是日志元数据，无副作用。 */
-function ErrorDescription({ errorInfo }: { errorInfo: any }) {
-  const t = useT();
-  return (
-    <div>
-      {errorInfo.error_code && (
-        <div>
-          <span className="font-semibold">{t("Error Code:")}</span> {errorInfo.error_code}
-        </div>
-      )}
-      {errorInfo.error_message && (
-        <div className="line-clamp-3 break-all">
-          <span className="font-semibold">{t("Message:")}</span> {errorInfo.error_message}
-        </div>
-      )}
-    </div>
   );
 }
 
