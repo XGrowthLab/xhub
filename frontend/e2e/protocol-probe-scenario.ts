@@ -5,7 +5,7 @@ import { translate } from "../src/i18n/translate";
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 import { protocolProbeFixture } from "./protocol-probe-fixture";
 
-/** 双语完整验收：编辑保存开关→自动探测→手动探测及失败提示→发现接口→执行页面 curl→调试台实际 Chat 透传。
+/** 双语完整验收：编辑保存开关→自动探测→手动探测及失败提示→发现接口→执行页面 curl→调试台 Chat 透传与大正文标准 Chat。
  * 前置真实浏览器、网关、隔离 PostgreSQL 与严格三协议 HTTP 夹具；不 mock API，不使用付费凭据，finally 删除部署/凭据并停止服务。 */
 export function registerProtocolProbe(locale: "en" | "zh-CN") {
   test(`upstream protocol detection ${locale}`, async ({ page }, testInfo) => {
@@ -135,6 +135,27 @@ export function registerProtocolProbe(locale: "en" | "zh-CN") {
       await page.getByRole("button", { name: tr("Send message"), exact: true }).click();
       await expect(page.getByText("PROBE_OK", { exact: true })).toBeVisible();
       expect(JSON.stringify(fixture.requests.at(-1)?.body)).toContain("用户原文");
+      // 标准 Chat 的真实路径还会执行能力筛选和协议转换，整段长输入必须原样到达所选部署。
+      await page.getByRole("button", { name: tr("protocolProbe.standard"), exact: true }).click();
+      await page.getByPlaceholder(tr("Select an endpoint"), { exact: true }).click();
+      await page.getByRole("option").filter({ has: page.getByText("/v1/chat/completions", { exact: true }) }).click();
+      const longInput =
+        "The application gathers selected examples and compares the response from the previous conversation. ".repeat(7920)
+        + "保留用户原文";
+      await page.getByPlaceholder(tr("Type your message... (Shift+Enter for new line)")).fill(longInput);
+      const completion = page.waitForResponse((res) => {
+        const path = new URL(res.url()).pathname;
+        return res.request().method() === "POST" && path.endsWith("/chat/completions") && !path.includes("/bypass/");
+      });
+      await page.getByRole("button", { name: tr("Send message"), exact: true }).click();
+      const reply = await completion;
+      expect(reply.status(), "标准 Chat 长输入应成功").toBe(200);
+      await expect.poll(
+        () => fixture.requests.some((request) =>
+          request.path === "/v1/responses" && JSON.stringify(request.body.input).includes(longInput)),
+        { message: "完整长输入应通过标准 Chat 转换并到达 Responses 上游" },
+      ).toBe(true);
+      expect(await reply.text()).toContain("PROBE_OK");
       // 后台删除后旧编辑窗口仍可点击；真实 404 必须显示双语“部署不存在”，不能误称为供应商故障。
       await stableGoto(page, "/models-and-endpoints?model=" + id);
       await page.getByRole("button", { name: tr("providerGuideUI.editModel"), exact: true }).click();

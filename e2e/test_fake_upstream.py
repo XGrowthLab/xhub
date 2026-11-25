@@ -2,11 +2,34 @@
 import json
 import threading
 import unittest
+from contextlib import ExitStack
+from http.client import HTTPConnection
 from unittest.mock import patch
 from http.server import HTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from e2e.fake_upstream import Handler, ERROR_LOG_JSON_DIAGNOSTIC, ERROR_LOG_TEXT_DIAGNOSTIC, VISION_PNG, vision_answer
+from e2e.fake_upstream import BrowserUpstreamServer, Handler, ERROR_LOG_JSON_DIAGNOSTIC, ERROR_LOG_TEXT_DIAGNOSTIC, VISION_PNG, vision_answer
+
+
+class BrowserUpstreamQueueTest(unittest.TestCase):
+    def test_accepts_simultaneous_billing_requests(self):
+        """在接收首笔请求前让 16 个客户端连入，复现账单 E2E 的突发请求。
+        验证每个客户端均能读到完整目录响应。只绑定本机随机端口，退出时释放全部连接和监听套接字。
+        """
+        with BrowserUpstreamServer(("127.0.0.1", 0), Handler) as server, ExitStack() as cleanup:
+            server.timeout = 2
+            clients = []
+            for _ in range(16):
+                client = HTTPConnection(*server.server_address[:2], timeout=2)
+                cleanup.callback(client.close)
+                client.request("GET", "/v1/models")
+                clients.append(client)
+            for _ in clients:
+                server.handle_request()
+            for client in clients:
+                with client.getresponse() as response:
+                    self.assertEqual(response.status, 200, "突发连接应全部抵达上游夹具")
+                    self.assertEqual(len(json.load(response)["data"]), 155)
 
 
 class ArkUpstreamTest(unittest.TestCase):

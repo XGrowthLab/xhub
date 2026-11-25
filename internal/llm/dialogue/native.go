@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // cloneObject 复制 JSON 对象供协议投影与模型改名使用；参数为原始正文，返回独立对象或编码错误。
@@ -16,6 +18,11 @@ func cloneObject(body map[string]any) (map[string]any, error) {
 	if body == nil {
 		return nil, fmt.Errorf("JSON object required")
 	}
+	// 已解码的对象和数组需要独立；字符串不可变，可以共享。这样无需为每个候选重读整段对话。
+	if cloned, ok := cloneDecodedJSON(body, 0); ok {
+		return cloned.(map[string]any), nil
+	}
+	// 内部调用方也能传入自定义 Marshaler、整数切片或异常数据；让原编解码过程决定其表示和错误。
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -28,8 +35,60 @@ func cloneObject(body map[string]any) (map[string]any, error) {
 	return out, nil
 }
 
+// cloneDecodedJSON 供 cloneObject 复制解码器产生的 JSON 值，只共享不可变标量。value 是当前节点，depth 从根的 0 开始。
+// 返回独立的对象或数组；false 表示需要用标准 JSON 编解码处理该根。限制快速路径栈深，让深树及循环仍走原校验。
+func cloneDecodedJSON(value any, depth int) (any, bool) {
+	if depth > 64 {
+		return nil, false
+	}
+	switch v := value.(type) {
+	case nil, bool:
+		return v, true
+	case string:
+		// 标准编码器会替换非法 UTF-8；只有原样往返的字符串才可直接共享。
+		return v, utf8.ValidString(v)
+	case float64:
+		return v, !math.IsInf(v, 0) && !math.IsNaN(v)
+	case json.Number:
+		// 标准解码会拒绝超出 float64 范围的值；对有效数值仍保留原字面量和精度。
+		_, err := v.Float64()
+		return v, err == nil && json.Valid([]byte(v))
+	case map[string]any:
+		if v == nil {
+			return nil, true
+		}
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			if !utf8.ValidString(k) {
+				return nil, false
+			}
+			copied, ok := cloneDecodedJSON(item, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out[k] = copied
+		}
+		return out, true
+	case []any:
+		if v == nil {
+			return nil, true
+		}
+		out := make([]any, len(v))
+		for i, item := range v {
+			copied, ok := cloneDecodedJSON(item, depth+1)
+			if !ok {
+				return nil, false
+			}
+			out[i] = copied
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 // copyExactNumbers 把 source 中已解析的精确数字移入 target 中对应的 JSON 对象或数组。
-// cloneObject 在完成普通深拷贝后调用。函数返回应保留的值，只改写 target，保留其他数字的既有 Go 类型。
+// cloneObject 回退到标准编解码后调用。函数返回应保留的值，只改写 target，保留其他数字的既有 Go 类型。
 func copyExactNumbers(target, source any) any {
 	switch source := source.(type) {
 	case json.Number:

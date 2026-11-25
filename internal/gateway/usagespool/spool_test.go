@@ -260,6 +260,17 @@ func TestDeliveryReservationPersists(t *testing.T) {
 	if err := s.BeginDelivery(marker); err != nil {
 		t.Fatal(err)
 	}
+	// 即使卷权限已改变，同标识重试也必须保留已经开始交付的终态空间。
+	defer os.Chmod(s.config.Dir, 0700)
+	if err := os.Chmod(s.config.Dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt(final.RequestID); err != nil {
+		t.Fatalf("重试破坏了交付中的预留: %v", err)
+	}
+	if err := os.Chmod(s.config.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s.Release(final.RequestID)
 	status, err := s.Status()
 	if err != nil || status.Reserved != 1 {
@@ -750,6 +761,97 @@ func awaitAdmissionTickets(t *testing.T, s *Spool, want uint64) {
 	}
 }
 
+// TestSyncProbe 双向阻塞两个同步函数，验证它们同时开始、双方都返回后才结束，且保留每侧错误。
+// 使用虚拟时间检查成功、单边失败和双边失败。只创建测试内的 goroutine 和通道，退出前全部收回。
+func TestSyncProbe(t *testing.T) {
+	fileErr := errors.New("file sync failed")
+	dirErr := errors.New("directory sync failed")
+	for _, tc := range []struct {
+		name      string
+		file, dir error
+	}{
+		{"success", nil, nil}, {"file", fileErr, nil}, {"directory", nil, dirErr}, {"both", fileErr, dirErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fileReady, dirReady := make(chan struct{}), make(chan struct{})
+				fileReturn, dirReturn := make(chan struct{}), make(chan struct{})
+				result := make(chan error, 1)
+				go func() {
+					result <- syncProbe(
+						func() error { close(fileReady); <-fileReturn; return tc.file },
+						func() error { close(dirReady); <-dirReturn; return tc.dir },
+					)
+				}()
+				synctest.Wait()
+				select {
+				case <-fileReady:
+				default:
+					t.Error("目录同步等待时，文件同步没有开始")
+				}
+				select {
+				case <-dirReady:
+				default:
+					t.Error("文件同步等待时，目录同步没有开始")
+				}
+				// 分别让文件或目录先返回，防止第一项成功或失败就提前放行。
+				first, second := fileReturn, dirReturn
+				if tc.dir != nil {
+					first, second = dirReturn, fileReturn
+				}
+				close(first)
+				synctest.Wait()
+				if len(result) != 0 {
+					t.Error("另一项同步尚未结束时准入已返回")
+				}
+				close(second)
+				err := <-result
+				if (err == nil) != (tc.file == nil && tc.dir == nil) || errors.Is(err, fileErr) != (tc.file != nil) || errors.Is(err, dirErr) != (tc.dir != nil) {
+					t.Fatalf("返回的探针错误与真实同步结果不符: %v", err)
+				}
+			})
+		})
+	}
+}
+
+// TestReserveForAttempt 用单槽临时队列验证首次准入先取票、普通重试重新核验磁盘，
+// 以及重试失败后槽位可复用。夹具负责关闭队列、清理文件，并在失败时恢复目录权限。
+func TestReserveForAttempt(t *testing.T) {
+	s := openSpool(t, Config{MaxEntries: 1, MaxBytes: 4096, MaxRecordBytes: 4096})
+	if err := s.ReserveForAttempt(""); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("空请求标识准入结果不符: %v", err)
+	}
+	result := make(chan error, 1)
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		go func() { result <- s.ReserveForAttempt("retry") }()
+		awaitAdmissionTickets(t, s, 1)
+	}()
+	if err := <-result; err != nil {
+		t.Fatalf("首次请求无法预留: %v", err)
+	}
+	if err := s.ReserveForAttempt("retry"); err != nil {
+		t.Fatalf("单槽队列无法更新原请求的预留: %v", err)
+	}
+	if err := s.ReserveForAttempt("other"); !errors.Is(err, ErrFull) {
+		t.Fatalf("已满队列仍允许另一个请求进入: %v", err)
+	}
+	defer os.Chmod(s.config.Dir, 0700)
+	if err := os.Chmod(s.config.Dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt("retry"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("旧预留绕过了当前磁盘权限: %v", err)
+	}
+	if err := os.Chmod(s.config.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReserveForAttempt("other"); err != nil {
+		t.Fatalf("重试失败仍占用唯一的预留槽: %v", err)
+	}
+}
+
 // TestReserveOnlySharesOverlappingProbes 用真实磁盘探针及已取票的并发请求检查复用次数。
 // 每笔仍独立检查字节、条数、权限、隔离区；失败探针后必须重试。临时目录、权限和预留由夹具回收。
 func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
@@ -770,12 +872,12 @@ func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
 			s := openSpool(t, tc.config)
 			defer os.Chmod(s.config.Dir, 0700)
 			probes := 0
-			probe := func() error {
+			probe := func(name string) error {
 				probes++ // 探针由同一把目录锁串行执行。
 				if tc.name == "probe-failure" && probes == 1 {
 					return ErrUnavailable
 				}
-				if err := s.probeWritableLocked(); err != nil {
+				if err := s.probeFile(name); err != nil {
 					return err
 				}
 				if probes == 1 {
@@ -793,7 +895,7 @@ func TestReserveOnlySharesOverlappingProbes(t *testing.T) {
 				s.mu.Lock()
 				defer s.mu.Unlock()
 				for i := range 4 {
-					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), probe) }()
+					go func() { results <- s.reserve(fmt.Sprintf("overlap-%d", i), false, probe, nil) }()
 				}
 				awaitAdmissionTickets(t, s, 4)
 			}()
@@ -823,17 +925,17 @@ func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
 	var probes atomic.Int32
 	first := make(chan error, 1)
 	go func() {
-		first <- s.reserve("earlier", func() error {
+		first <- s.reserve("earlier", false, func(name string) error {
 			probes.Add(1)
 			close(started)
 			<-allow
-			return s.probeWritableLocked()
-		})
+			return s.probeFile(name)
+		}, nil)
 	}()
 	<-started
 	second := make(chan error, 1)
-	probe := func() error { probes.Add(1); return s.probeWritableLocked() }
-	go func() { second <- s.reserve("during-probe", probe) }()
+	probe := func(name string) error { probes.Add(1); return s.probeFile(name) }
+	go func() { second <- s.reserve("during-probe", false, probe, nil) }()
 	func() {
 		defer close(allow)
 		awaitAdmissionTickets(t, s, 2)
@@ -841,8 +943,171 @@ func TestReserveRequiresProbeStartedAfterArrival(t *testing.T) {
 	if a, b := <-first, <-second; a != nil || b != nil || probes.Load() != 2 {
 		t.Fatalf("探针开始后进入的请求复用了旧探针: first=%v second=%v probes=%d", a, b, probes.Load())
 	}
-	if err := s.reserve("later", probe); err != nil || probes.Load() != 3 {
+	if err := s.reserve("later", false, probe, nil); err != nil || probes.Load() != 3 {
 		t.Fatalf("空闲后单次调用未重新探测: err=%v probes=%d", err, probes.Load())
+	}
+}
+
+// TestReserveForAttemptWithBacklog 验证准入看到的旧账与实际发布顺序一致，且在途交付标记不会当成可重放账单。
+// 独占临时队列依次经历无旧账、已有账单、在途重试和结清四种状况；容量不足须拒绝且不能挪用已有预留。
+// 本例的文件与在途预留均在结束时随队列关闭及临时目录删除。
+func TestReserveForAttemptWithBacklog(t *testing.T) {
+	s := openSpool(t, Config{MaxEntries: 4})
+	active := spoolRecord("delivering")
+	active.Status, active.HTTPStatus, active.DeliveryPending, active.DeliverySpoolOnly = "success", 200, true, true
+	marker, err := iam.UnconfirmedDelivery(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.DeliveryUnconfirmed = true
+	if n, err := s.ReserveForAttemptWithBacklog(active.RequestID); err != nil || n != 0 {
+		t.Fatalf("空队列准入: backlog=%d err=%v", n, err)
+	}
+	if err := s.BeginDelivery(marker); err != nil {
+		t.Fatal(err)
+	}
+	owed := spoolRecord("owed")
+	if err := s.Put(owed); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{active.RequestID, "next"} {
+		if n, err := s.ReserveForAttemptWithBacklog(id); n != 1 || err != nil {
+			t.Fatalf("预留 %s 时未准确区分旧账与交付标记: backlog=%d err=%v", id, n, err)
+		}
+	}
+	if _, err := s.ReserveForAttemptWithBacklog("over-capacity"); !errors.Is(err, ErrFull) {
+		t.Fatalf("读取待结数量的请求越过了容量门槛: %v", err)
+	}
+	if err := s.Acknowledge(owed); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ReserveForAttemptWithBacklog("reopened"); err != nil || n != 0 {
+		t.Fatalf("已结算旧账仍出现在新的准入快照中: backlog=%d err=%v", n, err)
+	}
+}
+
+// TestQuietAttemptUsesSingleProbe 让独立请求进入尚未形成结算批次的队列，核对它只做一次锁内真实探针。
+// 参数使用默认批大小和独占临时盘；后续有一笔普通在途请求时也走同一路径，预留和目录在测试结束时回收。
+func TestQuietAttemptUsesSingleProbe(t *testing.T) {
+	s := openSpool(t, Config{})
+	for _, id := range []string{"first", "second"} {
+		var names []string
+		if err := s.reserve(id, true, func(name string) error {
+			names = append(names, name)
+			return s.probeFile(name)
+		}, nil); err != nil {
+			t.Fatalf("轻载请求 %s 的真实可写性检查失败: %v", id, err)
+		}
+		if len(names) != 1 || names[0] != "" {
+			t.Fatalf("轻载请求 %s 多做了探针或切换了目录锁: %q", id, names)
+		}
+	}
+}
+
+// TestAttemptProbeAllowsConcurrentSettlement 在无初始锁争用时暂停新请求的实写探针，让旧账先完成确认。
+// 每个子例随后改变容量、权限、隔离证据或账单状态，验证准入重新检查现场且故障后的探针不能复用。
+// 测试仅使用独占临时目录，通过通道唤醒所有工作者，最后关闭队列并恢复目录权限。
+func TestAttemptProbeAllowsConcurrentSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"settled", nil}, {"late-bill", nil}, {"capacity", ErrFull}, {"permissions", ErrUnavailable},
+		{"quarantine", ErrCorrupt}, {"intervening-fault", nil}, {"probe-failure", ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openSpool(t, Config{MaxEntries: 2, GroupSize: 1})
+			t.Cleanup(func() { _ = os.Chmod(s.config.Dir, 0700) })
+			old := spoolRecord("settling")
+			if err := s.Put(old); err != nil {
+				t.Fatalf("无法准备待确认账单: %v", err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			releaseProbe := sync.OnceFunc(func() { close(release) })
+			defer releaseProbe()
+			done := make(chan error, 1)
+			var fallback atomic.Int32
+			var pending int
+			go func() {
+				done <- s.reserve("incoming", true, func(name string) error {
+					if name == s.probePath {
+						close(entered)
+						<-release
+						if tc.name == "probe-failure" {
+							return ErrUnavailable
+						}
+					} else {
+						fallback.Add(1)
+					}
+					return s.probeFile(name)
+				}, &pending)
+			}()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("已达一批待结量的准入没有使用可与结算并行的探针")
+			}
+			settled := make(chan error, 1)
+			go func() { settled <- s.Acknowledge(old) }()
+			select {
+			case err := <-settled:
+				if err != nil {
+					t.Fatalf("探针未结束时旧账确认失败: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("新请求的磁盘同步阻塞了无关旧账确认")
+			}
+			switch tc.name {
+			case "late-bill":
+				if err := s.Put(spoolRecord("published-during-probe")); err != nil {
+					t.Fatalf("无法在新请求探针期间发布真实旧账: %v", err)
+				}
+			case "capacity":
+				for _, id := range []string{"other-1", "other-2"} {
+					if err := s.Reserve(id); err != nil {
+						t.Fatalf("无法在探针进行时占用剩余空间: %v", err)
+					}
+				}
+			case "permissions":
+				if err := os.Chmod(s.config.Dir, 0500); err != nil {
+					t.Fatal(err)
+				}
+			case "quarantine":
+				if err := os.WriteFile(filepath.Join(s.config.Dir, "quarantine", "evidence"), []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "intervening-fault":
+				if err := s.Put(old); err != nil {
+					t.Fatal(err)
+				}
+				mismatch := old
+				mismatch.Cost++
+				if err := s.Acknowledge(mismatch); !errors.Is(err, ErrConflict) {
+					t.Fatalf("冲突账单未使进行中的探针失效: %v", err)
+				}
+			}
+			releaseProbe()
+			err := <-done
+			// 只读目录既可在真实写盘时返回 EACCES，也可在重新校验权限时返回队列错误。
+			if !(tc.name == "permissions" && errors.Is(err, os.ErrPermission)) && !errors.Is(err, tc.want) {
+				t.Fatalf("现场变化后的准入结果错误: got=%v want=%v", err, tc.want)
+			}
+			if got := s.reserved["incoming"]; got != (tc.want == nil) {
+				t.Fatalf("准入结果与实际槽位不符: reserved=%v err=%v", got, err)
+			}
+			if tc.want == nil {
+				wantPending := 0
+				if tc.name == "late-bill" || tc.name == "intervening-fault" {
+					wantPending = 1
+				}
+				if pending != wantPending {
+					t.Fatalf("准入沿用了放锁前的待结账单数: got=%d want=%d", pending, wantPending)
+				}
+			}
+			if tc.name == "intervening-fault" && fallback.Load() != 1 {
+				t.Fatalf("中途故障之后必须重新验证可写性，补验次数=%d", fallback.Load())
+			}
+		})
 	}
 }
 
@@ -1140,5 +1405,192 @@ func TestReplayAdmissionMustCoverSnapshot(t *testing.T) {
 				t.Fatalf("第二批全部核销后未恢复: n=%d err=%v", n, err)
 			}
 		})
+	}
+}
+
+// TestContendedAdmissionProof 用受控探针制造争用，同时在目录锁中扫描、注入错误或发放新票。
+// 验证活动探针不参与重放及容量计算，仅有效期间已取票的请求可共享成功证明；夹具回收队列和目录。
+func TestContendedAdmissionProof(t *testing.T) {
+	for _, mode := range []string{"success", "intervening-fault", "probe-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			s := openSpool(t, Config{})
+			s.admissionTicket.Add(1)
+			started, resume := make(chan struct{}), make(chan struct{})
+			result := make(chan error, 1)
+			s.mu.Lock()
+			go func() {
+				err := s.lockForAttempt(func(name string) error {
+					close(started)
+					<-resume
+					if mode == "probe-failure" {
+						return ErrUnavailable
+					}
+					return s.probeFile(name)
+				})
+				s.mu.Unlock()
+				result <- err
+			}()
+			<-started
+			s.admissionTicket.Add(1)
+			if mode == "intervening-fault" {
+				s.invalidateProbeLocked()
+			}
+			// 精确复现另一个重放者在创建探针与删除探针之间观察目录的窗口。
+			path := filepath.Join(s.config.Dir, s.probePath)
+			if err := os.WriteFile(path, []byte("probe"), 0600); err != nil {
+				t.Error(err)
+			}
+			if err := s.scanLocked(true); err != nil {
+				t.Error(err)
+			}
+			if state, err := s.statusLocked(); err != nil || state.Pending != 0 || state.Bytes != 0 {
+				t.Errorf("活动探针进入了账单容量: %+v %v", state, err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Errorf("重放误删了仍活动的探针: %v", err)
+			}
+			close(resume)
+			s.mu.Unlock()
+			err := <-result
+			want := uint64(0)
+			if mode == "success" {
+				want = 1
+			}
+			if (mode == "probe-failure" && !errors.Is(err, ErrUnavailable)) || (mode != "probe-failure" && err != nil) || s.probedThrough != want {
+				t.Fatalf("争用探针错误结果或取票边界: err=%v through=%d want=%d", err, s.probedThrough, want)
+			}
+		})
+	}
+}
+
+// TestContendedProbeClose 在一个锁外探针仍使用根目录时并发关闭队列，验证 Close 等待探针结束，
+// 且旧进程残留的同名格式文件在重新取得独占锁后清理。临时卷由测试框架回收。
+func TestContendedProbeClose(t *testing.T) {
+	s := openSpool(t, Config{})
+	started, resume := make(chan struct{}), make(chan struct{})
+	s.mu.Lock()
+	probed := make(chan error, 1)
+	go func() {
+		err := s.lockForAttempt(func(name string) error {
+			close(started)
+			<-resume
+			return s.probeFile(name)
+		})
+		s.mu.Unlock()
+		probed <- err
+	}()
+	<-started
+	s.mu.Unlock()
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	close(resume)
+	if err := <-probed; err != nil {
+		t.Fatalf("关闭破坏了正在使用根目录的探针: %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.config.Dir, s.probePath)
+	if err := os.WriteFile(path, []byte("orphan"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openSpool(t, s.config)
+	if _, err := os.Stat(path); !os.IsNotExist(err) || reopened.probePath == s.probePath {
+		t.Fatalf("重启后未清理前一实例的探针: %v", err)
+	}
+}
+
+// TestSettleJoinsForeground 在真实私有卷上暂停前台事务，同时发起要求结清的重放。
+// 验证成功只提交一次、失败可恢复、取消不影响前台，文件意外丢失不能伪造持久确认。队列与卷自动清理。
+func TestSettleJoinsForeground(t *testing.T) {
+	for _, mode := range []string{"success", "retry", "cancel", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := openSpool(t, Config{})
+				record := spoolRecord("joined")
+				started, resume := make(chan struct{}), make(chan struct{})
+				foreground := make(chan error, 1)
+				go func() {
+					durable, err := s.Settle(record, func() error {
+						close(started)
+						<-resume
+						if mode == "retry" {
+							return ErrUnavailable
+						}
+						return nil
+					})
+					if !durable {
+						t.Error("数据库确认前完整快照必须可靠落盘")
+					}
+					foreground <- err
+				}()
+				<-started
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				replayed := make(chan error, 1)
+				var commits int
+				go func() {
+					_, err := s.ReplayForAdmission(ctx, 1, func(_ context.Context, got iam.UsageRecord) error {
+						commits++
+						if got.RequestID != record.RequestID || got.Cost != record.Cost {
+							return ErrConflict
+						}
+						return nil
+					})
+					replayed <- err
+				}()
+				synctest.Wait()
+				if len(replayed) != 0 || commits != 0 {
+					t.Error("前台仍在结算时出现重复提交或提前准入")
+				}
+				if mode == "cancel" {
+					cancel()
+					synctest.Wait()
+				}
+				if mode == "missing" {
+					if err := os.Remove(filepath.Join(s.config.Dir, basename(record.RequestID))); err != nil {
+						t.Error(err)
+					}
+				}
+				close(resume)
+				fgErr, replayErr := <-foreground, <-replayed
+				if (mode == "retry") != errors.Is(fgErr, ErrUnavailable) {
+					t.Errorf("前台提交结果错误: %v", fgErr)
+				}
+				switch mode {
+				case "success", "retry":
+					if replayErr != nil || commits != boolInt(mode == "retry") {
+						t.Fatalf("重放未按已确认状态接管: commits=%d err=%v", commits, replayErr)
+					}
+				case "cancel":
+					if !errors.Is(replayErr, context.Canceled) || commits != 0 {
+						t.Fatalf("取消等待影响账单: commits=%d err=%v", commits, replayErr)
+					}
+				case "missing":
+					if !errors.Is(replayErr, os.ErrNotExist) || commits != 0 {
+						t.Fatalf("外部丢失文件被当作成功确认: commits=%d err=%v", commits, replayErr)
+					}
+				}
+				if _, ok := s.settling.Load(basename(record.RequestID)); ok {
+					t.Error("前台结束后仍保留旧请求的结算标记")
+				}
+			})
+		})
+	}
+}
+
+// TestSettleRejectsUnavailable 用单槽私有队列验证缺少结算器和容量耗尽均在提交前拒绝，
+// 返回的 durable 必须为假，以便网关选择其他可靠介质；预留和目录由测试回收。
+func TestSettleRejectsUnavailable(t *testing.T) {
+	s := openSpool(t, Config{MaxEntries: 1})
+	record := spoolRecord("full")
+	if ok, err := s.Settle(record, nil); ok || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("空结算器结果错误: durable=%v err=%v", ok, err)
+	}
+	if err := s.Reserve("occupy"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.Settle(record, func() error { t.Error("没有可靠快照却执行了提交"); return nil }); ok || !errors.Is(err, ErrFull) {
+		t.Fatalf("队列已满时结果错误: durable=%v err=%v", ok, err)
 	}
 }

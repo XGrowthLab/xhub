@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,6 +60,38 @@ func TestBudgetAttemptLifecycle(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestBudgetRetryRechecksDiskBeforePricing 模拟上次路由已冻结价格并取得磁盘预留，下一次尝试前目录失去写权限。
+// 从真实网关准入入口验证返回 503、释放旧槽和旧价格，同时保留另一请求的价格。队列及临时目录随测试清理。
+func TestBudgetRetryRechecksDiskBeforePricing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	spool, err := usagespool.Open(usagespool.Config{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	if err := spool.Reserve("retry"); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{usageSpoolEnabled: true, usageSpool: spool, budgetCalls: map[string]*budgetAttempt{
+		"retry": {TokenOnly: true}, "other": {TokenOnly: true},
+	}}
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0700)
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	if _, ok := s.PrepareBudgetAttempt(w, r, &auth.Principal{}, "retry", config.ModelEntry{}, "openai-chat", nil, time.Now()); ok || w.Code != 503 {
+		t.Fatalf("重试在磁盘失去权限后仍获准: HTTP %d", w.Code)
+	}
+	if s.tokenOnlyBudget("retry") || !s.tokenOnlyBudget("other") {
+		t.Fatal("重试失败后未精确清理本请求的旧价格")
+	}
+	if status, err := spool.Status(); err != nil || status.Reserved != 0 {
+		t.Fatalf("重试失败仍占用磁盘预留: 状态=%+v 错误=%v", status, err)
 	}
 }
 

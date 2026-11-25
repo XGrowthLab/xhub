@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
-/** 注册中英文软预算闭环：页面创建微小额度Key，真实调用允许超支后拒绝下一次，页面调额恢复。
- * 前置隔离PG、生产前端和本地供应商；展开预算说明后验证文案及实测扣费/无预占，finally删除自建Key和模型。 */
+/** 按 locale 注册中英文软预算用例；先创建小额密钥，核对已成功调用的扣费、预算拒绝的零增量及页面调额后的新账单。
+ * 前置隔离数据库、前端和本地供应商，调用方为两种语言的浏览器测试；无返回值，finally 删除本用例创建的密钥和模型。 */
 export function registerSoftBudgetScenario(locale: "en" | "zh-CN") {
   test("soft budget completes requests and stops after exhaustion " + locale, async ({ page }) => {
     await loginAdmin(page);
@@ -33,21 +33,31 @@ export function registerSoftBudgetScenario(locale: "en" | "zh-CN") {
       const response = await minted; expect(response.status()).toBe(200);
       const key = await response.json(); keyID = key.token_id;
       await page.keyboard.press("Escape");
-      const invoke = () => page.request.post(GATEWAY + "/v1/chat/completions", {headers: {Authorization: "Bearer " + key.key}, data: {model, messages:[{role:"user",content:"Reply briefly."}]}});
-      const first = await invoke(); expect(first.status(), await first.text()).toBe(200);
+      // 各次使用不同正文，避免命中响应缓存而把免费命中误认为一次真实上游扣费。
+      const invoke = (content: string) => page.request.post(GATEWAY + "/v1/chat/completions", {headers: {Authorization: "Bearer " + key.key}, data: {model, messages:[{role:"user",content}]}});
+      const first = await invoke("Use the initial budget."); expect(first.status(), await first.text()).toBe(200);
       expect(first.headers()["x-xhub-budget-guarantee"]).toBe("soft");
       expect(first.headers()["x-xhub-budget-reservation-id"]).toBeUndefined();
       const info = await (await page.request.get(GATEWAY + "/key/info?key=" + keyID, {headers})).json();
       expect(info.info.spend).toBeGreaterThan(0.000001);
       expect(info.info.budget_pending).toBe(0);
-      expect((await invoke()).status()).toBe(403);
+      expect((await invoke("Check the exhausted budget.")).status()).toBe(403);
+      const deniedInfo = await page.request.get(GATEWAY + "/key/info?key=" + keyID, {headers});
+      expect(deniedInfo.status()).toBe(200);
+      expect((await deniedInfo.json()).info.spend).toBe(info.info.spend);
       await stableGoto(page, "/api-keys?key=" + keyID);
       await expect(page.getByText(tr("hardBudget.contract"))).toBeVisible();
       await page.getByLabel(tr("Max Budget (USD)"), {exact: true}).fill("1");
       const updated = page.waitForResponse(r => r.url().includes("/key/update") && r.request().method() === "POST");
       await page.getByRole("button", {name: tr("Save Changes"), exact:true}).click();
       expect((await updated).status()).toBe(200);
-      expect((await invoke()).status()).toBe(200);
+      expect((await invoke("Use the increased budget.")).status()).toBe(200);
+      // 核对同一把测试密钥的真实账单，允许后台提交稍后可见。
+      await expect.poll(async () => {
+        const settled = await page.request.get(GATEWAY + "/key/info?key=" + keyID, {headers});
+        expect(settled.status()).toBe(200);
+        return (await settled.json()).info.spend;
+      }).toBeGreaterThan(info.info.spend);
     } finally {
       if (keyID) expect((await page.request.post(GATEWAY + "/key/delete", {headers,data:{keys:[keyID]}})).status()).toBe(200);
       if (modelID) expect((await page.request.post(GATEWAY + "/model/delete", {headers,data:{id:modelID}})).status()).toBe(200);

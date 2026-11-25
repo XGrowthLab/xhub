@@ -18,7 +18,7 @@ import (
 )
 
 // TestUsageSpoolConcurrentChatBilling 使用工单中的压测客户端，验证启用磁盘队列时普通 Chat 与 SSE 均能并发完成。
-// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对每笔用量、五层费用及重放幂等。
+// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对并发后的新会话、每笔用量、五层费用及重放幂等。
 // t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
 func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
 	for _, size := range []string{"1", "16"} {
@@ -82,6 +82,13 @@ func verifyConcurrentChatBills(t *testing.T) {
 			}
 		}
 	}
+	// 客户端刚读完最后一批流时，旧账可能还在确认。新会话必须能准入，而且其账单 ID 仍能与上游回执逐一对应。
+	follow := h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest(model, "Confirm the next conversation after the streaming burst."))
+	followID := follow.header("x-litellm-call-id")
+	if followID == "" {
+		t.Fatal("流量高峰后的新会话缺少可核对的账单 ID")
+	}
+	succeeded++
 	// SSE 客户端可先收到结束帧；等所有处理器退出再连续刷账，确保检查的是持久终态。
 	h.server.Close()
 	h.flushSpend()
@@ -104,6 +111,9 @@ func verifyConcurrentChatBills(t *testing.T) {
 		if event.Streamed {
 			streamBills++
 		}
+	}
+	if !ids[followID] {
+		t.Fatalf("流量高峰后的新会话账单缺失: %s", followID)
 	}
 	// 同用户的独立调用可能共用结算事务。监控金额须逐笔保持与真实 NUMERIC 账本完全相等。
 	var monitorMatches bool
@@ -129,6 +139,10 @@ func verifyConcurrentChatBills(t *testing.T) {
 	}
 	if pending, err := h.gw.HasPendingLocalUsage(t.Context()); err != nil || pending {
 		t.Errorf("成功结算后磁盘仍有待处理账单: pending=%v err=%v", pending, err)
+	}
+	// 监控有意忽略当前实例的活动探针；直接检查本测试独占的目录，避免遗漏真实文件泄漏。
+	if names, err := filepath.Glob(filepath.Join(os.Getenv("XHUB_USAGE_SPOOL_DIR"), ".probe-*")); err != nil || len(names) != 0 {
+		t.Errorf("并发请求全部完成后仍有准入探针: names=%v err=%v", names, err)
 	}
 }
 
@@ -250,8 +264,8 @@ func TestUsageSpoolDatabaseDisconnect(t *testing.T) {
 	}
 }
 
-// TestUsageSpoolUnavailableAdmission 验证不可写磁盘在真实HTTP准入时返回503且不调用上游；恢复权限后可继续对话。
-// 使用临时目录及私有PG，硬额度与无限额账号均走相同存储准入；最后清理所有测试数据。
+// TestUsageSpoolUnavailableAdmission 验证不可写磁盘在真实HTTP准入时返回503且不调用上游；恢复权限后的首笔对话在重复刷账后仍只扣一次。
+// 使用临时目录及私有PG，硬额度与无限额账号均走相同存储准入；模拟遗留探针并核对恢复后的账单，最后清理所有数据。
 func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "spool")
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", dir)
@@ -261,6 +275,7 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	admin := h.adminSession()
 	scope := h.openScope(t, admin, "spool-admission")
 	h.setKeyBudget(t, admin, scope.key, 10)
+	before := h.moneyOf(t, scope)
 	if err := os.Chmod(dir, 0500); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +292,28 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
+	// 模拟上一次探针已同步、删除尚未持久化时断电；下一笔真实请求必须能清理遗留项并准入。
+	orphan := filepath.Join(dir, ".probe-regression-interrupted")
+	if err := os.WriteFile(orphan, []byte("usage-spool-probe\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resumed := h.ok(http.MethodPost, "/v1/chat/completions", scope.key, chatRequest("spool-admission", "Verify restored admission."))
+	id := resumed.headers.Get("x-litellm-call-id")
+	h.flushSpend()
+	h.flushSpend()
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("恢复后的网关未清理探针残留: %v", err)
+	}
+	var events []iam.UsageEvent
+	if err := h.db.Engine.Where("request_id = ?", id).Find(&events); err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || len(events) != 1 || events[0].Status != "success" || !nearlyEqual(events[0].Cost, expectedCost()) {
+		t.Fatalf("恢复请求必须对应一笔足额成功账单: id=%q 笔数=%d", id, len(events))
+	}
+	if len(h.upstreamCalls()) != 1 || !h.moneyOf(t, scope).grewBy(before, expectedCost()) {
+		t.Fatal("存储恢复后上游调用次数或五层累计费用不符")
+	}
 }
 
 // TestUsageSpoolUnsettledEvidenceBlocksUpstream 在真实 PostgreSQL 账本与持久目录构造同一请求的冲突快照。
@@ -325,12 +361,16 @@ func TestUsageSpoolUnsettledEvidenceBlocksUpstream(t *testing.T) {
 	if err := h.gw.FlushLocalUsage(t.Context()); err != nil {
 		t.Fatalf("后台未进入退避: %v", err)
 	}
+	var refusals sync.WaitGroup
 	for _, token := range []string{scope.key, scope.session} {
-		r := h.do(http.MethodPost, "/v1/chat/completions", token, chatRequest(model, "Check unresolved billing admission."))
-		if r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "billing_storage_pending") {
-			t.Fatalf("未结清账单时未明确拒绝: %s", r.describe())
-		}
+		refusals.Go(func() {
+			r := h.do(http.MethodPost, "/v1/chat/completions", token, chatRequest(model, "Check unresolved billing admission."))
+			if r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "billing_storage_pending") {
+				t.Errorf("并发准入未保留待结算错误: %s", r.describe())
+			}
+		})
 	}
+	refusals.Wait()
 	if got := len(h.upstreamCalls()); got != 1 {
 		t.Fatalf("冲突后重复访问上游: 总调用=%d 正常对照=1", got)
 	}

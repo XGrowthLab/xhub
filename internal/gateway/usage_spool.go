@@ -78,26 +78,33 @@ func (s *Server) CloseUsageSpool() error {
 	return s.usageSpool.Close()
 }
 
-// admitUsageSpool 在上游付费发送前为本次call预留本机容量，返回是否继续；失败写503及明确存储错误类型。
+// admitUsageSpool 在上游付费发送前为本次call预留本机容量，返回这次分配时已发布的待结账单数及是否继续；失败写 503。
 // 覆盖硬额度、无限额和搜索软额度，不能等收到付费结果后才发现配置/容量已不可用。
-func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID string) bool {
+func (s *Server) admitUsageSpool(w http.ResponseWriter, r *http.Request, callID string) (int, bool) {
 	if !s.usageSpoolEnabled {
-		return true
+		return 0, true
 	}
+	var pending int
 	err := s.usageSpoolErr
 	if err == nil && s.usageSpool == nil {
 		err = usagespool.ErrUnavailable
 	}
 	if err == nil {
-		err = s.usageSpool.Reserve(callID)
+		pending, err = s.usageSpool.ReserveForAttemptWithBacklog(callID)
 	}
 	if err == nil {
-		return true
+		return pending, true
+	}
+	// 在途交付本就拥有槽位；其待结账查询失败仍按原有预算恢复错误反馈给客户端。
+	if errors.Is(err, usagespool.ErrBacklogRead) {
+		util.Error("billing admission pending stage=spool_status cause=%s", billingPendingCause(err))
+		util.WriteTypedError(w, r.URL.Path, http.StatusServiceUnavailable, "billing_storage_pending", "pending token charges must settle before another request")
+		return 0, false
 	}
 	util.Error("usage spool admission denied call_id=%q: %v", callID, err)
 	w.Header().Set("X-XHub-Usage-Persistence", "unavailable")
 	util.WriteTypedError(w, r.URL.Path, http.StatusServiceUnavailable, "billing_storage_unavailable", "billing storage is unavailable; retry after recovery")
-	return false
+	return 0, false
 }
 
 // FlushLocalUsage 重放本机完整账单，供周期/显式Flush及启动恢复调用；返回错误便于可观察诊断。
@@ -197,32 +204,25 @@ func (s *Server) AcknowledgeDeliverySpool(_ context.Context, record iam.UsageRec
 // persistUsageSnapshot 将完整最终账单先落独立磁盘，再精确提交PG事务；磁盘失败才使用PG pending兜底；返回是否已有可靠介质。
 // 持久化失败不改写已完成上游响应；磁盘写失败仍尝试PG，若两者失败由persistSpend尝试Redis并告警，不虚构可恢复事实。
 func (s *Server) persistUsageSnapshot(record iam.UsageRecord) (bool, error) {
-	diskDurable := false
 	var diskErr error
 	if s.usageSpoolEnabled {
 		diskErr = s.usageSpoolErr
 		if diskErr == nil && s.usageSpool != nil {
-			diskErr = s.usageSpool.Put(record)
-			diskDurable = diskErr == nil
+			var durable bool
+			durable, diskErr = s.usageSpool.Settle(record, func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				return s.IAM.RecordUsageExact(ctx, []iam.UsageRecord{record})
+			})
+			if durable {
+				return true, diskErr
+			}
 		} else if diskErr == nil {
 			diskErr = usagespool.ErrUnavailable
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var databaseDurable bool
-	var databaseErr error
-	if diskDurable {
-		// 磁盘已保存完整证据，直接严格确认本份快照，不能用同ID另一份PG pending的成功替代。
-		databaseErr = s.IAM.RecordUsageExact(ctx, []iam.UsageRecord{record})
-		databaseDurable = databaseErr == nil
-	} else {
-		databaseDurable, databaseErr = s.IAM.RecordUsageDurably(ctx, record)
-	}
-	if databaseErr == nil && diskDurable {
-		if err := s.usageSpool.Acknowledge(record); err != nil {
-			diskErr = err
-		}
-	}
-	return diskDurable || databaseDurable, errors.Join(diskErr, databaseErr)
+	durable, err := s.IAM.RecordUsageDurably(ctx, record)
+	return durable, errors.Join(diskErr, err)
 }

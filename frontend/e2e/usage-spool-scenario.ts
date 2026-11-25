@@ -1,13 +1,13 @@
 import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, MASTER, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
- * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从监控核对费用与用量。
- * finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
+ * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从日志详情和监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
+ * 恢复前在独占目录构造探针残留，确认真实账单和监控消费均只增加一次。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -20,6 +20,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
     const headers = { Authorization: "Bearer " + bearer };
     const control = JSON.parse(readFileSync(join(process.env.E2E_RUN_DIR!, "enterprise-fixture.json"), "utf8")).control;
     const model = "spool-browser-recovery-" + Date.now();
+    const orphanProbe = join(process.env.E2E_RUN_DIR!, "usage-spool", ".probe-live-" + model);
     let modelID = "";
     let guardID = "";
     let injected = false;
@@ -109,11 +110,14 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect(callID).toBeTruthy();
       const state = await page.request.post(control + "/usage-spool/state", { data: { model } });
       expect(await state.json()).toEqual({ pending: 1, quarantined: 0 });
+      // 模拟断电后仍在目录中的探针，与已确认账单一起交给真实网关恢复。
+      writeFileSync(orphanProbe, "usage-spool-probe\n", { flag: "wx", mode: 0o600 });
       for (let i = 0; i < 2; i++) {
         const recovered = await page.request.post(control + "/usage-spool/recover", { data: { model } });
         expect(recovered.status(), await recovered.text()).toBe(200);
         expect(await recovered.json()).toEqual({ pending: 0, quarantined: 0 });
       }
+      expect(existsSync(orphanProbe)).toBe(false);
       injected = false;
       const billResponse = await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers });
       expect(billResponse.status()).toBe(200);
@@ -128,6 +132,10 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       // 入站护栏尚未选择供应商，不增加模型供应商监控请求；成功推理仍唯一。
       expect(metrics.summary.requests).toBe(1);
       expect(metrics.summary.cost).toBeCloseTo(0.12, 8);
+      // 故障期间整个 IAM 池会被测试关闭，控制台轮询可能已跳回登录页。恢复后由同一管理员
+      // 重新登录来查看持久账单；上方已用原先的令牌验证费用和状态，不依赖前端轮询的时序。
+      await login(page, "admin", MASTER, locale);
+      await expect(page.getByText(t("nav.apiKeys"), { exact: true }).first()).toBeVisible();
       await stableGoto(page, "/logs");
       const logsPanel = page.getByRole("tabpanel", { name: t("Logs"), exact: true });
       await logsPanel.getByPlaceholder(searchLabel, { exact: true }).fill(callID);
@@ -203,14 +211,15 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       const deferred = await page.request.post(control + "/usage-spool/defer", { data: { model } });
       expect(deferred.status(), await deferred.text()).toBe(200);
       expect(await deferred.json()).toEqual({ pending: 1, quarantined: 0 });
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // 多个调用同时观察同一份冲突账单，均需等待恢复或收到明确拒绝。
+      await Promise.all([0, 1].map(async () => {
         const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
           headers,
           data: { model, messages: [{ role: "user", content: "Check admission while settlement is pending." }] },
         });
         expect(refused.status(), await refused.text()).toBe(503);
         expect((await refused.json()).error.type).toBe("billing_storage_pending");
-      }
+      }));
       const cleared = await page.request.post(control + "/usage-spool/recover", { data: { model } });
       expect(cleared.status(), await cleared.text()).toBe(200);
       expect(await cleared.json()).toEqual({ pending: 0, quarantined: 0 });
@@ -221,7 +230,32 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       });
       expect(resumed.status(), await resumed.text()).toBe(200);
       expect((await resumed.json()).choices[0].message.content).toBe("e2e-ok");
+      const resumedID = resumed.headers()["x-litellm-call-id"];
+      expect(resumedID).toBeTruthy();
+      expect([callID, ...concurrentIDs]).not.toContain(resumedID);
+      await expect.poll(async () => {
+        const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + resumedID, { headers });
+        return log.ok() ? await log.json() : null;
+      }).toMatchObject({ request_id: resumedID, status: "success", spend: expect.closeTo(0.12, 8) });
+      await expect.poll(async () => {
+        const info = await page.request.get(GATEWAY + "/user/info", { headers });
+        expect(info.status()).toBe(200);
+        return Number((await info.json()).user_info.spend) - startingSpend;
+      }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
+      // 从真实日志页面定位整批交错调用中的最后一个流式请求，验证用户看到的是它自己的模型账单。
+      const lastStreamID = concurrentIDs[concurrentIDs.length - 1];
+      await stableGoto(page, "/logs");
+      await logsPanel.getByPlaceholder(searchLabel, { exact: true }).fill(lastStreamID);
+      const streamRow = logsPanel.getByRole("row").filter({ hasText: lastStreamID });
+      await expect(streamRow).toHaveCount(1);
+      await streamRow.click();
+      const detail = page.getByRole("dialog");
+      await expect(detail).toContainText(model);
+      await expect(detail).toContainText(lastStreamID);
+      // 最终账单和个人费用已经可见，浏览器压力结束后，独占夹具目录中的实写探针也应收尽。
+      await expect.poll(() => readdirSync(join(process.env.E2E_RUN_DIR!, "usage-spool")).filter(name => name.startsWith(".probe-"))).toEqual([]);
     } finally {
+      rmSync(orphanProbe, { force: true });
       if (injected)
         expect((await page.request.post(control + "/usage-spool/recover", { data: { model } })).status()).toBe(200);
       expect((await page.request.put(GATEWAY + "/account/log-capture", { headers, data: { enabled: false } })).status()).toBe(200);

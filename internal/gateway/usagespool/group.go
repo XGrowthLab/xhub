@@ -88,7 +88,7 @@ func (s *Spool) drainMutations(stage func([]byte) (string, error), syncDir func(
 		s.applyBatchLocked(batch, stage, syncDir)
 		for i, m := range batch {
 			if m.err != nil {
-				s.probedThrough = 0
+				s.invalidateProbeLocked()
 			}
 			close(m.done)
 			batch[i] = nil

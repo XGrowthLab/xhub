@@ -367,8 +367,8 @@ func TestModelFallbackPersistenceBoundaries(t *testing.T) {
 	})
 }
 
-// TestModelFallbackBudgetRecheck 验证跨公开模型回退之前重新核对真实项目预算。
-// 前置隔离数据库和本地上游，主模型失败回调将预算收紧；目标不得发出且不得扣费，schema统一清理。
+// TestModelFallbackBudgetRecheck 验证跨公开模型回退前重新核对项目和团队预算。
+// 参数 t 提供隔离数据库与本地上游；主模型失败回调收紧预算应阻止后备出站和扣费，重新调高后恢复，schema 统一清理。
 func TestModelFallbackBudgetRecheck(t *testing.T) {
 	h := newHarness(t)
 	admin := h.adminSession()
@@ -384,7 +384,7 @@ func TestModelFallbackBudgetRecheck(t *testing.T) {
 			h.ok("POST", "/model/delete", admin, map[string]any{"id": "dep-" + name})
 		}
 	}()
-	// 先产生真实消费，避免预算0表示不限额而使测试失去意义。
+	// 先产生真实消费，随后将项目或团队上限调到当前已用额，验证两种耗尽路径。
 	h.ok("POST", "/v1/chat/completions", owner.key, chatRequest("budget-backup", "seed-budget-spend"))
 	h.flushSpend()
 	before := h.moneyOf(t, owner)
@@ -402,6 +402,22 @@ func TestModelFallbackBudgetRecheck(t *testing.T) {
 	if after := h.moneyOf(t, owner); !after.same(before) {
 		t.Fatalf("预算拒绝仍扣费: %+v -> %+v", before, after)
 	}
+
+	// 第一次出站时团队仍有额度。主供应商返回前收紧团队上限，后备供应商必须看到这次修改。
+	h.setProjectBudget(t, admin, owner.projectID, before.project+1)
+	h.scriptStatus("budget-primary", 500)
+	h.onUpstream("budget-primary", func() { h.setTeamBudget(t, admin, owner.teamID, before.team) })
+	h.resetUpstream()
+	result = h.do("POST", "/v1/chat/completions", owner.key, chatRequest("budget-primary", "Recheck the team budget."))
+	if result.status != 403 || strings.Join(h.upstreamSince(0), ",") != "budget-primary" {
+		t.Fatalf("应在后备请求出站前拒绝新耗尽的团队：响应=%s 上游=%v", result.describe(), h.upstreamSince(0))
+	}
+	h.flushSpend()
+	if after := h.moneyOf(t, owner); !after.same(before) {
+		t.Fatalf("团队复核拒绝后不应新增扣费：%+v -> %+v", before, after)
+	}
+	h.setTeamBudget(t, admin, owner.teamID, before.team+1)
+	h.ok("POST", "/v1/chat/completions", owner.key, chatRequest("budget-backup", "Use the restored team budget."))
 }
 
 // TestModelFallbackTemplatePrecedence 验证真实模板绑定覆盖模型默认，显式空链禁用，移除覆盖实时恢复。
