@@ -68,18 +68,18 @@ func TestGroupDurableStagesAndFailureIsolation(t *testing.T) {
 			done := make(chan struct{})
 			var stages, barriers atomic.Int32
 			go func() {
-				s.applyBatchLocked(batch, func(raw []byte) (string, error) {
+				s.applyBatchLocked(batch, func(name string, raw []byte) error {
 					stages.Add(1)
 					started <- true
 					<-release
 					if failure == "one-stage" && bytes.Equal(batch[0].raw, raw) {
-						return "", injected
+						return injected
 					}
-					tmp, err := s.stageFile(raw)
+					err := s.stageFile(name, raw)
 					if failure == "one-rename" && bytes.Equal(batch[0].raw, raw) && err == nil {
-						return ".missing-fixture", nil
+						return s.root.Rename(name, ".pending-missing-fixture.tmp")
 					}
-					return tmp, err
+					return err
 				}, func(name string) error {
 					barriers.Add(1)
 					close(entered)
@@ -289,7 +289,9 @@ func TestGroupSaturatedOwnReservations(t *testing.T) {
 	if barriers != 1 || len(s.reserved) != slots-len(batch) {
 		t.Fatalf("满负载写入未共享屏障或借用了其他预留: 屏障=%d 剩余预留=%d", barriers, len(s.reserved))
 	}
-	if err := s.applyOneLocked(commandFor(t, putSnapshot, spoolRecord("excess"))); !errors.Is(err, ErrFull) {
+	excess := commandFor(t, putSnapshot, spoolRecord("excess"))
+	s.applySingleLocked(excess, s.stageFile, s.syncDirectoryLocked)
+	if err := excess.err; !errors.Is(err, ErrFull) {
 		t.Fatalf("饱和条数下未预留记录越过上限: %v", err)
 	}
 }
@@ -315,9 +317,9 @@ func TestGroupIsolatesFallbackAndIdempotency(t *testing.T) {
 	}
 	var stages atomic.Int32
 	barriers := 0
-	s.applyBatchLocked(mutations, func(raw []byte) (string, error) {
+	s.applyBatchLocked(mutations, func(name string, raw []byte) error {
 		stages.Add(1)
-		return s.stageFile(raw)
+		return s.stageFile(name, raw)
 	}, func(dir string) error {
 		barriers++
 		return s.syncDirectoryLocked(dir)
@@ -388,16 +390,16 @@ func TestGroupFailureStateAndHealth(t *testing.T) {
 				wantHealth = ErrFull
 			}
 			before := s.generation
-			s.applyBatchLocked(commands, func(raw []byte) (string, error) {
+			s.applyBatchLocked(commands, func(name string, raw []byte) error {
 				if target != nil && bytes.Equal(raw, target.raw) {
-					return "", injected
+					return injected
 				}
 				if mode == "ack-remove" {
 					if err := s.root.Remove(ack.name); err != nil {
-						return "", err
+						return err
 					}
 				}
-				return s.stageFile(raw)
+				return s.stageFile(name, raw)
 			}, func(dir string) error {
 				if mode == "ack-directory" {
 					return injected

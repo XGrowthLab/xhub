@@ -93,6 +93,9 @@ type replayFailure struct {
 type Spool struct {
 	mu     sync.Mutex
 	writes mutationQueue
+	// staging 只含当前批次尚未发布的精确临时文件名。stageDone 保护根目录和进程锁的生命周期。
+	staging   map[string]*mutation
+	stageDone chan struct{}
 	// settling 只跟踪从发布最终账单到持久确认结束的前台写入；重启后由磁盘证据恢复。
 	settling sync.Map // basename -> chan struct{}
 	// probeMu 保护锁外探针的生命周期。Close 先取得它，再关闭根目录和进程锁。
@@ -244,6 +247,12 @@ func (s *Spool) Close() error {
 	defer s.probeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for s.stageDone != nil {
+		done := s.stageDone
+		s.mu.Unlock()
+		<-done
+		s.mu.Lock()
+	}
 	if s.closed {
 		return nil
 	}
@@ -362,7 +371,7 @@ func (s *Spool) scanLocked(recover bool) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == s.probePath || name == ".lock" || name == ".spool-format" || name == "quarantine" {
+		if s.staging[name] != nil || name == s.probePath || name == ".lock" || name == ".spool-format" || name == "quarantine" {
 			continue
 		}
 		temporary := strings.HasPrefix(name, ".pending-") && strings.HasSuffix(name, ".tmp")
@@ -433,6 +442,15 @@ func sameDeliveryOwner(a, b iam.UsageRecord) bool {
 // 返回统计或读取错误，不读取正文或对外暴露身份；Status 和准入调用共用。
 func (s *Spool) statusLocked() (Status, error) {
 	result := Status{Reserved: len(s.reserved), ReservedBytes: int64(len(s.reserved)) * s.config.MaxRecordBytes}
+	// 锁外写盘期间，私有文件不是可重放账单。按完整写入上界计数，不能让新准入抢走已经承诺的空间。
+	if s.stageDone != nil {
+		for _, m := range s.staging {
+			if m.kind == beginMarker || !s.reserved[m.record.RequestID] {
+				result.Reserved++
+				result.ReservedBytes += int64(len(m.raw))
+			}
+		}
+	}
 	dir, err := s.root.Open(".")
 	if err != nil {
 		return result, err
@@ -443,7 +461,7 @@ func (s *Spool) statusLocked() (Status, error) {
 		return result, err
 	}
 	for _, entry := range entries {
-		if entry.Name() == s.probePath || entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
+		if s.staging[entry.Name()] != nil || entry.Name() == s.probePath || entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
 			continue
 		}
 		info, err := entry.Info()
@@ -465,8 +483,11 @@ func (s *Spool) statusLocked() (Status, error) {
 	if err != nil {
 		return result, err
 	}
-	result.Quarantined = len(quarantine)
 	for _, entry := range quarantine {
+		if s.staging["quarantine/"+entry.Name()] != nil {
+			continue
+		}
+		result.Quarantined++
 		info, err := entry.Info()
 		if err != nil {
 			return result, err
@@ -690,63 +711,6 @@ func (s *Spool) Put(record iam.UsageRecord) (err error) {
 	return s.submitMutation(putSnapshot, record, raw)
 }
 
-// putLocked 写入已编码快照；调用方持有队列锁，返回完整持久化、容量或快照冲突错误。
-// 正常账单和同步响应的未确认标记共用容量检查，不能覆盖不同内容。
-func (s *Spool) putLocked(record iam.UsageRecord, raw []byte) error {
-	var err error
-	defer delete(s.reserved, record.RequestID)
-	if s.closed {
-		return ErrUnavailable
-	}
-	if int64(len(raw)) > s.config.MaxRecordBytes {
-		s.lastErr = ErrFull
-		return ErrFull
-	}
-	name := basename(record.RequestID)
-	if old, readErr := s.readLocked(name); readErr == nil {
-		if string(old) == string(raw) {
-			return nil
-		}
-		status, statusErr := s.statusLocked()
-		if statusErr != nil {
-			return statusErr
-		}
-		if status.Bytes+int64(len(raw)) > s.config.MaxBytes {
-			return ErrFull
-		}
-		sum := sha256.Sum256(raw)
-		conflictName := "quarantine/conflict-" + hex.EncodeToString(sum[:]) + ".evidence"
-		if _, existsErr := s.root.Lstat(conflictName); os.IsNotExist(existsErr) {
-			if err = s.writeLocked(raw, conflictName); err != nil {
-				return err
-			}
-		} else if existsErr != nil {
-			return existsErr
-		}
-		s.lastErr = ErrConflict
-		return ErrConflict
-	} else if !os.IsNotExist(readErr) {
-		s.lastErr = readErr
-		return readErr
-	}
-	status, err := s.statusLocked()
-	if err != nil {
-		return err
-	}
-	reserved := status.ReservedBytes
-	if s.reserved[record.RequestID] {
-		reserved -= s.config.MaxRecordBytes
-	}
-	if status.Pending+status.Reserved-boolInt(s.reserved[record.RequestID]) >= s.config.MaxEntries || status.Bytes+reserved+int64(len(raw)) > s.config.MaxBytes {
-		s.lastErr = ErrFull
-		return ErrFull
-	}
-	err = s.writeLocked(raw, name)
-	// 即使写入失败，临时文件也可能需要恢复；已开始的旧批次不能替新证据作确认。
-	s.generation++
-	return err
-}
-
 // BeginDelivery 持久化零费用未确认标记并将其标记为当前实例在途；参数只包含脱敏账单元数据。
 // 返回错误时不允许把标记视为持久化；在途标记不由后台重放，进程退出后才允许作为未知结果恢复。
 func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
@@ -758,23 +722,6 @@ func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
 		return err
 	}
 	return s.submitMutation(beginMarker, record, raw)
-}
-
-// beginLocked 持锁保存已校验输入的未确认标记。仅成功持久化后设置在途所有权，并继续持有原预留。
-func (s *Spool) beginLocked(record iam.UsageRecord, raw []byte) error {
-	name := basename(record.RequestID)
-	if s.activeDelivery[name] {
-		return ErrConflict
-	}
-	reserved := s.reserved[record.RequestID]
-	if err := s.putLocked(record, raw); err != nil {
-		return err
-	}
-	if reserved {
-		s.reserved[record.RequestID] = true
-	}
-	s.activeDelivery[name] = true
-	return nil
 }
 
 // CompleteDelivery 原子替换当前实例持有的未确认标记为写出终态；参数为同一次调用的完整最终快照。
@@ -813,38 +760,27 @@ func (s *Spool) markerSizeLocked(record iam.UsageRecord) (int64, error) {
 	return int64(len(oldRaw)), nil
 }
 
-// completeLocked 持锁逐笔发布已确认终态；文件或目录同步失败时保留在途归属及预留。
-func (s *Spool) completeLocked(record iam.UsageRecord, raw []byte) error {
-	name := basename(record.RequestID)
-	oldSize, err := s.markerSizeLocked(record)
-	if err != nil {
-		return err
-	}
-	status, err := s.statusLocked()
-	if err != nil {
-		return err
-	}
-	reservedBytes := status.ReservedBytes
-	if s.reserved[record.RequestID] {
-		reservedBytes -= s.config.MaxRecordBytes
-	}
-	if int64(len(raw)) > s.config.MaxRecordBytes || status.Bytes-oldSize+int64(len(raw))+reservedBytes > s.config.MaxBytes {
-		return ErrFull
-	}
-	s.generation++
-	if err := s.writeLocked(raw, name); err != nil {
-		return err
-	}
-	delete(s.activeDelivery, name)
-	delete(s.reserved, record.RequestID)
-	return nil
-}
-
 // DiscardUnconfirmedDelivery 清理已由数据库严格结算的磁盘标记或相同终态。
 // record 为数据库已确认的完整终态；仅归属一致的未确认标记或逐字相同的终态可删除。
 // 调用方必须先完成严格结算；删除或目录同步失败返回错误，保留后续恢复机会。
 func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	s.mu.Lock()
+	// 同一请求的数据库核销不能在终态写盘途中删除旧标记，否则崩溃恢复可能失去交付归属依据。
+	for s.stageDone != nil {
+		var wait chan struct{}
+		for _, m := range s.staging {
+			if m.record.RequestID == record.RequestID {
+				wait = s.stageDone
+				break
+			}
+		}
+		if wait == nil {
+			break
+		}
+		s.mu.Unlock()
+		<-wait
+		s.mu.Lock()
+	}
 	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
@@ -881,50 +817,15 @@ func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	return s.syncSettledRemovalLocked(name)
 }
 
-// stageFile 在专用目录创建独立 v1 临时文件，写入完整快照并同步内容，返回文件名及错误。
-// 单笔和合并写入使用同样的恢复格式；失败留下的完整或部分文件由启动扫描恢复或隔离。
-func (s *Spool) stageFile(raw []byte) (string, error) {
-	suffix, err := token()
+// stageFile 供批处理写入预先登记的私有文件；name 由队列生成，raw 是已编码账单。
+// 在目录锁外独占创建、写完整文件并同步。错误不删除证据，重启后仍按 v1 规则恢复完整文件或隔离残片。
+func (s *Spool) stageFile(name string, raw []byte) error {
+	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return "", err
-	}
-	temporary := ".pending-" + suffix + ".tmp"
-	file, err := s.root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return "", err
+		return err
 	}
 	_, writeErr := file.Write(raw)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err = errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return "", err
-	}
-	return temporary, nil
-}
-
-// writeLocked 在本笔临时文件同步成功后才改名，再同步所有变更目录；持锁返回持久化或文件系统错误。
-func (s *Spool) writeLocked(raw []byte, name string) error {
-	temporary, err := s.stageFile(raw)
-	if err != nil {
-		s.lastErr = err
-		return err
-	}
-	if err = s.root.Rename(temporary, name); err != nil {
-		s.lastErr = err
-		return err
-	}
-	if err = s.syncDirectoryLocked("."); err != nil {
-		s.lastErr = err
-		return err
-	}
-	if filepath.Dir(name) != "." {
-		if err = s.syncDirectoryLocked(filepath.Dir(name)); err != nil {
-			s.lastErr = err
-			return err
-		}
-	}
-	s.lastErr = nil
-	return nil
+	return errors.Join(writeErr, file.Sync(), file.Close())
 }
 
 // boolInt 将预留存在性转换成容量计数；只用于本包数值计算，无副作用。
