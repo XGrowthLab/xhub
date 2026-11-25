@@ -30,7 +30,7 @@ test('quality workflow runs for pull requests and maintained branches', () => {
 
 /** 前置真实工作流和双语 README；验证每次上传均使用自建地址及仓库 Secret，上传失败会阻断，并验证徽章指向同一仓库；只读无清理。 */
 test('all coverage uploads and badges use self-hosted Codecov', () => {
-  assert.equal(workflow.env.CODECOV_UPLOAD_URL, 'https://codecov-upload.qiniuapi.com');
+  assert.equal(workflow.env.CODECOV_UPLOAD_URL, 'https://codecov-upload.qiniu.io');
   const uploads = Object.values(workflow.jobs)
     .flatMap((job) => job.steps)
     .filter((item) => item.uses?.startsWith('codecov/codecov-action@'));
@@ -42,7 +42,7 @@ test('all coverage uploads and badges use self-hosted Codecov', () => {
     assert.equal(upload.with.fail_ci_if_error, true, upload.name);
   }
 
-  const repository = 'https://codecov.qiniuapi.com/github/XGrowthLab/xhub';
+  const repository = 'https://codecov.qiniu.io/github/XGrowthLab/xhub';
   for (const filename of ['README.md', 'README.zh-CN.md']) {
     const readme = readFileSync(join(root, filename), 'utf8');
     const badge = readme.match(/\[!\[codecov\]\(([^)]+)\)\]\(([^)]+)\)/);

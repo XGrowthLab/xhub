@@ -15,7 +15,7 @@
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Docker Compose](https://img.shields.io/badge/Deploy-Docker%20Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Code Quality](https://github.com/qiniu/xhub/actions/workflows/quality.yml/badge.svg)](https://github.com/qiniu/xhub/actions/workflows/quality.yml)
-[![codecov](https://codecov.qiniuapi.com/github/XGrowthLab/xhub/graph/badge.svg?token=Q0CPIIPZRD)](https://codecov.qiniuapi.com/github/XGrowthLab/xhub)
+[![codecov](https://codecov.qiniu.io/github/XGrowthLab/xhub/graph/badge.svg?token=Q0CPIIPZRD)](https://codecov.qiniu.io/github/XGrowthLab/xhub)
 
 [English](README.md) | **简体中文**
 

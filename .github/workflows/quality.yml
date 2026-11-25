@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  CODECOV_UPLOAD_URL: https://codecov-upload.qiniuapi.com
+  CODECOV_UPLOAD_URL: https://codecov-upload.qiniu.io
 
 # 同一分支的新提交取代旧的质量检查，避免过期结果占用 runner。
 concurrency:
