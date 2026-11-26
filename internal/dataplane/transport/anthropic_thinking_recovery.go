@@ -12,11 +12,14 @@ import (
 // 匹配原厂块路径或供应商脱敏路径。要求错误从此处开始，避免被引用的用户正文触发改写。
 var anthropicThinkingSignatureError = regexp.MustCompile("(?i)^((messages\\.(?P<message>[0-9]+)|\\*\\*\\*\\.\\*\\*\\*)\\.content\\.(?P<block>[0-9]+):\\s*)?invalid `signature` in `thinking` block\\b")
 
+// 匹配已实测的兼容上游验签错误。它没有块路径，但会回显密文或其首尾片段。
+var anthropicThinkingCipherError = regexp.MustCompile(`(?i)^the encrypted content ([a-z0-9_+/=-]+(?:\.\.\.[a-z0-9_+/=-]+)?) could not be verified\. reason: encrypted content could not be decrypted or parsed\.(?: \(request id: [a-z0-9_-]+\))*$`)
+
 // RecoverAnthropicThinking 为已被上游明确拒绝的 Messages 历史构造一次兼容请求。
-// 参数为实际出站正文、上游状态及错误正文。仅 HTTP 400 的 thinking 签名错误可触发；
+// 参数为实际出站正文、上游状态及错误正文。仅 HTTP 400 的 thinking 验签错误可触发；
 // 返回清理后的正文及成功标志，保持用户内容、已完成的工具记录和当前 thinking 设置。
-// 原生执行器使用结果在原部署重试一次。工具续轮只有在错误明确定位到旧轮次时才允许恢复，
-// 并保留当前工具轮次的完整历史。无可清理块或结构无法确认时返回 nil、false。
+// 原生执行器使用结果在原部署重试一次。工具续轮及密文验签错误必须能定位到旧块；
+// 无可清理块或结构无法确认时返回 nil、false。
 // 仅修改本次出站副本，不更改原请求或任何会话存储。
 func RecoverAnthropicThinking(payload []byte, status int, response []byte) ([]byte, bool) {
 	if status != http.StatusBadRequest {
@@ -24,14 +27,21 @@ func RecoverAnthropicThinking(payload []byte, status int, response []byte) ([]by
 	}
 	var rejection struct {
 		Error struct {
-			Message string
+			Type, Param any
+			Message     string
 		}
 	}
 	if json.Unmarshal(response, &rejection) != nil {
 		return nil, false
 	}
-	location := anthropicThinkingSignatureError.FindStringSubmatch(strings.TrimSpace(rejection.Error.Message))
-	if location == nil {
+	message := strings.TrimSpace(rejection.Error.Message)
+	location := anthropicThinkingSignatureError.FindStringSubmatch(message)
+	var cipher []string
+	if location == nil && rejection.Error.Type == "invalid_request_error" &&
+		(rejection.Error.Param == nil || rejection.Error.Param == "") {
+		cipher = anthropicThinkingCipherError.FindStringSubmatch(message)
+	}
+	if location == nil && cipher == nil {
 		return nil, false
 	}
 
@@ -44,7 +54,11 @@ func RecoverAnthropicThinking(payload []byte, status int, response []byte) ([]by
 	if !ok {
 		return nil, false
 	}
-	if scope.toolContinuation && !anthropicHistoricalError(messages[:scope.before], location) {
+	if cipher != nil {
+		if !anthropicHistoricalCipher(messages, scope.before, cipher[1]) {
+			return nil, false
+		}
+	} else if scope.toolContinuation && !anthropicHistoricalError(messages[:scope.before], location) {
 		return nil, false
 	}
 	changed := false
@@ -85,6 +99,55 @@ func RecoverAnthropicThinking(payload []byte, status int, response []byte) ([]by
 	request["messages"], _ = json.Marshal(messages)
 	recovered, err := json.Marshal(request)
 	return recovered, err == nil
+}
+
+// anthropicHistoricalCipher 将上游回显的密文定位到唯一的已结束助手块。参数为完整出站历史、
+// 可清理的前缀上界和回显值，返回是否确认。扫描当前工具轮次以排除同值或缩写碰撞，
+// 只比较助手的签名及脱敏 thinking 数据，用户文本和工具参数中的同值不参与匹配。无副作用。
+func anthropicHistoricalCipher(messages []map[string]json.RawMessage, before int, cipher string) bool {
+	prefix, suffix, abbreviated := strings.Cut(cipher, "...")
+	if abbreviated && (len(prefix) < 4 || len(suffix) < 4) {
+		return false
+	}
+	found := false
+	for i, message := range messages {
+		content := bytes.TrimSpace(message["content"])
+		if string(message["role"]) != `"assistant"` || len(content) == 0 || content[0] != '[' {
+			continue
+		}
+		var blocks []struct {
+			Type            string
+			Signature, Data json.RawMessage
+		}
+		if json.Unmarshal(content, &blocks) != nil {
+			return false
+		}
+		for _, block := range blocks {
+			var raw json.RawMessage
+			switch block.Type {
+			case "thinking":
+				raw = block.Signature
+			case "redacted_thinking":
+				raw = block.Data
+			default:
+				continue
+			}
+			var value string
+			if json.Unmarshal(raw, &value) != nil {
+				continue
+			}
+			matchesAbbreviation := abbreviated && len(value) > len(prefix)+len(suffix) &&
+				strings.HasPrefix(value, prefix) && strings.HasSuffix(value, suffix)
+			if value != cipher && !matchesAbbreviation {
+				continue
+			}
+			if found || i >= before {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 // anthropicCompletedScope 以 before 划分可以清理的旧轮次。普通问答同时记录紧邻的助手组，

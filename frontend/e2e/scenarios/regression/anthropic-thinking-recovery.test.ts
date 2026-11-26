@@ -8,7 +8,7 @@ import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
  * 结束时删除部署、关闭上游，
  * 运行器回收数据库 schema 和账单。 */
 test("Anthropic bypass recovers stale thinking after a model switch", async ({ page }) => {
-  const signatureError = "messages.1.content.0: Invalid `signature` in `thinking` block";
+  const cipherError = "The encrypted content OLD_...TURE could not be verified. Reason: Encrypted content could not be decrypted or parsed.";
   const retryError = {
     type: "error",
     error: { type: "overloaded_error", message: "Capacity exhausted after history recovery." },
@@ -32,7 +32,7 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
     ];
     const history = JSON.stringify(body.messages);
     if (body.model === "vendor-b" && history.includes("OLD_SIGNATURE")) {
-      response.writeHead(400).end(JSON.stringify({ type: "error", error: { type: "<nil>", message: signatureError } }));
+      response.writeHead(400).end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", code: null, message: cipherError } }));
       return;
     }
     if (body.stream) {
@@ -81,16 +81,20 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
       deploymentIDs.push((await created.json()).model_info.id);
     }
     const history: Array<{ role: string; content: unknown }> = [{ role: "user", content: "Check the service." }];
-    /** 通过登录会话发起 Messages 请求。参数为模型和是否走标准流式入口，返回状态、JSON 正文和日志 ID。 */
-    const invoke = (model: string, stream = false) => page.evaluate(async ({ bearer, model, messages, stream }) => {
-      // eslint-disable-next-line no-restricted-syntax
-      const response = await fetch(stream ? "/gw/v1/messages" : "/gw/bypass/anthropic/v1/messages", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json", "X-Session-Id": "thinking-switch" },
-        body: JSON.stringify({ model, messages, max_tokens: 128, thinking: { type: "adaptive" }, ...(stream ? { stream } : {}) }),
-      });
-      return { status: response.status, data: await response.json(), callID: response.headers.get("x-litellm-call-id") };
-    }, { bearer, model, messages: history, stream });
+    /** 通过登录会话发起 Messages 请求。参数为模型、入口和流开关，返回状态、JSON 正文和日志 ID。 */
+    const invoke = (model: string, path = "/bypass/anthropic/v1/messages", stream = false) => {
+      const body = { model, messages: history, max_tokens: 128, thinking: { type: "adaptive" }, ...(stream ? { stream } : {}) };
+      const request = { bearer, path, body };
+      return page.evaluate(async ({ bearer, path, body }) => {
+        // eslint-disable-next-line no-restricted-syntax
+        const response = await fetch("/gw" + path, {
+          method: "POST",
+          headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json", "X-Session-Id": "thinking-switch" },
+          body: JSON.stringify(body),
+        });
+        return { status: response.status, data: await response.json(), callID: response.headers.get("x-litellm-call-id") };
+      }, request);
+    };
 
     const start = await invoke(models[0]);
     expect(start.status).toBe(200);
@@ -100,7 +104,7 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
     );
     const blocked = await invoke(models[1]);
     expect(blocked.status).toBe(400);
-    expect(blocked.data.error.message).toBe(signatureError);
+    expect(blocked.data.error.message).toBe(cipherError);
     expect(received).toHaveLength(2);
     expect(received[1].messages).toEqual(history);
     await stableGoto(page, "/logs?log_id=" + blocked.callID);
@@ -145,9 +149,19 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
     await stableGoto(page, "/logs?log_id=" + recovered.callID);
     await expect(page.getByRole("dialog")).toContainText(models[1]);
 
+    // 标准 Messages 也只向同一部署补发一次，完整保留正在回传的工具轮次。
+    const beforeStandard = received.length;
+    const standard = await invoke(models[1], "/v1/messages");
+    expect(standard.status).toBe(200);
+    expect(standard.data.content).toEqual([{ type: "text", text: "Reconnected." }]);
+    expect(received.slice(beforeStandard)).toMatchObject([
+      { model: "vendor-b", messages: history },
+      { model: "vendor-b", messages: cleanedHistory },
+    ]);
+
     // 旧签名先触发 400，清理后仅重试一次；首帧错误在任何成功流数据之前返回。
     const previousCalls = received.length;
-    const failed = await invoke(models[1], true);
+    const failed = await invoke(models[1], "/v1/messages", true);
     expect(failed.status).toBe(502);
     expect(failed.data).toEqual(retryError);
     expect(received.slice(previousCalls)).toMatchObject([

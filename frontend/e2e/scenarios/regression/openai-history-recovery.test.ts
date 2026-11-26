@@ -4,9 +4,10 @@ import { createServer } from "node:http";
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
 
 /** 用真实浏览器、网关和数据库验证 Chat/Responses 迁移及错误保真。前置本地协议供应商、
- * 手工价格与独立模型。验证实际外发次数和调用日志，finally 删除模型并关闭供应商，运行器回收 schema。
+ * 手工价格与独立模型。验证实际外发次数、调用日志及无错误码的原生错误，finally 删除模型并关闭供应商，运行器回收 schema。
  */
 test("Chat and Responses preserve public history during reasoning recovery", async ({ page }) => {
+  const uncodedCipherError = "The encrypted content UNCODED_CIPHER could not be verified. Reason: Encrypted content could not be decrypted or parsed.";
   const received: Array<{ path: string; body: string }> = [];
   const upstream = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -20,6 +21,10 @@ test("Chat and Responses preserve public history during reasoning recovery", asy
       return;
     }
     const parsed = JSON.parse(raw);
+    if (raw.includes("UNCODED_CIPHER")) {
+      response.writeHead(400).end(JSON.stringify({ error: { type: "invalid_request_error", code: null, message: uncodedCipherError } }));
+      return;
+    }
     if (raw.includes("STALE_CIPHER") || raw.includes("COMPACT_CIPHER")) {
       const id = raw.includes("COMPACT_CIPHER") ? "cmp_old" : "rs_old";
       response.writeHead(400).end(JSON.stringify({
@@ -107,6 +112,17 @@ test("Chat and Responses preserve public history during reasoning recovery", asy
       const log = await (await page.request.get(GATEWAY + "/spend/logs/ui/" + reply.callID, { headers })).json();
       expect(log.status).toBe("success");
       expect(log.spend).toBeCloseTo(0.000012, 10);
+    }
+    const uncodedReasoning = { ...reasoning, encrypted_content: "UNCODED_CIPHER" };
+    for (const [path, body] of [
+      ["/bypass/openai/v1/chat/completions", { model: chat, messages: [before, { ...earlier, reasoning_items: [uncodedReasoning] }, next] }],
+      ["/bypass/openai/v1/responses", { model: responses, input: [before, uncodedReasoning, earlier, next] }],
+    ] as const) {
+      const countBefore = received.length;
+      const failed = await invoke(path, body);
+      expect(failed.status).toBe(400);
+      expect(JSON.parse(failed.text).error.message).toBe(uncodedCipherError);
+      expect(received).toHaveLength(countBefore + 1);
     }
     const count = received.length;
     const refused = await invoke("/bypass/openai/v1/responses", {
