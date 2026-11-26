@@ -3345,6 +3345,13 @@
     "environment": "default offline"
   },
   {
+    "id": "REG-anthropic-thinking-recovery",
+    "file": "e2e/scenarios/regression/anthropic-thinking-recovery.test.ts",
+    "title": "Anthropic bypass recovers stale thinking after a model switch",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
     "id": "REG-model-view-en",
     "file": "e2e/scenarios/regression/model-view-hot-update-en.test.ts",
     "title": "model view hot update en",
