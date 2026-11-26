@@ -682,19 +682,18 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						}
 						if attempt.mustStopAfterFailure(preparationFailed, dialogue.NativeResponses) {
 							// 已开始输出、历史准备失败或原生响应不可安全重放时，不重试或换模型；记录已有用量与失败事实后结束。
-							h.RememberExchange(callID, r, raw, attempt.body)
+							clientError := attempt.initialFailureBody(r.URL.Path, dialogue.NativeResponses, diagnostic)
+							captured := attempt.body
+							if len(clientError) != 0 {
+								captured = clientError
+							}
+							h.RememberExchange(callID, r, raw, captured)
 							h.AnnotateCall(callID, dpcontract.CallNote{Streamed: true, TTFTMs: dpusage.TtftMillis(attempt.ttft), Provider: supplier, CacheKey: ck, SessionID: plan.SessionID})
 							h.RecordSpend(w, p, callID, alias, op, attempt.usage, start, false, http.StatusBadGateway, did)
-							if !attempt.clientStarted && !errors.Is(attempt.err, dpstream.ErrClientWrite) {
-								kind := "history_unavailable"
-								if dialogue.NativeResponses {
-									kind = "upstream_error"
-								}
-								reason, detail := kind, dpdiagnostics.SafeErr(attempt.err)
-								if kind == "upstream_error" {
-									reason, detail = dpdiagnostics.UpstreamFaultFeedback(diagnostic, detail)
-								}
-								util.WriteTypedReasonError(w, r.URL.Path, http.StatusBadGateway, kind, detail, "", reason)
+							if len(clientError) != 0 {
+								// SSE 处理器在读首帧前已设置流类型，此处尚未写出正文，可以返回 JSON。
+								w.Header().Set("Content-Type", "application/json")
+								util.WriteJSON(w, http.StatusBadGateway, json.RawMessage(clientError))
 							}
 							return
 						}
