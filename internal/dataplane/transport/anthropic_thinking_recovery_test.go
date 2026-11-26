@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -77,7 +78,7 @@ func TestRecoverAnthropicHistoricalErrorDuringTools(t *testing.T) {
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			message := tc.path + ": Invalid `signature` in `thinking` block"
-			rejection, _ := json.Marshal(map[string]any{"error": map[string]string{"message": message}})
+			rejection, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message, "param": 0}})
 			recovered, ok := RecoverAnthropicThinking(payload, http.StatusBadRequest, rejection)
 			if ok != tc.want {
 				t.Fatalf("错误位置的恢复决定不符: %s", recovered)
@@ -91,6 +92,63 @@ func TestRecoverAnthropicHistoricalErrorDuringTools(t *testing.T) {
 			if string(after.Messages[1]["content"]) != `[{"type":"text","text":"Timed out."}]` ||
 				!reflect.DeepEqual(before.Messages[2:], after.Messages[2:]) {
 				t.Fatalf("清理旧轮次时改变了正在执行的工具链: %s", recovered)
+			}
+		})
+	}
+}
+
+// TestRecoverAnthropicThinkingCipher 验证兼容供应商回显的密文只定位到唯一已结束块。
+// 前置旧签名、脱敏密文、当前工具轮及引用相同文本的工具结果；验证成功载荷和拒绝边界，无需清理。
+func TestRecoverAnthropicThinkingCipher(t *testing.T) {
+	const old = "eGh1Yi1zdGFsZS1zaWduYXR1cmUtb2xk"
+	const active = "QUJDQUNUSVZFX1NJR05BVFVSRQ=="
+	const redacted = "UkVEQUNURUQ="
+	const payload = `{"messages":[
+		{"role":"user","content":"Check the service."},
+		{"role":"assistant","content":[{"type":"thinking","signature":"` + old + `"},{"type":"redacted_thinking","data":"` + redacted + `"},{"type":"text","text":"Timed out."}]},
+		{"role":"user","content":"Try again."},
+		{"role":"assistant","content":[{"type":"thinking","signature":"` + active + `"},{"type":"tool_use","id":"check_1","name":"check","input":{}}]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"check_1","content":"` + old + `"}]}
+	]}`
+	const errorPrefix = "The encrypted content "
+	const errorSuffix = " could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+	for _, tc := range []struct {
+		name, body, message, kind, param string
+		want                             bool
+	}{
+		{"full old signature", payload, errorPrefix + old + errorSuffix, "invalid_request_error", "", true},
+		{"abbreviated old signature", payload, errorPrefix + "eGh1...b2xk" + errorSuffix + " (request id: upstream-1)", "invalid_request_error", "", true},
+		{"redacted thinking", payload, errorPrefix + redacted + errorSuffix, "invalid_request_error", "", true},
+		{"active tool", payload, errorPrefix + active + errorSuffix, "invalid_request_error", "", false},
+		{"collision with active tool", strings.Replace(payload, active, "eGh1OTHERb2xk", 1), errorPrefix + "eGh1...b2xk" + errorSuffix, "invalid_request_error", "", false},
+		{"unknown cipher", payload, errorPrefix + "QUJD" + errorSuffix, "invalid_request_error", "", false},
+		{"short abbreviation", payload, errorPrefix + "eGh...b2xk" + errorSuffix, "invalid_request_error", "", false},
+		{"different case", payload, errorPrefix + "EGh1...b2xk" + errorSuffix, "invalid_request_error", "", false},
+		{"quoted error", payload, "Invalid tool result: " + errorPrefix + old + errorSuffix, "invalid_request_error", "", false},
+		{"different reason", payload, "The encrypted content " + old + " could not be verified. Reason: Invalid tool payload.", "invalid_request_error", "", false},
+		{"different error type", payload, errorPrefix + old + errorSuffix, "authentication_error", "", false},
+		{"unrelated param", payload, errorPrefix + old + errorSuffix, "invalid_request_error", "tools.0.input", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rejection, _ := json.Marshal(map[string]any{"error": map[string]any{
+				"type": tc.kind, "message": tc.message, "param": tc.param, "code": nil,
+			}})
+			got, ok := RecoverAnthropicThinking([]byte(tc.body), http.StatusBadRequest, rejection)
+			if ok != tc.want {
+				t.Fatalf("密文验签恢复决定不符: got %v want %v", ok, tc.want)
+			}
+			if !ok {
+				return
+			}
+			var before, after struct{ Messages []map[string]json.RawMessage }
+			_ = json.Unmarshal([]byte(tc.body), &before)
+			_ = json.Unmarshal(got, &after)
+			if string(after.Messages[1]["content"]) != `[{"type":"text","text":"Timed out."}]` ||
+				!reflect.DeepEqual(before.Messages[2:], after.Messages[2:]) {
+				t.Fatalf("密文恢复改变了当前工具轮次: %s", got)
+			}
+			if _, ok := RecoverAnthropicThinking(got, http.StatusBadRequest, rejection); ok {
+				t.Fatal("清理后不得再根据工具结果里的字符串触发恢复")
 			}
 		})
 	}

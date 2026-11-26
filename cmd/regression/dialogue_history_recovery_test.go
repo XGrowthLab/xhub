@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestDialogueHistoryRecoveryAcrossEntrypoints 验证统一 Messages/Chat 与 OpenAI 原生透传
+// TestDialogueHistoryRecoveryAcrossEntrypoints 验证统一 Messages/Chat/Responses 与 OpenAI 原生透传
 // 各自的历史兼容。参数 t 为回归上下文。前置真实 HTTP、PostgreSQL 与本地严格上游；
 // 验证同步和流式、真实出站次数、原始错误、单次扣费及服务端归属。harness 回收隔离资源。
 func TestDialogueHistoryRecoveryAcrossEntrypoints(t *testing.T) {
@@ -24,6 +24,7 @@ func TestDialogueHistoryRecoveryAcrossEntrypoints(t *testing.T) {
 		{"messages-standard", "/v1/messages", "/v1/messages", "bypass_anthropic_messages", "messages", messages, 2},
 		{"chat-standard", "/v1/chat/completions", "/v1/chat/completions", "bypass_openai_chat", "chat", chat, 1},
 		{"chat-bypass", "/bypass/openai/v1/chat/completions", "/v1/chat/completions", "bypass_openai_chat", "chat", chat, 2},
+		{"responses-standard", "/v1/responses", "/v1/responses", "bypass_openai_responses", "responses", responses, 1},
 		{"responses-bypass", "/bypass/openai/v1/responses", "/v1/responses", "bypass_openai_responses", "responses", responses, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,7 +84,7 @@ func TestDialogueHistoryRecoveryAcrossEntrypoints(t *testing.T) {
 					}
 				})
 			}
-			if tc.endpoint == "responses" {
+			if tc.path == "/bypass/openai/v1/responses" {
 				before, balance := calls.Load(), h.moneyOf(t, owner)
 				compact := strings.Replace(tc.input, `"type":"reasoning"`, `"type":"compaction"`, 1)
 				got := h.doRaw("POST", tc.path, owner.key, "application/json", `{"model":"history-model",`+compact+`}`)
