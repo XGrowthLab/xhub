@@ -1,8 +1,19 @@
 import { createHash } from "node:crypto";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, UPSTREAM, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
+
+/** 核对密钥指纹前打开对应表格列。参数是已定位到日志页的浏览器，返回列显示后的 Promise；仅变更临时表格列状态。 */
+async function showKeyHashColumn(page: Page) {
+  const label = /^(密钥哈希|Key Hash)$/;
+  const header = page.getByRole("columnheader", { name: label });
+  if (await header.count()) return;
+  await page.getByTestId("view-options-trigger").filter({ visible: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: label }).click();
+  await page.keyboard.press("Escape");
+  await expect(header).toBeVisible();
+}
 /** 用途：注册独立场景「日志密钥 Hash 仅展示且删除密钥后仍可查看日志：普通日志」；无参数、无返回值。前置真实浏览器、私有数据库和本地上游；验证页面及原始契约，保留原套件前后置清理，运行器最终回收专属 schema。异常由 Playwright 单独记录。 */
 export function registerSC051() {
 const failure: boolean = false;
@@ -85,7 +96,11 @@ test("日志密钥 Hash 仅展示且删除密钥后仍可查看日志：普通�
           expect(bill.completion_tokens, "日志输出用量必须等于响应").toBe(usage.completion_tokens);
         }
         await stableGoto(page, "/logs");
-        if (failure) await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
+        if (failure) {
+          await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
+          await selectFailureSeverity(page, "warning");
+        }
+        await showKeyHashColumn(page);
         await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(id);
         const row = page.getByRole("row").filter({ hasText: id });
         await expect(row).toHaveCount(1);
@@ -196,7 +211,11 @@ test("日志密钥 Hash 仅展示且删除密钥后仍可查看日志：错误�
           expect(bill.completion_tokens, "日志输出用量必须等于响应").toBe(usage.completion_tokens);
         }
         await stableGoto(page, "/logs");
-        if (failure) await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
+        if (failure) {
+          await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
+          await selectFailureSeverity(page, "warning");
+        }
+        await showKeyHashColumn(page);
         await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(id);
         const row = page.getByRole("row").filter({ hasText: id });
         await expect(row).toHaveCount(1);

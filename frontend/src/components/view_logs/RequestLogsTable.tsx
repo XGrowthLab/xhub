@@ -7,7 +7,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components/shared/DataTable";
 
 import type { Team } from "../key_team_helpers/key_list";
-import type { LogEntry } from "./columns";
+import type { LogEntry, LogFailureSeverity } from "./columns";
 import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
@@ -35,21 +35,27 @@ interface RequestLogsTableProps {
   logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;
   errorsOnly?: boolean;
+  failureSeverity?: LogFailureSeverity;
 }
 
-/** 列表无数据提示；根据是否存在筛选显示调整建议，不将空结果表述为系统从未收到请求。 */
-function RequestLogsEmptyState({ filtered }: { filtered: boolean }) {
+/** 生成日志列表空态；按筛选或失败级别提示可用操作，空结果不代表整个系统没有收到请求。 */
+function RequestLogsEmptyState({ filtered, failureSeverity }: { filtered: boolean; failureSeverity?: LogFailureSeverity }) {
   const t = useT();
+  const severityTitles = { error: "logsUX.noErrors", warning: "logsUX.noWarnings" } as const;
+  const unfilteredTitle = failureSeverity ? severityTitles[failureSeverity] : "logsUX.empty";
+  const unfilteredDescription = failureSeverity ? "logsUX.severityEmptyHint" : "logsUX.emptyHint";
+  const title = filtered ? "No matching requests" : unfilteredTitle;
+  const description = filtered ? "No requests match your filters for this time range." : unfilteredDescription;
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <ScrollText className="size-5 text-muted-foreground" />
       </div>
       <div className="text-sm font-medium text-foreground">
-        {filtered ? t("No matching requests") : t("logsUX.empty")}
+        {t(title)}
       </div>
       <div className="max-w-xs text-center text-sm text-muted-foreground">
-        {filtered ? t("No requests match your filters for this time range.") : t("logsUX.emptyHint")}
+        {t(description)}
       </div>
     </div>
   );
@@ -78,6 +84,7 @@ export function RequestLogsTable({
   logsWindow,
   toolbarChildren,
   errorsOnly = false,
+  failureSeverity,
 }: RequestLogsTableProps) {
   const t = useT();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -91,6 +98,7 @@ export function RequestLogsTable({
       "status",
       "diagnosis",
       "user",
+      "team_alias",
       "request_duration_ms",
       "total_tokens",
       "spend",
@@ -124,7 +132,7 @@ export function RequestLogsTable({
       onColumnFiltersChange={onColumnFiltersChange}
       isLoading={isLoading}
       loadingMessage={t("Loading request logs…")}
-      noDataMessage={hasLoadError ? t("logsUX.loadFailed") : <RequestLogsEmptyState filtered={isFiltered} />}
+      noDataMessage={hasLoadError ? t("logsUX.loadFailed") : <RequestLogsEmptyState filtered={isFiltered} failureSeverity={failureSeverity} />}
       size="compact"
       onRowClick={onRowClick}
       toolbar={(table) => (

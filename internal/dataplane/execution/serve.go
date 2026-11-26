@@ -293,7 +293,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	util.Debug("process path=%s step=route model=%s deployments=%d stream=%t call_id=%q endpoint=%q resolved_model=%q fallback_visited=%d", r.URL.Path, alias, len(pool), stream, callID, providercapability.EndpointForOp(op), fallbacks.PoolAlias, len(fallbacks.Seen)-1)
 	if len(pool) == 0 {
 		snapshot := diagnosis.Snapshot(routeCfg, "")
-		status, kind, message := diagnosis.Failure(alias)
+		status, kind, message, reason := diagnosis.Failure(alias)
 		util.Error("process path=%s step=route call_id=%q model=%q reason=%q message=%q fallback_visited=%d", r.URL.Path, callID, alias, kind, message, len(fallbacks.Seen)-1)
 		if problems := diagnosis.ProtocolProblems(""); len(problems) > 0 {
 			reason := ""
@@ -304,8 +304,10 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 			writeProtocolRejection(w, r.URL.Path, status, kind, "request_conversion", callerProtocol, reason, problems, snapshot)
 			return
 		}
-		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: snapshot})
-		util.WriteTypedError(w, r.URL.Path, status, kind, message)
+		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{
+			Routing: snapshot, Outcome: &dpdiagnostics.GatewayOutcome{Code: reason},
+		})
+		util.WriteTypedReasonError(w, r.URL.Path, status, kind, message, "", reason)
 		return
 	}
 	// 第四阶段：外层遍历模型回退图，中层遍历部署池，内层按该目标模板重试。
@@ -323,9 +325,16 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	// 供 Responses 同步传输、结果验证和历史提交失败调用，避免成功正文覆盖最终错误。调用方收到写入后的错误响应。
 	writeResponseFailure := func(deployment, kind, detail string, usage map[string]any) {
 		const status = http.StatusBadGateway
-		h.RememberExchange(callID, r, raw, util.TypedErrorBody(r.URL.Path, status, kind, detail, ""))
+		reason := kind
+		if kind == "upstream_error" {
+			reason, detail = dpdiagnostics.UpstreamFaultFeedback(lastDiagnostic, detail)
+		}
+		if lastDiagnostic != nil {
+			lastDiagnostic.Outcome = &dpdiagnostics.GatewayOutcome{Code: reason}
+		}
+		h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, status, kind, detail, "", reason))
 		h.RecordSpend(w, p, callID, alias, op, usage, start, false, status, deployment)
-		util.WriteTypedError(w, r.URL.Path, status, kind, detail)
+		util.WriteTypedReasonError(w, r.URL.Path, status, kind, detail, "", reason)
 	}
 	// stopCanceled 在调用方上下文结束时记录一次零费用取消并终止执行。
 	// 参数保留已读取正文、用量、部署和首字时间；返回是否已处理取消。
@@ -681,7 +690,11 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 								if dialogue.NativeResponses {
 									kind = "upstream_error"
 								}
-								util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, kind, dpdiagnostics.SafeErr(attempt.err))
+								reason, detail := kind, dpdiagnostics.SafeErr(attempt.err)
+								if kind == "upstream_error" {
+									reason, detail = dpdiagnostics.UpstreamFaultFeedback(diagnostic, detail)
+								}
+								util.WriteTypedReasonError(w, r.URL.Path, http.StatusBadGateway, kind, detail, "", reason)
 							}
 							return
 						}
@@ -717,6 +730,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				h.DecBusy(did)
 				if attempt.readErr != nil {
 					lastErr = attempt.readErr
+					diagnostic.Failure = dpdiagnostics.ObserveFailure(r.Context(), "response_transfer", attempt.readErr, time.Since(start))
 					if stopCanceled(attempt.body, nil, did, 0) {
 						return
 					}
@@ -824,7 +838,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		}
 	}
 
-	// 最终失败仍写交互与零费用用量行，使控制台能查到请求，而非只留下进程日志。
+	// 最终失败写交互与零费用用量行，控制台可通过请求 ID 对照客户端收到的错误。
 	// 未发出 HTTP 时区分凭据和编码错误；已经尝试 HTTP 时保留最后上游状态/正文或安全错误。
 	if !triedHTTP {
 		switch {
@@ -871,7 +885,8 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		rawError := lastResponse
 		contentType := "application/json"
 		if len(rawError) == 0 {
-			rawError, _ = json.Marshal(map[string]any{"error": map[string]any{"type": "upstream_error", "message": "upstream " + strconv.Itoa(lastStatus)}})
+			rawError = util.TypedReasonErrorBody(r.URL.Path, lastStatus, "upstream_error",
+				"The upstream returned HTTP "+strconv.Itoa(lastStatus)+" without error details.", "", "upstream_http_error")
 		} else if !json.Valid(rawError) {
 			contentType = "text/plain; charset=utf-8"
 		}
@@ -885,11 +900,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	}
 
 	if lastErr != nil {
-		detail := dpdiagnostics.SafeErr(lastErr)
-		util.Error("dataplane path=%s status=502 code=upstream_error detail=%s", r.URL.Path, detail)
-		h.RememberExchange(callID, r, raw, []byte(detail))
+		reason, detail := dpdiagnostics.UpstreamFaultFeedback(lastDiagnostic, dpdiagnostics.SafeErr(lastErr))
+		if lastDiagnostic != nil {
+			lastDiagnostic.Outcome = &dpdiagnostics.GatewayOutcome{Code: reason}
+		}
+		util.Error("dataplane path=%s status=502 code=upstream_error detail=%s reason=%s", r.URL.Path, dpdiagnostics.SafeErr(lastErr), reason)
+		h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, 502, "upstream_error", detail, "", reason))
 		h.RecordSpend(w, p, callID, alias, op, nil, start, false, http.StatusBadGateway, "")
-		util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", detail)
+		util.WriteTypedReasonError(w, r.URL.Path, 502, "upstream_error", detail, "", reason)
 		return
 	}
 	util.Error("dataplane path=%s status=502 code=upstream_error detail=all deployments failed", r.URL.Path)

@@ -80,7 +80,7 @@ func safeErrorValue(value any, depth int) any {
 			}
 		}
 		// 不枚举未知供应商字段，避免 payload、data 等扩展旁路保存用户正文。
-		for _, name := range []string{"error", "code", "type", "message", "param", "request_id", "event_id", "response_id", "upstream_request_id", "status", "status_code", "details", "diagnostics", "upstream_error", "phase", "kind", "retryable", "terminal_cause", "bytes_read", "body_limit", "request_body_omitted"} {
+		for _, name := range []string{"error", "code", "type", "message", "param", "reason", "request_id", "event_id", "response_id", "upstream_request_id", "status", "status_code", "details", "diagnostics", "upstream_error", "phase", "kind", "retryable", "terminal_cause", "bytes_read", "body_limit", "request_body_omitted"} {
 			if item, ok := v[name]; ok {
 				out[name] = safeErrorValue(item, depth+1)
 			}

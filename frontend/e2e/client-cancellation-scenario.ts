@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 import { translate, type Locale } from "../src/i18n/translate";
 
 /** 注册一个语言的完整浏览器场景；参数locale选择界面语言，测试体管理临时资源，调用本身不请求后台。 */
@@ -135,6 +135,7 @@ export function registerClientScenario(locale: Locale) {
       await stableGoto(page, "/logs");
       // 直接按已确认的失败请求查找；成功请求在独立 Redis 中可能尚未刷入，不作为进入错误页的前置条件。
       await page.getByRole("tab", {name:tr("Error Logs"),exact:true}).click();
+      await selectFailureSeverity(page, "all");
       // 页签过渡时两个面板可能同时可见；限定目标页签，保持严格唯一匹配，不依赖动画时长。
       const errorPanel = page.getByRole("tabpanel", {name:tr("Error Logs"),exact:true});
       await errorPanel.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(calls[0]);

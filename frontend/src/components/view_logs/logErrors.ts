@@ -1,8 +1,8 @@
 import type { LogEntry } from "./columns";
 
 /** 判断日志是否失败：兼容后台 error 和旧版 failure 状态、HTTP 错误码及独立错误正文；供表格和详情共享，不改变输入。 */
-export function isRequestFailure(log: Pick<LogEntry, "status" | "metadata" | "error">): boolean {
-  return [log.status, log.metadata?.status].some((status) =>
+export function isRequestFailure(log: Pick<LogEntry, "status" | "metadata" | "error" | "severity">): boolean {
+  return log.severity === "warning" || log.severity === "error" || [log.status, log.metadata?.status].some((status) =>
     typeof status === "string" && ["error", "failure", "failed"].includes(status.toLowerCase()),
   ) || Number(log.metadata?.http_status) >= 400 || Boolean(log.error?.trim());
 }

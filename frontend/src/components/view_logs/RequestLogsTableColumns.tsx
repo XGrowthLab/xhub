@@ -2,7 +2,8 @@
 
 import { formatLogCost } from "./formatLogCost";
 
-import { logOutcomeKey } from "./logPresentation";
+import { logMissingReasonKey, logOutcomeKey } from "./logPresentation";
+import { RequestLogDiagnosticFacts } from "./RequestLogDiagnosticFacts";
 import { requestLogStatus } from "./taskStatus";
 
 import type { ColumnDef } from "@tanstack/react-table";
@@ -141,12 +142,23 @@ export const getRequestLogsTableColumns = ({
           />
         );
       }
-      return <StatusBadge tone={isSuccess ? "success" : "error"} label={isSuccess ? t("Success") : t("Failure")} />;
+      return <StatusBadge tone={state.tone} label={t(state.label)} />;
     },
   },
   {
     id: "diagnosis", header: t("logsUX.diagnosis"), enableSorting: false,
-    cell: ({ row }) => isRequestFailure(row.original) ? <div className="max-w-64 text-sm"><span className="font-mono">{row.original.metadata?.http_status || "—"}</span> · {t(logOutcomeKey(row.original))}</div> : "—",
+    cell: ({ row }) => {
+      const log = row.original;
+      if (!isRequestFailure(log)) return "—";
+      return (
+        <div className="max-w-64 text-sm">
+          <div><span className="font-mono">{log.metadata?.http_status || "—"}</span> · {t(logOutcomeKey(log))}</div>
+          <div className="text-xs text-muted-foreground">
+            <RequestLogDiagnosticFacts log={log} />
+          </div>
+        </div>
+      );
+    },
   },
   {
     id: "session_id",
@@ -259,7 +271,17 @@ export const getRequestLogsTableColumns = ({
     header: t("Team Name"),
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={readMetaString(row.original.metadata, "user_api_key_team_alias")} />,
+    cell: ({ row }) => {
+      const log = row.original;
+      const name = readMetaString(log.metadata, "user_api_key_team_alias");
+      if (name) return <TruncatedText value={name} />;
+      return (
+        <div className="space-y-0.5">
+          {log.team_id && <TruncatedText value={log.team_id} />}
+          <span className="text-xs text-muted-foreground">{t(logMissingReasonKey(log, "team"))}</span>
+        </div>
+      );
+    },
   },
   {
     id: "key_hash",
@@ -291,6 +313,7 @@ export const getRequestLogsTableColumns = ({
       const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
       const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
       const isSingleModel = modelNames.length === 1;
+      if (!modelLabel.trim()) return <span className="text-xs text-muted-foreground">{t(logMissingReasonKey(log, "model"))}</span>;
       return (
         <div className="flex items-center space-x-2">
           {provider && isSingleModel && (
@@ -349,7 +372,18 @@ export const getRequestLogsTableColumns = ({
     header: t("Internal User"),
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => {
+      const log = row.original;
+      return (
+        <div className="space-y-0.5">
+          {log.user_name && <TruncatedText value={log.user_name} />}
+          {log.user && <span className="block font-mono text-xs text-muted-foreground"><TruncatedText value={log.user} /></span>}
+          {!log.user_name && (!log.user || log.diagnosis?.user_missing_reason) && (
+            <span className="text-xs text-muted-foreground">{t(logMissingReasonKey(log, "user"))}</span>
+          )}
+        </div>
+      );
+    },
   },
   {
     id: "end_user",

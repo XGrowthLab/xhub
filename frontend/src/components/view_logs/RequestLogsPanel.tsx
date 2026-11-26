@@ -8,14 +8,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
+import { Button } from "@/components/ui/button";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { logDetailsQueryOptions } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
-import type { LogEntry } from "./columns";
+import type { LogEntry, LogFailureSeverity } from "./columns";
 import { useT } from "@/i18n";
 import {
   DEFAULT_LOGS_SORTING,
   DEFAULT_LOGS_INTERVAL,
   formatLogsWindow,
+  getFilterValue,
   getLogsWindowEndBound,
   LOG_FILTER_IDS,
   useLogFilterLogic,
@@ -30,6 +32,19 @@ const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
 const findLogById = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
   logs.find((log) => log.request_id === logId) ?? logs.find((log) => log.litellm_call_id === logId) ?? null;
+type FailureFilter = LogFailureSeverity | "all";
+const severityOptions = [
+  { value: "error", label: "logsUX.severityError" },
+  { value: "warning", label: "logsUX.severityWarning" },
+  { value: "all", label: "logsUX.severityAll" },
+] as const;
+
+/** 返回特定 HTTP 状态在失败视图的级别。日志状态过滤互斥时使用；空值及不完整输入无级别，不猜测历史日志原因。 */
+function filteredCodeSeverity(filters: ColumnFiltersState): LogFailureSeverity | undefined {
+  const code = getFilterValue(filters, LOG_FILTER_IDS.ERROR_CODE);
+  if (!code || !/^[1-5]\d{2}$/.test(code)) return undefined;
+  return Number(code) >= 400 && Number(code) < 500 ? "warning" : "error";
+}
 
 interface RequestLogsPanelProps {
   accessToken: string;
@@ -40,7 +55,7 @@ interface RequestLogsPanelProps {
   errorsOnly?: boolean;
 }
 
-/** 查询并展示请求日志；普通面板排除失败，errorsOnly 固定失败筛选并逐条列出请求，避免会话聚合隐藏错误。
+/** 查询并展示请求日志；普通面板排除失败，errorsOnly 逐条列出请求并默认展示故障，可切换警告或全部失败。
  * 参数为登录凭据和活跃状态，返回日志面板，供日志页使用；后台负责权限和分页。
  * 密钥 Hash 仅展示，行点击打开日志详情；面板不再查询或切换到密钥详情，避免历史 Hash 触发 404。 */
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive, errorsOnly = false }: RequestLogsPanelProps) {
@@ -48,6 +63,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [failureSeverity, setFailureSeverity] = useState<FailureFilter>("error");
   const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
@@ -101,6 +117,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sorting,
     sessionCursors,
     errorsOnly,
+    severity: failureSeverity === "all" ? undefined : failureSeverity,
   });
 
   // 用户选项查询沿用日志窗口，自动刷新时同步移动边界。
@@ -155,16 +172,30 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
+  /** 应用用户筛选；显式选择 HTTP 状态时同步级别，避免 401 之类的具体筛选被错误视图默默排除。 */
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
+    const updated = typeof updaterOrValue === "function" ? updaterOrValue(columnFilters) : updaterOrValue;
+    const codeSeverity = filteredCodeSeverity(updated);
+    if (errorsOnly && codeSeverity && failureSeverity !== "all") setFailureSeverity(codeSeverity);
+    setColumnFilters(updated);
     setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-  }, []);
+  }, [columnFilters, errorsOnly, failureSeverity]);
 
   const resetToFirstPage = useCallback(() => {
     setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
+
+  /** 在失败面板选择级别后重置页码，仅清除与所选级别冲突的 HTTP 状态，保留其他筛选。 */
+  const handleSeverityChange = (severity: FailureFilter) => {
+    setFailureSeverity(severity);
+    const codeSeverity = filteredCodeSeverity(columnFilters);
+    if (severity !== "all" && codeSeverity && codeSeverity !== severity) {
+      setColumnFilters(columnFilters.filter((filter) => filter.id !== LOG_FILTER_IDS.ERROR_CODE));
+    }
+    resetToFirstPage();
+  };
 
   /** 接收表格页码更新并返回 void；页码接口直接翻页，游标接口缓存下一页游标，加载占位数据期间拒绝导航。 */
   const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
@@ -194,6 +225,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
+    setFailureSeverity("error");
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
@@ -232,8 +264,25 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   return (
     <AutoRouterModelGroupsProvider>
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">{errorsOnly ? t("Error Logs") : t("pages.logs.title")}</h1>
+        {errorsOnly && (
+          <div role="group" aria-label={t("logsUX.severityFilter")} className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+            {severityOptions.map(({ value, label }) => (
+              <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={failureSeverity === value ? "secondary" : "ghost"}
+                aria-pressed={failureSeverity === value}
+                className={failureSeverity === value ? "bg-background shadow-sm" : undefined}
+                onClick={() => handleSeverityChange(value)}
+              >
+                {t(label)}
+              </Button>
+            ))}
+          </div>
+        )}
       </div>
 
       {!errorsOnly && <PersonalLogCapture accessToken={accessToken} />}
@@ -261,6 +310,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         teams={allTeams ?? []}
         logsWindow={logsWindow}
         errorsOnly={errorsOnly}
+        failureSeverity={errorsOnly && failureSeverity !== "all" ? failureSeverity : undefined}
         toolbarChildren={
           <LogsTableToolbar
             startTime={startTime}

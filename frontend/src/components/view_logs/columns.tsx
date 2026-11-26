@@ -1,3 +1,5 @@
+import type { components as UsageContract } from "@/lib/http/contracts/usage";
+
 /** API sort field mapping for /spend/logs/ui endpoint */
 export const LOGS_SORT_FIELD_MAP = {
   startTime: "startTime",
@@ -9,6 +11,10 @@ export const LOGS_SORT_FIELD_MAP = {
 } as const;
 
 export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
+
+/** 授权日志 API 提供的分级。旧日志可能缺少该字段，展示层会保守降级。 */
+type LogSeverity = NonNullable<UsageContract["schemas"]["LogRecord"]["severity"]>;
+export type LogFailureSeverity = Exclude<LogSeverity, "success">;
 
 export type LogEntry = {
   request_id: string;
@@ -27,6 +33,8 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  /** 已授权日志所属账号的当前显示名；原始用户 ID 仍由 user 提供。 */
+  user_name?: string;
   end_user?: string;
   custom_llm_provider?: string;
   /** 调用时持久化的模型提供商凭证名称；缺失时不以协议名称代替。 */
@@ -53,6 +61,8 @@ export type LogEntry = {
    * 日志表仅对 cache_key/prompt 显示推断标记；空值表示没有来源事实，不代表供应商。 */
   session_source?: string;
   status?: string;
+  severity?: LogSeverity;
+  diagnosis?: UsageContract["schemas"]["LogDiagnosis"];
   /** 完整错误正文；即使关闭提示词存储也可用于请求失败诊断。 */
   error?: string | null;
   /** 调用时保存的端点与首字节计时，TPS 由后台统一计算。 */

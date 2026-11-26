@@ -7,7 +7,7 @@ import { Team } from "../key_team_helpers/key_list";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { teamListScopeUserId } from "../../utils/roles";
 import { defaultPageSize } from "../constants";
-import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
+import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogFailureSeverity, type LogsSortField } from "./columns";
 
 export interface PaginatedResponse {
   data: LogEntry[];
@@ -121,7 +121,9 @@ export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: stri
   return trimmed === "" ? undefined : trimmed;
 };
 
-/** 参数为凭据、筛选、分页和排序，返回查询状态、结果、团队及响应声明的游标能力；日志面板调用，查询只读。根据凭据、日期和分页查询日志；errorsOnly 强制失败状态并关闭会话合并，普通视图只允许非失败状态；缓存隔离两种视图，接口失败由查询状态返回调用面板。 */
+/** 按凭据、筛选、分页及排序查询日志，返回查询状态、结果和团队，供面板调用。
+ * 失败面板关闭会话合并并可按级别查询，普通面板只查非失败；缓存区分级别，接口失败交给面板显示，无数据写入。
+ */
 export function useLogFilterLogic({
   accessToken,
   token,
@@ -138,6 +140,7 @@ export function useLogFilterLogic({
   sorting,
   sessionCursors = {},
   errorsOnly = false,
+  severity,
 }: {
   accessToken: string | null;
   token: string | null;
@@ -155,6 +158,7 @@ export function useLogFilterLogic({
   sorting: SortingState;
   sessionCursors?: Record<number, string>;
   errorsOnly?: boolean;
+  severity?: LogFailureSeverity;
 }) {
   const pageSize = pagination.pageSize || defaultPageSize;
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
@@ -181,6 +185,7 @@ export function useLogFilterLogic({
       sortOrder,
       sessionCursor,
       errorsOnly,
+      errorsOnly ? severity : undefined,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -221,6 +226,7 @@ export function useLogFilterLogic({
           user_id: userIdFilter,
           // 在后台过滤后再分页，防止失败行占用普通日志页或被会话合并隐藏。
           status_filter: errorsOnly ? "error" : ordinaryStatus,
+          severity: errorsOnly ? severity : undefined,
           cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
           model: typedModel || pickedModel,
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),

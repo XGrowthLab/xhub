@@ -56,6 +56,12 @@ func WriteTypedError(w http.ResponseWriter, path string, status int, typ, msg st
 // WriteTypedFieldError 写入现有协议错误包络。field 是已脱敏的请求字段路径，Chat/Responses 同时填入 error.param。
 // 兼容拒绝时调用，其他协议由 msg 说明字段；空字段保持原来的响应形状。它只写响应，不保存请求。
 func WriteTypedFieldError(w http.ResponseWriter, path string, status int, typ, msg, field string) {
+	WriteTypedReasonError(w, path, status, typ, msg, field, "")
+}
+
+// WriteTypedReasonError 写入可由客户端处理的稳定原因。w、path、status、typ、msg、field 沿用协议错误接口，reason 为空时保留原形状。
+// 数据面准入、选路和出站故障调用；无返回值，保留 HTTP 状态、原 error.type/code 和调用 ID，仅新增 error.reason。
+func WriteTypedReasonError(w http.ResponseWriter, path string, status int, typ, msg, field, reason string) {
 	if w.Header().Get("x-litellm-call-id") == "" {
 		SetCallID(w, CallID())
 	}
@@ -67,12 +73,18 @@ func WriteTypedFieldError(w http.ResponseWriter, path string, status int, typ, m
 		w.Header().Set("Retry-After", "1")
 	}
 	w.WriteHeader(status)
-	_, _ = w.Write(TypedErrorBody(path, status, typ, msg, field))
+	_, _ = w.Write(TypedReasonErrorBody(path, status, typ, msg, field, reason))
 }
 
 // TypedErrorBody 根据入站路径、状态、错误类型、消息及可选字段生成网关错误正文。
 // 返回包含行尾换行的 JSON；供网关响应和失败日志共用，确保两处使用同一错误包络。只编码固定结构和标量，不写响应。
 func TypedErrorBody(path string, status int, typ, msg, field string) []byte {
+	return TypedReasonErrorBody(path, status, typ, msg, field, "")
+}
+
+// TypedReasonErrorBody 返回带可选稳定原因的协议错误 JSON。参数与 WriteTypedReasonError 一致。
+// 数据面响应与落库共用；空原因保留旧字段。不读请求、不写响应，也不改变供应商原始错误。
+func TypedReasonErrorBody(path string, status int, typ, msg, field, reason string) []byte {
 	p := strings.ToLower(path)
 	var doc map[string]any
 	switch {
@@ -105,6 +117,9 @@ func TypedErrorBody(path string, status int, typ, msg, field string) []byte {
 				"code":    strconv.Itoa(status),
 			},
 		}
+	}
+	if reason != "" {
+		doc["error"].(map[string]any)["reason"] = reason
 	}
 	body, _ := json.Marshal(doc)
 	return append(body, '\n')

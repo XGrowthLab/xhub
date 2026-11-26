@@ -13,6 +13,17 @@ export const CONSOLE_HTTP = "http://127.0.0.1:" + (process.env.E2E_UI_PORT || "3
 
 export const MASTER = process.env.E2E_MASTER_KEY || "sk-e2e-master";
 
+/** 在错误页的可访问分级控件选择目标；参数为浏览器及警告、错误或全部，返回点击完成的 Promise。仅改变当前日志筛选，兼容在中英文中运行的回归场景。 */
+export async function selectFailureSeverity(page: Page, severity: "warning" | "error" | "all") {
+  const labels = {
+    warning: /^(警告|Warning)$/,
+    error: /^(错误|Error)$/,
+    all: /^(全部未成功请求|All unsuccessful requests)$/,
+  };
+  const group = page.getByRole("group", { name: /^(故障级别|Failure severity)$/ });
+  await group.getByRole("button", { name: labels[severity] }).click();
+}
+
 /** 观察真实页面响应与异常；可选设置必须满足明确不支持契约，其余5xx均失败。
  * page为浏览器页面；返回异步assertOk，调用方必须等待全部响应校验，不跳过错误或放宽超时。 */
 export function watchGateway(page: Page) {
