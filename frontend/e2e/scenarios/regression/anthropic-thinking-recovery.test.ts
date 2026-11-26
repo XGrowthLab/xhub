@@ -4,10 +4,16 @@ import { createServer } from "node:http";
 import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
 
 /** 用真实浏览器、网关及隔离 PostgreSQL 验证同一会话切模型。前置两个本地 Claude 部署，
- * 验收历史可补发、新工具续轮保留当前签名、每次成功只扣费一次。结束时删除部署、关闭上游，
+ * 验收历史可补发、新工具续轮保留当前签名、每次成功只扣费一次，且重试首帧失败可追踪、零扣费。
+ * 结束时删除部署、关闭上游，
  * 运行器回收数据库 schema 和账单。 */
 test("Anthropic bypass recovers stale thinking after a model switch", async ({ page }) => {
   const signatureError = "messages.1.content.0: Invalid `signature` in `thinking` block";
+  const retryError = {
+    type: "error",
+    error: { type: "overloaded_error", message: "Capacity exhausted after history recovery." },
+    request_id: "req-thinking-retry-sse",
+  };
   const received: Array<{ model: string; messages: unknown[] }> = [];
   const upstream = createServer(async (request, response) => {
     const parts: Buffer[] = [];
@@ -27,6 +33,11 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
     const history = JSON.stringify(body.messages);
     if (body.model === "vendor-b" && history.includes("OLD_SIGNATURE")) {
       response.writeHead(400).end(JSON.stringify({ type: "error", error: { type: "<nil>", message: signatureError } }));
+      return;
+    }
+    if (body.stream) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end("event: error\ndata: " + JSON.stringify(retryError) + "\n\n");
       return;
     }
     const start = body.model === "vendor-a" && body.messages.length === 1;
@@ -70,16 +81,16 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
       deploymentIDs.push((await created.json()).model_info.id);
     }
     const history: Array<{ role: string; content: unknown }> = [{ role: "user", content: "Check the service." }];
-    /** 用登录会话从真实浏览器发起原生 Messages；参数为目标模型，返回状态、内容和日志 ID。 */
-    const invoke = (model: string) => page.evaluate(async ({ bearer, model, messages }) => {
+    /** 通过登录会话发起 Messages 请求。参数为模型和是否走标准流式入口，返回状态、JSON 正文和日志 ID。 */
+    const invoke = (model: string, stream = false) => page.evaluate(async ({ bearer, model, messages, stream }) => {
       // eslint-disable-next-line no-restricted-syntax
-      const response = await fetch("/gw/bypass/anthropic/v1/messages", {
+      const response = await fetch(stream ? "/gw/v1/messages" : "/gw/bypass/anthropic/v1/messages", {
         method: "POST",
         headers: { Authorization: "Bearer " + bearer, "Content-Type": "application/json", "X-Session-Id": "thinking-switch" },
-        body: JSON.stringify({ model, messages, max_tokens: 128, thinking: { type: "adaptive" } }),
+        body: JSON.stringify({ model, messages, max_tokens: 128, thinking: { type: "adaptive" }, ...(stream ? { stream } : {}) }),
       });
       return { status: response.status, data: await response.json(), callID: response.headers.get("x-litellm-call-id") };
-    }, { bearer, model, messages: history });
+    }, { bearer, model, messages: history, stream });
 
     const start = await invoke(models[0]);
     expect(start.status).toBe(200);
@@ -121,9 +132,10 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
       "vendor-a", "vendor-b", "vendor-a", "vendor-b", "vendor-b", "vendor-b", "vendor-b",
     ]);
     expect(received[5].messages).toEqual(history);
-    expect(received[6].messages).toEqual(history.map((message, index) =>
+    const cleanedHistory = history.map((message, index) =>
       index === 1 ? { ...message, content: [start.data.content[2]] } : message,
-    ));
+    );
+    expect(received[6].messages).toEqual(cleanedHistory);
     await expect.poll(async () =>
       (await page.request.get(GATEWAY + "/spend/logs/ui/" + recovered.callID, { headers })).status(),
     ).toBe(200);
@@ -132,6 +144,26 @@ test("Anthropic bypass recovers stale thinking after a model switch", async ({ p
     expect(log.spend).toBeCloseTo(0.000012, 10);
     await stableGoto(page, "/logs?log_id=" + recovered.callID);
     await expect(page.getByRole("dialog")).toContainText(models[1]);
+
+    // 旧签名先触发 400，清理后仅重试一次；首帧错误在任何成功流数据之前返回。
+    const previousCalls = received.length;
+    const failed = await invoke(models[1], true);
+    expect(failed.status).toBe(502);
+    expect(failed.data).toEqual(retryError);
+    expect(received.slice(previousCalls)).toMatchObject([
+      { model: "vendor-b", stream: true, messages: history },
+      { model: "vendor-b", stream: true, messages: cleanedHistory },
+    ]);
+    expect(failed.callID).toBeTruthy();
+    const query = new URLSearchParams({ request_id: failed.callID!, error_message: retryError.error.message });
+    const searchURL = GATEWAY + "/spend/logs/ui?" + query;
+    await expect.poll(async () => (await (await page.request.get(searchURL, { headers })).json()).data).toMatchObject([
+      { request_id: failed.callID, status: "error", spend: 0 },
+    ]);
+    await stableGoto(page, "/logs?log_id=" + failed.callID);
+    const details = page.getByRole("dialog").getByRole("region", { name: /完整错误详情|全部错误详情|Full Error Details/ });
+    await expect(details).toContainText(retryError.error.message);
+    await expect(details).toContainText(retryError.request_id);
   } finally {
     try {
       for (const id of deploymentIDs) {

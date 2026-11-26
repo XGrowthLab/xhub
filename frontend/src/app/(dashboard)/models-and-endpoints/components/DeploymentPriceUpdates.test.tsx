@@ -106,11 +106,17 @@ it("localizes known dimensions and preserves custom identifiers", async () => {
   expect(document.body).not.toHaveTextContent("marketSync.");
 });
 
-/** 分别用中英文展示两档及缓存期限，确认窗口保留相同完整报价；组件夹具独立，卸载时清理。 */
+/** 分别以中英文核对统一价与两个市场档位。同行显示完整金额与范围，缓存新增仍单独标注，组件卸载时清理。 */
 it.each([
-  ["zh-CN", "输入 Token：0 < 数量 ≤ 272,000", "核对并更新", "确认更新 1 个部署", "12 小时"],
-  ["en", "Input tokens: 0 < amount ≤ 272,000", "Review and update", "Confirm prices for 1 deployments", "12 hours"],
-] as const)("shows complete market tiers in %s", async (locale, range, review, title, ttl) => {
+  {
+    locale: "zh-CN", input: "输入", range: "输入 Token：0 < 数量 ≤ 272,000", openRange: "输入 Token：数量 > 272,000",
+    review: "核对并更新", title: "确认更新 1 个部署", ttl: "12 小时", flat: "统一价", tiered: "改为分档", added: "新增",
+  },
+  {
+    locale: "en", input: "Input", range: "Input tokens: 0 < amount ≤ 272,000", openRange: "Input tokens: amount > 272,000",
+    review: "Review and update", title: "Confirm prices for 1 deployments", ttl: "12 hours", flat: "Flat rate", tiered: "Now tiered", added: "Added",
+  },
+] as const)("groups market tiers under the same item in $locale", async ({ locale, input, range, openRange, review, title, ttl, flat, tiered, added }) => {
   vi.mocked(apiClient.get).mockResolvedValue({
     deployments: [
       {
@@ -119,7 +125,7 @@ it.each([
         proposed_tiers: [
           {
             input_range: [0, 272000],
-            output_range: [0, 99999999],
+            output_range: [0, -1],
             rates: [row.proposed![0], { ...row.proposed![0], side: "cache_write", variant: "12h" }],
           },
           {
@@ -136,18 +142,27 @@ it.each([
   expect(screen.getByText(new RegExp(ttl))).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: review }));
   const dialog = screen.getByRole("dialog", { name: title });
-  expect(within(dialog).getAllByText(range)[0]).toBeVisible();
-  expect(within(dialog).getAllByText(/输出 Token：0|Output tokens: 0/)[0]).toBeVisible();
-  expect(dialog).toHaveTextContent("$4");
+  const table = within(dialog).getByRole("table");
+  const item = within(table).getByRole("rowheader", { name: new RegExp(`^${input}`) });
+  const [current, proposed] = within(item.closest("tr")!).getAllByRole("cell");
+  expect(current).toHaveTextContent("$1");
+  expect(current).toHaveTextContent(flat);
+  expect(within(proposed).getByText(range)).toBeVisible();
+  expect(within(proposed).getByText(openRange)).toBeVisible();
+  expect(within(proposed).getAllByRole("listitem")).toHaveLength(2);
+  expect(proposed).toHaveTextContent("$4");
+  expect(item).toHaveTextContent(tiered);
+  expect(item).not.toHaveTextContent(added);
+  expect(table).not.toHaveTextContent("99,999,999");
 });
 
 /** 前置搜索、真实秒计价和市场新增价；验证对齐及金额、单位和增减状态。关闭时不写，夹具由组件测试清理。 */
 it.each([
-  ["zh-CN", "核对并更新", "联网搜索", "次", "秒", "单位变化", "价格变化", "新增", "移除", "低谷"],
-  ["en", "Review and update", "Web search", "request", "second", "Unit changed", "Price changed", "Added", "Removed", "Off-peak"],
+  { locale: "zh-CN", review: "核对并更新", searchLabel: "联网搜索", query: "次", second: "秒", unitChange: "单位变化", priceChange: "价格变化", added: "新增", removed: "移除", offpeak: "低谷" },
+  { locale: "en", review: "Review and update", searchLabel: "Web search", query: "request", second: "second", unitChange: "Unit changed", priceChange: "Price changed", added: "Added", removed: "Removed", offpeak: "Off-peak" },
 ] as const)(
-  "compares observable units and marks price changes, new or removed items in %s",
-  async (locale, review, searchLabel, query, second, unitChange, priceChange, added, removed, offpeak) => {
+  "compares observable units and marks price changes, new or removed items in $locale",
+  async ({ locale, review, searchLabel, query, second, unitChange, priceChange, added, removed, offpeak }) => {
     const token = row.current![0];
     const webSearch = {
       ...token,
@@ -187,8 +202,61 @@ it.each([
     expect(search).toHaveTextContent(priceChange);
     expect(dialog.getByText(unitChange, { exact: true }).closest("tr")).toHaveTextContent(`$0.04 / ${second}`);
     expect(dialog.getByText(added, { exact: true }).closest("tr")).toHaveTextContent("$0 /");
-    expect(dialog.getByRole("rowheader", { name: new RegExp(offpeak) })).toHaveTextContent(removed);
-    expect(dialog.getByRole("rowheader", { name: /audio/ })).toHaveTextContent(removed);
+    expect(dialog.getByRole("rowheader", { name: new RegExp(offpeak) }).closest("tr")).toHaveTextContent(removed);
+    expect(dialog.getByRole("rowheader", { name: /audio/ }).closest("tr")).toHaveTextContent(removed);
     expect(apiClient.post).not.toHaveBeenCalled();
   },
 );
+
+/** 前置多部署快照，切换预览时只渲染一个表且冻结整个批次；提交后验证每个部署及版本，模拟请求不写外部数据。 */
+it("reviews one deployment at a time and applies the complete frozen batch", async () => {
+  const user = userEvent.setup();
+  const second = { ...row, id: "second-id", name: "second", version: "v2" };
+  vi.mocked(apiClient.get).mockResolvedValue({ deployments: [row, second] });
+  vi.mocked(apiClient.post).mockResolvedValue({ updated: 2 });
+  setup("en");
+  await user.click(await screen.findByRole("checkbox", { name: "Select all eligible deployments" }));
+  await user.click(screen.getByRole("button", { name: "Review selected prices (2)" }));
+  const dialog = within(screen.getByRole("dialog"));
+  expect(dialog.getByRole("status")).toHaveTextContent("1 of 2");
+  expect(dialog.getByRole("button", { name: "Previous deployment" })).toBeDisabled();
+  expect(dialog.getByRole("table", { name: "Compare prices for example" })).toBeVisible();
+  await user.click(dialog.getByRole("button", { name: "Next deployment" }));
+  expect(dialog.getByRole("status")).toHaveTextContent("2 of 2");
+  expect(dialog.getAllByRole("table")).toHaveLength(1);
+  expect(dialog.getByRole("table", { name: "Compare prices for second" })).toBeVisible();
+  expect(apiClient.post).not.toHaveBeenCalled();
+  await user.click(dialog.getByRole("button", { name: "Confirm price update" }));
+  expect(apiClient.post).toHaveBeenCalledWith("/price/deployments/apply", {
+    accessToken: "test",
+    body: { items: [{ id: "id", version: "v1" }, { id: "second-id", version: "v2" }] },
+  });
+  expect(await screen.findByRole("status")).toHaveTextContent("Updated prices for 2 deployments.");
+});
+
+/** 前置同输入档位以不同顺序返回且开放上界使用不同标记，另有同名计费维度的不同单位。验证金额不串列，卸载清理。 */
+it("does not mark equivalent tier ranges or pair incompatible parallel units", async () => {
+  const token = row.current![0];
+  const second = { ...token, measure: "second" };
+  const tiers = [
+    { input_range: [0, 5] as [number, number], output_range: [0, -1] as [number, number], rates: [token, second] },
+    { input_range: [5, -1] as [number, number], output_range: [0, -1] as [number, number], rates: [token] },
+  ];
+  vi.mocked(apiClient.get).mockResolvedValue({ deployments: [{
+    ...row, current_tiers: tiers, proposed_tiers: [
+      { ...tiers[1], input_range: [5, 99_999_999], output_range: [0, 99_999_999] },
+      { ...tiers[0], rates: [token] },
+    ],
+  }] });
+  setup("en");
+  const table = within(await screen.findByRole("table", { name: "Compare prices for example" }));
+  const tokenRow = table.getByRole("rowheader", { name: "Input 1M tokens", exact: true }).closest("tr")!;
+  const [current, proposed] = within(tokenRow).getAllByRole("cell");
+  for (const cell of [current, proposed]) {
+    expect(cell).toHaveTextContent("Input tokens: amount > 5");
+    expect(within(cell).getAllByRole("listitem")).toHaveLength(2);
+  }
+  const seconds = table.getByRole("rowheader", { name: /Input second/ });
+  expect(seconds).toHaveTextContent("Removed");
+  expect(within(seconds.closest("tr")!).getAllByRole("cell").at(-1)).toHaveTextContent("—");
+});

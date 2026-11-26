@@ -16,6 +16,8 @@ import (
 // Headers/Trailers 是原始多值头，并未在此结构里脱敏；写日志或向客户端输出时由消费方另行过滤。
 // 正文读取过程中原地更新共享对象，消费方应在读取完成后使用；原始 Usage 与 BillingUsage 分开，避免估算覆盖原厂统计。
 type UpstreamDiagnostics struct {
+	// Outcome 保存网关能够核实的入口错误及缺失原因，独立于供应商状态和传输事实。
+	Outcome *GatewayOutcome `json:"outcome,omitempty"`
 	// Protocol 保存外发前的字段或能力拒绝。与上游错误独立，避免把 XHub 校验写成供应商拒绝。
 	Protocol *ProtocolRejection `json:"protocol,omitempty"`
 	// 准入失败时的只读配置与路由快照，不包含凭据、不影响调度或限流判定。
@@ -47,6 +49,16 @@ type UpstreamDiagnostics struct {
 	ParseError string `json:"usage_parse_error,omitempty"`
 	// 执行/计价链使用的规范化统计，与原始 Usage 分开以便审计估算和协议映射。
 	BillingUsage map[string]any `json:"billing_usage,omitempty"`
+}
+
+// GatewayOutcome 描述网关自身的请求结果。字段为稳定枚举；未取得事实时留空，由读侧标为未知。
+// 外层失败记录与出站错误执行器创建，日志持久化和展示读取。不得用于授权、结算或推断供应商故障。
+type GatewayOutcome struct {
+	Code               string `json:"code,omitempty"`
+	RequestMethod      string `json:"request_method,omitempty"`
+	ModelMissingReason string `json:"model_missing_reason,omitempty"`
+	UserMissingReason  string `json:"user_missing_reason,omitempty"`
+	TeamMissingReason  string `json:"team_missing_reason,omitempty"`
 }
 
 // TraceFirstByte 为真实 HTTP 请求安装首响应字节追踪。

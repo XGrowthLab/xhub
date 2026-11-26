@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 
 import { translate } from "../src/i18n/translate";
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto, t } from "./helpers";
+import { GATEWAY, UPSTREAM, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto, t } from "./helpers";
 
 
 const JSON_DIAGNOSTIC =
@@ -486,6 +486,7 @@ test("退役接口不进入模型日志且真实推理错误继续可见", async
   const search = page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).filter({ visible: true });
   for (const tabName of [/^(日志|Logs)$/, /错误日志|Error Logs/]) {
     await page.getByRole("tab", { name: tabName, exact: true }).click();
+    if (tabName.test("Error Logs")) await selectFailureSeverity(page, "all");
     for (const id of retiredIds) {
       const detail = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
       expect(detail.status(), "退役请求不得写入真实日志存储").toBe(404);
@@ -574,7 +575,11 @@ test("错误日志独立记录并显示诊断：network", async ({ page }) => {
       if (kind === "text") {
         expect(await diagnostic.textContent()).toBe("E2E upstream plain-text diagnostic begin | " + "fedcba9876543210".repeat(128) + " | E2E upstream plain-text diagnostic end");
       } else if (kind === "network") {
-        await expect(diagnostic).toContainText(/EOF|connection|network/i);
+        expect(JSON.parse((await diagnostic.textContent()) ?? "")).toMatchObject({
+          error: { reason: "upstream_transport_error", message: expect.stringContaining("upstream") },
+        });
+        const stored = await (await page.request.get(GATEWAY + "/spend/logs/ui/" + callId, { headers })).json();
+        expect(stored.metadata.upstream_response.failure).toMatchObject({ phase: "upstream_request" });
       } else {
         expect(await diagnostic.textContent()).toBe(await response.text());
       }
@@ -612,6 +617,7 @@ test("错误日志独立记录并显示诊断：rejected", async ({ page }) => {
       await expect(page.getByTestId("pagination-range")).toHaveText(t("consoleDirectory.pagination.empty"));
       await expect(page.getByRole("row").filter({ hasText: callId })).toHaveCount(0);
       await page.getByRole("tab", { name: /错误日志|Error Logs/, exact: true }).click();
+      await selectFailureSeverity(page, "warning");
       await openLogDetails(page, callId);
       const diagnostic = page.getByRole("dialog").getByRole("region", { name: /完整错误详情|全部错误详情|Full Error Details/ }).locator("pre");
       if (kind === "text") {

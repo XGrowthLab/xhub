@@ -37,7 +37,7 @@ import (
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
-// newEngine creates the Gin engine. An unregistered path returns a JSON 404 instead of Gin's plain text.
+// newEngine 创建 Gin 引擎。未登记的入口用 JSON 返回 404；Responses 的错误方法同时说明正确入口。
 // 参数：无。
 // 调用：gateway/server.go
 // 测试：access_log_test.go、console_split_test.go、dial_log_test.go
@@ -47,6 +47,17 @@ func newEngine() *gin.Engine {
 	e := gin.New()
 	e.NoRoute(gin.WrapF(func(w http.ResponseWriter, r *http.Request) {
 		util.Debug("process %s %s step=noroute", r.Method, r.URL.Path)
+		if (r.URL.Path == "/responses" || r.URL.Path == "/v1/responses") && r.Method != http.MethodPost {
+			message := "This Responses endpoint accepts HTTP POST with a JSON body."
+			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				message = "This Responses endpoint does not support WebSocket. Use HTTP POST with stream=true for streaming."
+			}
+			dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{
+				Outcome: &dpdiagnostics.GatewayOutcome{Code: "unsupported_method"},
+			})
+			util.WriteTypedReasonError(w, r.URL.Path, http.StatusNotFound, "not_found", message, "", "unsupported_method")
+			return
+		}
 		util.WriteError(w, http.StatusNotFound, "not_found", "Not Found")
 	}))
 	return e
@@ -509,6 +520,7 @@ func errorNote(body []byte) string {
 type statusRecorder struct {
 	// 请求私有的准入失败快照，在执行器释放临时账单后仍能由外层补记日志。
 	failureDiagnostics *dpdiagnostics.UpstreamDiagnostics
+	logPrincipal       *auth.Principal // 本请求已验证的身份，避免结束时重新鉴权丢失归属。
 	http.ResponseWriter
 	code int
 	set  bool
@@ -576,7 +588,8 @@ func markUsageRecorded(w http.ResponseWriter) {
 
 // recordEarlyError 为受支持的标准及注册Bypass数据面尚未进入常规结算路径的失败补写日志。
 // 参数 lw：最终状态和客户端正文；r/raw/body：原请求及解析结果；start：请求开始时间。
-// 返回：无。已删除或退役接口仅保留进程访问日志；已经进入 RecordSpend 的请求不重复生成另一份快照；鉴权失败无法认领身份时仅管理员可见。
+// 返回：无。已删除或退役接口仅保留进程访问日志；已经进入 RecordSpend 的请求不重复生成另一份快照。
+// 保留经过验证的身份、归属和缺失原因，未能核实时不从客户端输入推断身份。
 // 调用：Handler 的失败 defer，覆盖鉴权、限流、未认领模型和路由配置错误；测试见 early_error_log_test.go。
 func (s *Server) recordEarlyError(lw *statusRecorder, r *http.Request, raw []byte, body map[string]any, start time.Time) {
 	if s == nil || lw == nil || r == nil || lw.code < 400 || lw.usageRecorded {
@@ -603,26 +616,114 @@ func (s *Server) recordEarlyError(lw *statusRecorder, r *http.Request, raw []byt
 	if alias == "" {
 		alias = strings.TrimSpace(str(body["model"]))
 	}
-	// 仅为失败日志补齐身份，使用短时独立上下文，避免已取消的请求制造第二条鉴权错误。
-	// resolve 仍执行原鉴权，不放行请求、不改权限；查不到身份则保留匿名日志。
+	diagnostics := lw.failureDiagnostics
+	if diagnostics == nil {
+		diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
+	}
+	if diagnostics.Outcome == nil {
+		diagnostics.Outcome = &dpdiagnostics.GatewayOutcome{}
+	}
+	outcome := diagnostics.Outcome
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		outcome.RequestMethod = r.Method
+	}
+	if alias == "" {
+		switch {
+		case outcome.Code == "unsupported_method" || lw.code == http.StatusNotFound:
+			outcome.ModelMissingReason = "not_reached"
+		case diagnostics.Failure != nil && diagnostics.Failure.RequestBodyOmitted:
+			outcome.ModelMissingReason = "body_unreadable"
+		case body != nil || len(raw) == 0:
+			outcome.ModelMissingReason = "not_provided"
+		default:
+			outcome.ModelMissingReason = "body_unreadable"
+		}
+	}
+	// 只为日志归属查证身份。短时独立上下文避免客户端中断造成可核实的信息丢失。
 	identityCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 	defer cancel()
-	p, _ := s.resolve(r.WithContext(identityCtx))
-	if lw.delivery != nil && lw.delivery.principal != nil {
-		p = lw.delivery.principal
-	}
+	p := s.earlyLogPrincipal(identityCtx, r, lw, outcome)
 	if lw.delivery != nil && lw.delivery.preparedID == callID && !lw.delivery.preparedAt.IsZero() {
 		// 早期错误的外层计时可能早于执行器标记；磁盘快照必须复用标记时间才能严格重放。
 		start = lw.delivery.preparedAt
 	}
 	// 使用实际响应正文，而不是重新构造错误包络，确保日志与调用方看到的字节一致。
-	s.AnnotateCall(callID, dpcontract.CallNote{Upstream: lw.failureDiagnostics})
+	s.AnnotateCall(callID, dpcontract.CallNote{Upstream: diagnostics})
 	s.rememberExchange(callID, r, raw, lw.body.Bytes())
 	var writer http.ResponseWriter = lw
 	if lw.delivery != nil {
 		writer = lw.delivery
 	}
 	s.recordSpend(writer, p, callID, alias, "request", nil, start, false, lw.code, "")
+}
+
+// earlyLogPrincipal 为早期失败返回经验证的归属，并将缺失原因写入 outcome。
+// ctx 限制失败日志的查询时长，r 和 lw 提供原请求及已确认身份。只读身份目录，返回副本给记账日志，不改变准入或权限。
+func (s *Server) earlyLogPrincipal(ctx context.Context, r *http.Request, lw *statusRecorder, outcome *dpdiagnostics.GatewayOutcome) *auth.Principal {
+	p := lw.logPrincipal
+	if lw.delivery != nil && lw.delivery.principal != nil {
+		p = lw.delivery.principal
+	}
+	var identityErr error
+	if p == nil {
+		p, identityErr = s.resolve(r.WithContext(ctx))
+	}
+	if p == nil || p.UserID == "" {
+		switch {
+		case p != nil:
+			outcome.UserMissingReason = "unattributed_credential"
+		case auth.APIKeyFrom(r) == "":
+			outcome.UserMissingReason = "credentials_missing"
+		case authz.IsInternal(identityErr) || ctx.Err() != nil:
+			outcome.UserMissingReason = "identity_lookup_failed"
+		default:
+			outcome.UserMissingReason = "credentials_rejected"
+		}
+		outcome.TeamMissingReason = "identity_unverified"
+		return p
+	}
+	if p.BillingTeamID != "" {
+		return p
+	}
+	resolved := *p
+	// 复用已验证密钥的组织归属；会话或较早失败尚无该快照时按唯一成员关系只读补齐。
+	if p.TeamID != "" && p.OrgID != "" {
+		resolved.BillingTeamID, resolved.BillingOrgID = p.TeamID, p.OrgID
+		return &resolved
+	}
+	if s.IAM == nil {
+		outcome.TeamMissingReason = "team_lookup_failed"
+		return p
+	}
+	memberships, err := s.IAM.MemberTeams(ctx, p.UserID)
+	switch {
+	case err != nil:
+		outcome.TeamMissingReason = "team_lookup_failed"
+	case len(memberships) == 0:
+		outcome.TeamMissingReason = "no_team"
+	case len(memberships) != 1 || p.TeamID != "" && p.TeamID != memberships[0].TeamID:
+		outcome.TeamMissingReason = "team_lookup_failed"
+	default:
+		resolved.BillingTeamID, resolved.BillingOrgID = memberships[0].TeamID, memberships[0].OrganizationID
+	}
+	return &resolved
+}
+
+// rememberLogPrincipal 沿包装链在本 HTTP 请求上记住已通过推理鉴权的 p。无返回值。
+// 推理鉴权入口调用，以便早期失败复用已验证的身份；不设置响应头、不缓存跨请求信息。
+func rememberLogPrincipal(w http.ResponseWriter, p *auth.Principal) {
+	for depth := 0; depth < 32 && w != nil; depth++ {
+		if recorder, ok := w.(*statusRecorder); ok {
+			recorder.logPrincipal = p
+			return
+		}
+		wrapped, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = wrapped.Unwrap()
+	}
 }
 
 // Flush 在底层支持刷新时，把已经缓冲的字节推给调用方。

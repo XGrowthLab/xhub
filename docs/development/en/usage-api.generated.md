@@ -141,6 +141,18 @@ Scoped logs; invalid page defaults to 1, page_size outside 1..200 defaults to 50
   },
   {
     "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "Filters warnings or errors before pagination. Omission preserves the existing status filter."
+  },
+  {
+    "in": "query",
     "name": "group_by_session",
     "schema": {
       "type": "string"
@@ -320,6 +332,18 @@ Scoped logs; invalid page defaults to 1, page_size outside 1..200 defaults to 50
   },
   {
     "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "Filters warnings or errors before pagination. Omission preserves the existing status filter."
+  },
+  {
+    "in": "query",
     "name": "group_by_session",
     "schema": {
       "type": "string"
@@ -496,6 +520,18 @@ Scoped logs; invalid page defaults to 1, page_size outside 1..200 defaults to 50
     "schema": {
       "type": "string"
     }
+  },
+  {
+    "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "Filters warnings or errors before pagination. Omission preserves the existing status filter."
   },
   {
     "in": "query",
@@ -1559,6 +1595,22 @@ Return candidates from logs visible to the caller; model and supplier also requi
       "type": "string",
       "format": "date-time",
       "description": "Body expiry fixed at capture time"
+    },
+    "user_name": {
+      "type": "string",
+      "description": "Display name of the account on an authorized log row. Omitted if unavailable."
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "success",
+        "warning",
+        "error"
+      ],
+      "description": "Log severity is separate from the original status. HTTP 4xx are warnings. HTTP 5xx or failures without an HTTP failure status are errors."
+    },
+    "diagnosis": {
+      "$ref": "#/components/schemas/LogDiagnosis"
     }
   },
   "required": [
@@ -2017,6 +2069,56 @@ Return candidates from logs visible to the caller; model and supplier also requi
     },
     "has_more": {
       "type": "boolean"
+    }
+  }
+}
+```
+
+### LogDiagnosis
+
+```json
+{
+  "type": "object",
+  "description": "Read-only reason codes and observed facts. Full bodies retain existing authorization and audit.",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "model_missing_reason": {
+      "type": "string"
+    },
+    "user_missing_reason": {
+      "type": "string"
+    },
+    "team_missing_reason": {
+      "type": "string"
+    },
+    "upstream_status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "phase": {
+      "type": "string"
+    },
+    "cooling_deployments": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "compatible_deployments": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "request_method": {
+      "type": "string",
+      "enum": [
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ]
     }
   }
 }

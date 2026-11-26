@@ -89,3 +89,27 @@ func TestTypedErrorBodyField(t *testing.T) {
 		t.Fatalf("错误消息或字段路径丢失: %v", fields)
 	}
 }
+
+// TestWriteTypedReasonError 验证稳定原因附加到三个协议的错误对象，HTTP 状态和旧字段不变。
+// t 使用内存响应；无原始凭据或下游资源，无需清理。
+func TestWriteTypedReasonError(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/v1/messages", "/v1beta/models/example:generateContent"} {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			WriteTypedReasonError(response, path, 401, "invalid_request_error", "Choose an allowed model.", "model", "model_not_allowed")
+			var doc map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &doc); err != nil {
+				t.Fatal(err)
+			}
+			fields := nestedMap(t, doc, "error")
+			if fields["reason"] != "model_not_allowed" || fields["message"] != "Choose an allowed model." || response.Code != 401 {
+				t.Fatalf("稳定原因或原 HTTP 状态丢失: %d %v", response.Code, fields)
+			}
+			delete(fields, "reason")
+			original, err := json.Marshal(doc)
+			if err != nil || string(original)+"\n" != string(TypedErrorBody(path, 401, "invalid_request_error", "Choose an allowed model.", "model")) {
+				t.Fatalf("附加原因改变了旧协议结构: %s %v", original, err)
+			}
+		})
+	}
+}

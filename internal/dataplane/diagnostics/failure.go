@@ -3,6 +3,7 @@ package diagnostics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -74,6 +75,31 @@ func BodyFailureStatus(f *Failure) (int, string, string) {
 		return 499, "request_canceled", "request connection canceled while reading body; initiator unknown"
 	}
 	return 400, "request_body_read_error", "request body could not be read completely"
+}
+
+// UpstreamFaultFeedback 为网关生成的失败响应提供稳定原因和可操作说明。
+// d 是已观察的上游诊断，fallback 是执行器已经过脱敏的协议校验说明；返回原因与文案。
+// 仅根据传输阶段和已观察状态描述故障，不公开网络地址、不预测是否完成了上游请求，也不替换上游原始错误。
+func UpstreamFaultFeedback(d *UpstreamDiagnostics, fallback string) (string, string) {
+	if d != nil && d.Failure != nil {
+		failure := d.Failure
+		if failure.Kind == "timeout" {
+			if failure.Phase == "response_transfer" {
+				return "upstream_timeout", "The upstream response timed out before it was complete."
+			}
+			return "upstream_timeout", "Timed out waiting for a response from the upstream."
+		}
+		if failure.Phase == "response_transfer" {
+			if d.StatusCode >= 400 {
+				return "upstream_stream_interrupted", fmt.Sprintf("The upstream returned HTTP %d, then its error response was interrupted.", d.StatusCode)
+			}
+			return "upstream_stream_interrupted", "The upstream response ended before it was complete."
+		}
+	}
+	if d != nil && d.StatusCode >= 200 && d.StatusCode < 300 && fallback != "" {
+		return "upstream_invalid_response", fallback
+	}
+	return "upstream_transport_error", "The gateway could not receive a response from the upstream. Check the request ID with support if the problem persists."
 }
 
 // RecordEarlyFailure 将准入诊断保存到请求级响应记录器，供最外层错误落库使用。

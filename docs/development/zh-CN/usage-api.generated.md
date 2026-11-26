@@ -141,6 +141,18 @@
   },
   {
     "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选"
+  },
+  {
+    "in": "query",
     "name": "group_by_session",
     "schema": {
       "type": "string"
@@ -320,6 +332,18 @@
   },
   {
     "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选"
+  },
+  {
+    "in": "query",
     "name": "group_by_session",
     "schema": {
       "type": "string"
@@ -496,6 +520,18 @@
     "schema": {
       "type": "string"
     }
+  },
+  {
+    "in": "query",
+    "name": "severity",
+    "schema": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "description": "警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选"
   },
   {
     "in": "query",
@@ -1559,6 +1595,22 @@
       "type": "string",
       "format": "date-time",
       "description": "采集时固定的正文到期时刻"
+    },
+    "user_name": {
+      "type": "string",
+      "description": "授权日志可见的当前账号显示名。无显示名时省略"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "success",
+        "warning",
+        "error"
+      ],
+      "description": "日志分级独立于原始状态，4xx 归警告，5xx 和缺少失败状态码的失败归错误"
+    },
+    "diagnosis": {
+      "$ref": "#/components/schemas/LogDiagnosis"
     }
   },
   "required": [
@@ -2017,6 +2069,56 @@
     },
     "has_more": {
       "type": "boolean"
+    }
+  }
+}
+```
+
+### LogDiagnosis
+
+```json
+{
+  "type": "object",
+  "description": "只读原因码和已观测事实，正文详情遵循原权限和审计",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "model_missing_reason": {
+      "type": "string"
+    },
+    "user_missing_reason": {
+      "type": "string"
+    },
+    "team_missing_reason": {
+      "type": "string"
+    },
+    "upstream_status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "phase": {
+      "type": "string"
+    },
+    "cooling_deployments": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "compatible_deployments": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "request_method": {
+      "type": "string",
+      "enum": [
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ]
     }
   }
 }

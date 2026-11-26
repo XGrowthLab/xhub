@@ -3476,5 +3476,12 @@
     "title": "guardrail monitor shows real outcomes on desktop and mobile",
     "kind": "implemented",
     "environment": "default offline"
+  },
+  {
+    "id": "REG-request-log-severity",
+    "file": "e2e/scenarios/regression/request-log-severity.test.ts",
+    "title": "request logs distinguish actionable errors and warnings",
+    "kind": "implemented",
+    "environment": "default offline; E2E_REDIS=1 also validates cooling down after an upstream failure"
   }
 ]

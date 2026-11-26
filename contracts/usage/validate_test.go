@@ -30,10 +30,14 @@ func TestUsageContractShape(t *testing.T) {
 			t.Fatalf("status=%d body=%s: %v", tc.status, tc.body, err)
 		}
 	}
-	for _, path := range []string{"/spend/logs/ui?page=bad&page_size=900", "/spend/logs/session/ui", "/user/daily/activity?timezone=-480&start_date=bad"} {
+	for _, path := range []string{"/spend/logs/ui?page=bad&page_size=900", "/spend/logs/ui?severity=warning",
+		"/spend/logs/v2?severity=error", "/spend/logs/session/ui", "/user/daily/activity?timezone=-480&start_date=bad"} {
 		if err := v.Request(httptest.NewRequest("GET", path, nil)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := v.Request(httptest.NewRequest("GET", "/spend/logs/ui?severity=unknown", nil)); err == nil {
+		t.Fatal("级别筛选的契约应拒绝未知枚举")
 	}
 	if err := v.Request(httptest.NewRequest("POST", "/spend/logs/ui", strings.NewReader(`{}`))); err == nil {
 		t.Fatal("未声明操作应拒绝")

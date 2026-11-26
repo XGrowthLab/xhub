@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -90,6 +91,80 @@ func TestDialogueHistoryRecoveryAcrossEntrypoints(t *testing.T) {
 					calls.Load() != before+1 || !h.moneyOf(t, owner).grewBy(balance, 0) {
 					t.Fatalf("压缩历史不得被丢弃或重试: %s", got.describe())
 				}
+			}
+		})
+	}
+}
+
+// TestDialogueHistoryRecoveryFailureBeforeFirstOutput 验证过期签名触发兼容重发后，首帧失败不会再重发或扣费。
+// 参数 t 为测试上下文；本地供应商和隔离 PG 经真实 Messages 路径验证厂商错误字段、传输诊断和日志检索。harness 回收资源。
+func TestDialogueHistoryRecoveryFailureBeforeFirstOutput(t *testing.T) {
+	const input = `{"model":"history-model","stream":true,"max_tokens":128,"messages":[{"role":"user","content":"Read the service."},{"role":"assistant","content":[{"type":"thinking","thinking":"Check","signature":"OLD_CIPHER"},{"type":"text","text":"Keep the answer."}]},{"role":"user","content":"Continue."}]}`
+	for _, kind := range []string{"上游错误首帧", "首帧前连接未完整传输"} {
+		t.Run(kind, func(t *testing.T) {
+			var calls atomic.Int32
+			h, owner, admin, id := historyHarness(t, "messages", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := calls.Add(1)
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if strings.Contains(string(mustJSON(body)), "OLD_CIPHER") != (n == 1) {
+					t.Errorf("旧签名处理错误，出站序号为 %d", n)
+				}
+				if n == 1 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					writeJSON(w, map[string]any{"error": map[string]any{
+						"code": "invalid_request_error", "message": "messages.1.content.0: Invalid `signature` in `thinking` block",
+					}})
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if kind == "上游错误首帧" {
+					fmt.Fprint(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Provider capacity exhausted\"},\"request_id\":\"vendor-repair-1\"}\n\n")
+					return
+				}
+				w.Header().Set("Content-Length", "100")
+				fmt.Fprint(w, "event: ping\n")
+			}))
+			h.ok("POST", "/model/update", admin, map[string]any{"id": id, "model_info": map[string]any{
+				"transport": "bypass_anthropic_messages", "endpoint_types": []string{"messages"},
+			}})
+			template := routeTemplate(t, h, admin, "repair-failure-no-replay", routeTemplateBody([]any{}, 3, 10, 10, 60))
+			bindTemplate(t, h, admin, "key", owner.keyID, template)
+
+			balance := h.moneyOf(t, owner)
+			got := h.doRaw("POST", "/v1/messages", owner.key, "application/json", input)
+			if got.status != http.StatusBadGateway || got.header("Content-Type") != "application/json" || calls.Load() != 2 {
+				t.Fatalf("只允许一次兼容重发，且首帧前的失败应返回 JSON 502: calls=%d %s", calls.Load(), got.describe())
+			}
+			if !h.moneyOf(t, owner).grewBy(balance, 0) {
+				t.Fatal("两次失败尝试均不应扣费")
+			}
+			envelope := got.json()
+			fields, _ := envelope["error"].(map[string]any)
+			want := "Provider capacity exhausted"
+			if kind == "上游错误首帧" {
+				if envelope["type"] != "error" || fields["type"] != "overloaded_error" ||
+					fields["message"] != want || envelope["request_id"] != "vendor-repair-1" {
+					t.Fatalf("Anthropic 错误形状或供应商信息丢失: %s", got.describe())
+				}
+			} else {
+				want = "The upstream response ended before it was complete."
+				if envelope["type"] != "error" || fields["type"] != "upstream_error" ||
+					fields["reason"] != "upstream_stream_interrupted" || fields["message"] != want {
+					t.Fatalf("客户端未收到明确的上游传输原因: %s", got.describe())
+				}
+			}
+			h.flushSpend()
+			callID := got.header("x-litellm-call-id")
+			query := url.Values{"request_id": {callID}, "error_message": {want}}
+			rows := rowsOf(h.ok("GET", "/spend/logs/ui?"+query.Encode(), admin, nil), "data")
+			log := findLogByRequestID(rows, callID)
+			spend, _ := floatField(log, "spend")
+			if log["status"] != "error" || spend != 0 {
+				t.Fatalf("最终失败原因不可检索或产生了错误费用: %v", rows)
 			}
 		})
 	}

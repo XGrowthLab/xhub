@@ -85,6 +85,27 @@ func TestFailureJSONStreamInterruption(t *testing.T) {
 	}
 }
 
+// TestFailureJSONGatewayOutcome 验证日志可以搜索客户端看到的网关原因，同时保留供应商错误优先级。
+// 以纯内存响应中断构造缺正文、有网关正文及有供应商错误三种情况；无需清理。
+func TestFailureJSONGatewayOutcome(t *testing.T) {
+	diagnostic := &dpdiagnostics.UpstreamDiagnostics{
+		StatusCode: 200, ReadError: "unexpected EOF",
+		Failure: &dpdiagnostics.Failure{Phase: "response_transfer", Kind: "unexpected_eof", TransportError: "unexpected EOF"},
+		Outcome: &dpdiagnostics.GatewayOutcome{Code: "upstream_stream_interrupted"},
+	}
+	const client = `{"error":{"reason":"upstream_stream_interrupted","message":"The upstream response ended before it was complete."}}`
+	if got := FailureJSON(diagnostic, client); got != client {
+		t.Fatalf("失败摘要应保存客户端实际收到的诊断: %s", got)
+	}
+	if got := FailureJSON(diagnostic, " "); got != diagnostic.ReadError {
+		t.Fatalf("没有客户端错误正文时应保留传输失败: %s", got)
+	}
+	diagnostic.Error = map[string]any{"error": map[string]any{"message": "Vendor capacity exhausted"}}
+	if got := FailureJSON(diagnostic, client); !strings.Contains(got, "Vendor capacity exhausted") || strings.Contains(got, diagnostic.Outcome.Code) {
+		t.Fatalf("网关原因替换了已观察到的供应商错误: %s", got)
+	}
+}
+
 // TestClientWriteFailureJSON 验证客户端写失败单独记录，不把部分模型输出冒充错误或编造上游原因。
 // 内存构造有无上游错误两种状态；只验证结构和原文保护，没有外部资源需要清理。
 func TestClientWriteFailureJSON(t *testing.T) {
