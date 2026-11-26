@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { translate } from "../src/i18n/translate";
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, UPSTREAM, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 
 /** 操作真实筛选抽屉并返回后台结果；参数为页面、语言、独立模型、状态和原始消息。
  * 用于验证界面到SQL的完整链路，不mock请求；只改变当前页面筛选，不修改业务数据。 */
@@ -8,14 +8,14 @@ async function applyErrorFilter(page: Page, locale: "en" | "zh-CN", model: strin
   const tr = (key: string) => translate(locale, key);
   await page.getByTestId("datatable-filters-trigger").click();
   const drawer = page.getByRole("dialog");
-  await drawer.getByPlaceholder(tr("Enter public model or search tool…")).fill(model);
+  await drawer.getByLabel(tr("Model"), { exact: true }).fill(model);
   const input = drawer.getByPlaceholder(tr("Select or type an error code"));
   await input.fill(code);
   await page.getByRole("option", {name: new RegExp("^" + code + " - ")}).click();
-  await drawer.getByPlaceholder(tr("Enter error message…")).fill(message);
+  await drawer.getByLabel(tr("Error Message"), { exact: true }).fill(message);
   const fetched = page.waitForResponse(r => {
     const u = new URL(r.url());
-    return u.pathname === "/spend/logs/ui" && u.searchParams.get("error_code") === code && (u.searchParams.get("error_message") || "") === message && u.searchParams.get("model") === model;
+    return u.pathname.endsWith("/spend/logs/ui") && u.searchParams.get("error_code") === code && (u.searchParams.get("error_message") || "") === message && u.searchParams.get("model") === model;
   });
   await drawer.getByTestId("filter-drawer-apply").click();
   const response = await fetched;
@@ -56,6 +56,7 @@ for (const locale of ["en", "zh-CN"] as const) {
       }
       await stableGoto(page,"/logs");
       await page.getByRole("tab",{name:tr("Error Logs"),exact:true}).click();
+      await selectFailureSeverity(page, "warning");
       for (const failure of failures) {
         const data=await applyErrorFilter(page,locale,model,String(failure.code),failure.message);
         expect(data.total,"筛选总数应只包含对应失败").toBe(1);

@@ -32,6 +32,8 @@ type UsageQuery struct {
 	KeyID     string
 	Model     string
 	Status    string
+	// Severity 将请求失败细分为警告或错误，与旧的 Status 失败筛选取交集。
+	Severity string
 	// ErrorCode 精确匹配最终 HTTP 状态；非法非空值匹配空集。ErrorMessage 为不区分大小写的错误正文字面子串。
 	ErrorCode    string
 	ErrorMessage string
@@ -100,6 +102,17 @@ func (q UsageQuery) scopedSession(db *DB, ctx context.Context, table string) *xo
 		default:
 			s = s.And("status = ?", q.Status)
 		}
+	}
+	switch q.Severity {
+	case "":
+	case UsageSeverityWarning:
+		s = s.And("http_status >= ? AND http_status < ?", 400, 500)
+	case UsageSeverityError:
+		// 旧异步终态可能失败却返回 HTTP 200 或没有状态码，这些仍是错误。
+		s = s.And("(http_status >= ? OR (COALESCE(http_status, 0) < ? AND status IN (?, ?, ?)))", 500, 400, "error", "failed", "failure")
+	default:
+		// 未识别的筛选输入不得导致展示原本应被收窄的记录。
+		s = s.And("1 = 0")
 	}
 	if q.ErrorCode != "" {
 		code, err := strconv.Atoi(q.ErrorCode)
@@ -293,6 +306,60 @@ func (db *DB) GetUsageEvent(ctx context.Context, q UsageQuery, requestID string)
 		return nil, ErrNotFound
 	}
 	return &row, nil
+}
+
+const (
+	UsageSeveritySuccess = "success"
+	UsageSeverityWarning = "warning"
+	UsageSeverityError   = "error"
+)
+
+// LogSeverity 将调用终态和 HTTP 状态投影为日志级别，供控制台列表和详情使用。
+// e 的 4xx 包括拒绝和取消；5xx 及没有失败状态码的失败终态仍归错误。返回级别，不改变原状态或计费。
+// 其分类与 UsageQuery.scopedSession 的分页前筛选保持一致，非失败中的执行中任务仍保留原有状态。
+func (e UsageEvent) LogSeverity() string {
+	if e.HTTPStatus >= 400 && e.HTTPStatus < 500 {
+		return UsageSeverityWarning
+	}
+	if e.HTTPStatus >= 500 || e.Status == "error" || e.Status == "failed" || e.Status == "failure" {
+		return UsageSeverityError
+	}
+	return UsageSeveritySuccess
+}
+
+// LogSummariesByIDs 批量读取已授权页内失败请求的有限诊断，供日志列表生成安全原因码。
+// ctx 控制数据库查询及有界解压；ids 只允许来自已按权限取出的当前页。返回按请求 ID 索引的记录或数据库错误。
+// 缺少记录、历史超大或损坏诊断均按无可用证据降级。只读取错误摘要和诊断列，不加载正文、请求头或捕获表。
+func (db *DB) LogSummariesByIDs(ctx context.Context, ids []string) (map[string]RequestLog, error) {
+	out := make(map[string]RequestLog, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	s := db.session(ctx).Table("request_logs")
+	defer s.Close()
+	var rows []RequestLog
+	const limit = 64 << 10
+	maxBytes := strconv.Itoa(limit)
+	// 用数据库字节长度限制传输到网关的数据，解压后仍使用同一个上限。
+	if err := s.Select("request_id, CASE WHEN octet_length(error) <= "+maxBytes+" THEN error ELSE '' END AS error, "+
+		"CASE WHEN octet_length(upstream_response) <= "+maxBytes+" THEN upstream_response ELSE '' END AS upstream_response").
+		In("request_id", ids).Find(&rows); err != nil {
+		return nil, mapErr(err)
+	}
+	for _, row := range rows {
+		if strings.HasPrefix(row.UpstreamResponse, logframe.Family) {
+			raw, _, err := logframe.Read(ctx, row.UpstreamResponse, limit)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err != nil {
+				raw = ""
+			}
+			row.UpstreamResponse = raw
+		}
+		out[row.RequestID] = row
+	}
+	return out, nil
 }
 
 // GetRequestLog loads the stored bodies of one event that is already inside the scope. The caller checks the scope with GetUsageEvent first.

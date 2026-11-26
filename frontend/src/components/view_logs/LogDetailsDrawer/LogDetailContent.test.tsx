@@ -20,6 +20,44 @@ function logEntry(overrides: Partial<LogEntry> = {}): LogEntry {
   } as LogEntry;
 }
 
+/** 使用同一错误记录的两种语言版本验证抽屉首屏、原始姓名与 UID；组件自动卸载，未访问后台。 */
+it.each(["zh-CN", "en"] as const)("%s shows the specific failure and resolved identity in the details", (locale) => {
+  const upstreamMessage = "Upstream failed to process ticket z9";
+  render(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={logEntry({
+    severity: "error",
+    user: "caller-88",
+    user_name: "李晓光",
+    metadata: { http_status: 502 },
+    error: upstreamMessage,
+    diagnosis: { code: "upstream_http_error", upstream_status: 503, phase: "upstream_request" },
+  })} /></I18nProvider>);
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.upstreamReturnedError"));
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.observedUpstreamStatus", { status: 503 }));
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.upstreamRequestPhase"));
+  expect(alert).toHaveTextContent(upstreamMessage);
+  expect(screen.getByText("李晓光")).toBeVisible();
+  expect(screen.getByText("caller-88")).toBeVisible();
+});
+
+/** 用未进入模型处理的路由警告验证详情中的请求方法、三项缺失原因与下一步；纯组件测试，自动卸载。 */
+it.each(["zh-CN", "en"] as const)("%s reports missing fields in the warning details", (locale) => {
+  render(<I18nProvider initialLocale={locale}><LogDetailContent logEntry={logEntry({
+    model: "", inbound_endpoint: "/responses", severity: "warning", metadata: { http_status: 404 },
+    diagnosis: {
+      code: "unsupported_method", request_method: "GET", model_missing_reason: "model_not_applicable",
+      user_missing_reason: "credentials_missing", team_missing_reason: "unverified_identity",
+    },
+  })} /></I18nProvider>);
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.methodNotSupported"));
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.observedEndpoint", { method: "GET", path: "/responses" }));
+  expect(alert).toHaveTextContent(translate(locale, "logsUX.useSupportedMethod"));
+  expect(screen.getByText(translate(locale, "logsUX.modelNotApplicable"))).toBeVisible();
+  expect(screen.getByText(translate(locale, "logsUX.credentialsMissing"))).toBeVisible();
+  expect(screen.getByText(translate(locale, "logsUX.identityUnverified"))).toBeVisible();
+});
+
 describe("上游响应折叠", () => {
   /** 有真实首响应字节耗时时展示正确口径，中英文均不将其误称首 Token；纯组件测试，自动卸载清理。 */
   it.each(["zh-CN", "en"] as const)("%s 显示首响应字节耗时", (locale) => {

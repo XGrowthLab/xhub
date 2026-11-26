@@ -36,6 +36,45 @@ it("labels backend error rows as failure", () => {
   expect(screen.queryByText("Success")).not.toBeInTheDocument();
 });
 
+/** 前置两种语言及三类失败日志。核对警告、上游故障、冷却计数、账号名称和缺失原因；
+ * 用户名及 UID 均保持原值，finally 恢复语言，测试框架卸载组件。 */
+it.each(["en", "zh-CN"] as const)("displays recorded severity and identity evidence in %s", (locale) => {
+  const initialLocale = getActiveLocale();
+  try {
+    setActiveLocale(locale);
+    renderRows([
+      logEntry({ request_id: "denied", model: "gpt-5.6-luna", status: "error", severity: "warning", metadata: { http_status: 401 },
+        user: "account-123", user_name: "宋晓明", team_id: "",
+        diagnosis: { code: "model_not_allowed", team_missing_reason: "no_team" }, error: "internal detail" }),
+      logEntry({ request_id: "unrouted", model: "", model_id: "", inbound_endpoint: "/responses", team_id: "", severity: "warning", metadata: { http_status: 404 },
+        diagnosis: { code: "unsupported_method", request_method: "GET", model_missing_reason: "model_not_applicable", user_missing_reason: "unverified_identity", team_missing_reason: "team_not_recorded" } }),
+      logEntry({ request_id: "cooldown", severity: "error", metadata: { http_status: 503 },
+        diagnosis: { code: "all_deployments_cooling_down", cooling_deployments: 4, compatible_deployments: 4 } }),
+      logEntry({ request_id: "failed-upstream", severity: "error", metadata: { http_status: 502 },
+        diagnosis: { code: "upstream_http_error", upstream_status: 520, phase: "upstream_request" } }),
+    ]);
+    const denied = within(screen.getByRole("row", { name: /denied/ }));
+    expect(denied.getByText(t("logsUX.severityWarning"))).toBeVisible();
+    expect(denied.getByText(new RegExp(t("logsUX.modelNotAllowed")))).toBeVisible();
+    expect(denied.getByText("宋晓明")).toBeVisible();
+    expect(denied.getByText("account-123")).toBeVisible();
+    expect(denied.getByText(t("logsUX.teamNotAssigned"))).toBeVisible();
+    expect(denied.queryByText("internal detail")).not.toBeInTheDocument();
+    const unrouted = within(screen.getByRole("row", { name: /unrouted/ }));
+    expect(unrouted.getByText(t("logsUX.modelNotApplicable"))).toBeVisible();
+    expect(unrouted.getByText(t("logsUX.identityUnverified"))).toBeVisible();
+    expect(unrouted.getByText(t("logsUX.observedEndpoint", { method: "GET", path: "/responses" }))).toBeVisible();
+    const cooldown = within(screen.getByRole("row", { name: /cooldown/ }));
+    expect(cooldown.getByText(t("logsUX.severityError"))).toBeVisible();
+    expect(cooldown.getByText(t("logsUX.coolingDeploymentCount", { cooling: 4, compatible: 4 }))).toBeVisible();
+    const failure = within(screen.getByRole("row", { name: /failed-upstream/ }));
+    expect(failure.getByText(t("logsUX.observedUpstreamStatus", { status: 520 }))).toBeVisible();
+    expect(failure.getByText(t("logsUX.upstreamRequestPhase"))).toBeVisible();
+  } finally {
+    setActiveLocale(initialLocale);
+  }
+});
+
 /** 将参数日志与会话回调渲染为真实表格，供列行为测试使用；返回 void，测试框架自动卸载 DOM，无外部数据。 */
 function renderRows(rows: LogEntry[], deps = noopDeps) {
   render(

@@ -79,3 +79,25 @@ func TestRecordEarlyFailure(t *testing.T) {
 		t.Fatal("内部诊断泄漏到客户端")
 	}
 }
+
+// TestUpstreamFaultFeedback 验证客户端说明能区分上游连接、超时、正文中断和协议校验失败。
+// t 使用内存诊断，无外部资源。校验未知原因降级和底层连接地址不外泄，无需清理。
+func TestUpstreamFaultFeedback(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, want string
+		diag               *UpstreamDiagnostics
+	}{
+		{"未知", "upstream_transport_error", "could not receive", nil},
+		{"连接超时", "upstream_timeout", "Timed out waiting", &UpstreamDiagnostics{Failure: &Failure{Kind: "timeout", Phase: "upstream_request"}}},
+		{"传输超时", "upstream_timeout", "before it was complete", &UpstreamDiagnostics{StatusCode: 200, Failure: &Failure{Kind: "timeout", Phase: "response_transfer"}}},
+		{"错误响应被截断", "upstream_stream_interrupted", "HTTP 502", &UpstreamDiagnostics{StatusCode: 502, Failure: &Failure{Phase: "response_transfer", TransportError: "https://private.example"}}},
+		{"协议校验失败", "upstream_invalid_response", "required field", &UpstreamDiagnostics{StatusCode: 200}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, message := UpstreamFaultFeedback(tc.diag, "required field")
+			if reason != tc.reason || !strings.Contains(message, tc.want) || strings.Contains(message, "private.example") {
+				t.Fatalf("网关反馈没有保留可公开的阶段: %s %q", reason, message)
+			}
+		})
+	}
+}

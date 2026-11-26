@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 import { translate } from "../src/i18n/translate";
 
 /** 通过真实 Next 入口发送固定长度或分块正文；参数为地址、凭据、字节及传输模式，返回状态/正文/日志ID。
@@ -167,6 +167,7 @@ test("console proxy preserves large bodies and rejects oversize without truncati
     expect(received, "拒绝请求不能到达上游").toHaveLength(5);
     await stableGoto(page, "/logs");
     await page.getByRole("tab", { name: translate("zh-CN", "Error Logs"), exact: true }).click();
+    await selectFailureSeverity(page, "warning");
     // 切换期间普通日志和错误日志可能同时可见，按目标面板定位，避免读取另一个列表的同名控件或同一请求。
     const errorPanel = page.getByRole("tabpanel", { name: translate("zh-CN", "Error Logs"), exact: true });
     await errorPanel.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).fill(failureID);

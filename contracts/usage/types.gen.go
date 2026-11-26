@@ -15,6 +15,16 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for LogDiagnosisRequestMethod.
+const (
+	DELETE LogDiagnosisRequestMethod = "DELETE"
+	GET    LogDiagnosisRequestMethod = "GET"
+	HEAD   LogDiagnosisRequestMethod = "HEAD"
+	PATCH  LogDiagnosisRequestMethod = "PATCH"
+	POST   LogDiagnosisRequestMethod = "POST"
+	PUT    LogDiagnosisRequestMethod = "PUT"
+)
+
 // Defines values for LogRecordBodyCaptureStatus.
 const (
 	LogRecordBodyCaptureStatusCapacity            LogRecordBodyCaptureStatus = "capacity"
@@ -30,11 +40,30 @@ const (
 	LogRecordBodyCaptureStatusUnsupported         LogRecordBodyCaptureStatus = "unsupported"
 )
 
+// Defines values for LogRecordSeverity.
+const (
+	LogRecordSeverityError   LogRecordSeverity = "error"
+	LogRecordSeveritySuccess LogRecordSeverity = "success"
+	LogRecordSeverityWarning LogRecordSeverity = "warning"
+)
+
+// Defines values for ListSessionLogsParamsSeverity.
+const (
+	ListSessionLogsParamsSeverityError   ListSessionLogsParamsSeverity = "error"
+	ListSessionLogsParamsSeverityWarning ListSessionLogsParamsSeverity = "warning"
+)
+
 // Defines values for ListSessionLogsParamsCacheHitFilter.
 const (
 	ListSessionLogsParamsCacheHitFilterEmpty ListSessionLogsParamsCacheHitFilter = ""
 	ListSessionLogsParamsCacheHitFilterHit   ListSessionLogsParamsCacheHitFilter = "hit"
 	ListSessionLogsParamsCacheHitFilterMiss  ListSessionLogsParamsCacheHitFilter = "miss"
+)
+
+// Defines values for ListUILogsParamsSeverity.
+const (
+	ListUILogsParamsSeverityError   ListUILogsParamsSeverity = "error"
+	ListUILogsParamsSeverityWarning ListUILogsParamsSeverity = "warning"
 )
 
 // Defines values for ListUILogsParamsCacheHitFilter.
@@ -51,6 +80,12 @@ const (
 	KeyHash         ListLogFilterOptionsParamsField = "key_hash"
 	Model           ListLogFilterOptionsParamsField = "model"
 	Supplier        ListLogFilterOptionsParamsField = "supplier"
+)
+
+// Defines values for ListLogsParamsSeverity.
+const (
+	ListLogsParamsSeverityError   ListLogsParamsSeverity = "error"
+	ListLogsParamsSeverityWarning ListLogsParamsSeverity = "warning"
 )
 
 // Defines values for ListLogsParamsCacheHitFilter.
@@ -165,6 +200,22 @@ type ErrorDetail struct {
 	Type  string          `json:"type"`
 }
 
+// LogDiagnosis 只读原因码和已观测事实，正文详情遵循原权限和审计 / Read-only reason codes and observed facts. Full bodies retain existing authorization and audit.
+type LogDiagnosis struct {
+	Code                  *string                    `json:"code,omitempty"`
+	CompatibleDeployments *int                       `json:"compatible_deployments,omitempty"`
+	CoolingDeployments    *int                       `json:"cooling_deployments,omitempty"`
+	ModelMissingReason    *string                    `json:"model_missing_reason,omitempty"`
+	Phase                 *string                    `json:"phase,omitempty"`
+	RequestMethod         *LogDiagnosisRequestMethod `json:"request_method,omitempty"`
+	TeamMissingReason     *string                    `json:"team_missing_reason,omitempty"`
+	UpstreamStatus        *int                       `json:"upstream_status,omitempty"`
+	UserMissingReason     *string                    `json:"user_missing_reason,omitempty"`
+}
+
+// LogDiagnosisRequestMethod defines model for LogDiagnosis.RequestMethod.
+type LogDiagnosisRequestMethod string
+
 // LogFilterOptionPage defines model for LogFilterOptionPage.
 type LogFilterOptionPage struct {
 	Data     []string `json:"data"`
@@ -200,10 +251,13 @@ type LogRecord struct {
 	CompletionTokens     float32                     `json:"completion_tokens"`
 	CredentialName       string                      `json:"credential_name"`
 	CustomLlmProvider    string                      `json:"custom_llm_provider"`
-	EndTime              string                      `json:"endTime"`
-	Error                *string                     `json:"error,omitempty"`
-	InboundEndpoint      string                      `json:"inbound_endpoint"`
-	Label                string                      `json:"label"`
+
+	// Diagnosis 只读原因码和已观测事实，正文详情遵循原权限和审计 / Read-only reason codes and observed facts. Full bodies retain existing authorization and audit.
+	Diagnosis       *LogDiagnosis `json:"diagnosis,omitempty"`
+	EndTime         string        `json:"endTime"`
+	Error           *string       `json:"error,omitempty"`
+	InboundEndpoint string        `json:"inbound_endpoint"`
+	Label           string        `json:"label"`
 
 	// Messages 保留任意JSON类型、未知字段与null / Preserve arbitrary JSON values, unknown fields and null
 	Messages         rawjson.RawMessage `json:"messages"`
@@ -234,23 +288,32 @@ type LogRecord struct {
 	SessionTotalCount            *int   `json:"session_total_count,omitempty"`
 
 	// SessionTotalPromptTokens 会话筛选范围内的输入 Token 合计 / Total input tokens in the filtered session
-	SessionTotalPromptTokens *int64                        `json:"session_total_prompt_tokens,omitempty"`
-	SessionTotalSpend        *float64                      `json:"session_total_spend,omitempty"`
-	SessionTotalTokens       *int64                        `json:"session_total_tokens,omitempty"`
-	Spend                    float32                       `json:"spend"`
-	StartTime                string                        `json:"startTime"`
-	Status                   string                        `json:"status"`
-	Streamed                 bool                          `json:"streamed"`
-	TeamId                   string                        `json:"team_id"`
-	TotalTokens              float32                       `json:"total_tokens"`
-	Tps                      *float32                      `json:"tps"`
-	TtftMs                   *float32                      `json:"ttft_ms"`
-	User                     string                        `json:"user"`
-	AdditionalProperties     map[string]rawjson.RawMessage `json:"-"`
+	SessionTotalPromptTokens *int64   `json:"session_total_prompt_tokens,omitempty"`
+	SessionTotalSpend        *float64 `json:"session_total_spend,omitempty"`
+	SessionTotalTokens       *int64   `json:"session_total_tokens,omitempty"`
+
+	// Severity 日志分级独立于原始状态，4xx 归警告，5xx 和缺少失败状态码的失败归错误 / Log severity is separate from the original status. HTTP 4xx are warnings. HTTP 5xx or failures without an HTTP failure status are errors.
+	Severity    *LogRecordSeverity `json:"severity,omitempty"`
+	Spend       float32            `json:"spend"`
+	StartTime   string             `json:"startTime"`
+	Status      string             `json:"status"`
+	Streamed    bool               `json:"streamed"`
+	TeamId      string             `json:"team_id"`
+	TotalTokens float32            `json:"total_tokens"`
+	Tps         *float32           `json:"tps"`
+	TtftMs      *float32           `json:"ttft_ms"`
+	User        string             `json:"user"`
+
+	// UserName 授权日志可见的当前账号显示名。无显示名时省略 / Display name of the account on an authorized log row. Omitted if unavailable.
+	UserName             *string                       `json:"user_name,omitempty"`
+	AdditionalProperties map[string]rawjson.RawMessage `json:"-"`
 }
 
 // LogRecordBodyCaptureStatus 正文记录状态；历史日志可能缺少 / Body capture status; may be absent on older logs
 type LogRecordBodyCaptureStatus string
+
+// LogRecordSeverity 日志分级独立于原始状态，4xx 归警告，5xx 和缺少失败状态码的失败归错误 / Log severity is separate from the original status. HTTP 4xx are warnings. HTTP 5xx or failures without an HTTP failure status are errors.
+type LogRecordSeverity string
 
 // UsageBreakdown defines model for UsageBreakdown.
 type UsageBreakdown struct {
@@ -366,11 +429,14 @@ type ListSessionLogsParams struct {
 	ErrorCode *string `form:"error_code,omitempty" json:"error_code,omitempty"`
 
 	// ErrorMessage 完整错误正文中不区分大小写的字面子串；%和_不是通配符 / Case-insensitive literal substring of the full error; % and _ are not wildcards
-	ErrorMessage   *string `form:"error_message,omitempty" json:"error_message,omitempty"`
-	SortBy         *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
-	SortOrder      *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
-	StatusFilter   *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
-	GroupBySession *string `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
+	ErrorMessage *string `form:"error_message,omitempty" json:"error_message,omitempty"`
+	SortBy       *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+	SortOrder    *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
+	StatusFilter *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
+
+	// Severity 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter.
+	Severity       *ListSessionLogsParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+	GroupBySession *string                        `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
 
 	// KeyHash 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID
 	KeyHash *string `form:"key_hash,omitempty" json:"key_hash,omitempty"`
@@ -387,6 +453,9 @@ type ListSessionLogsParams struct {
 	// CacheHitFilter 网关响应缓存命中或未命中，不是上游提示词缓存；非法值返回400 / Gateway response cache hit or miss, not provider prompt cache; invalid values return 400
 	CacheHitFilter *ListSessionLogsParamsCacheHitFilter `form:"cache_hit_filter,omitempty" json:"cache_hit_filter,omitempty"`
 }
+
+// ListSessionLogsParamsSeverity defines parameters for ListSessionLogs.
+type ListSessionLogsParamsSeverity string
 
 // ListSessionLogsParamsCacheHitFilter defines parameters for ListSessionLogs.
 type ListSessionLogsParamsCacheHitFilter string
@@ -412,11 +481,14 @@ type ListUILogsParams struct {
 	ErrorCode *string `form:"error_code,omitempty" json:"error_code,omitempty"`
 
 	// ErrorMessage 完整错误正文中不区分大小写的字面子串；%和_不是通配符 / Case-insensitive literal substring of the full error; % and _ are not wildcards
-	ErrorMessage   *string `form:"error_message,omitempty" json:"error_message,omitempty"`
-	SortBy         *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
-	SortOrder      *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
-	StatusFilter   *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
-	GroupBySession *string `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
+	ErrorMessage *string `form:"error_message,omitempty" json:"error_message,omitempty"`
+	SortBy       *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+	SortOrder    *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
+	StatusFilter *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
+
+	// Severity 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter.
+	Severity       *ListUILogsParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+	GroupBySession *string                   `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
 
 	// KeyHash 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID
 	KeyHash *string `form:"key_hash,omitempty" json:"key_hash,omitempty"`
@@ -433,6 +505,9 @@ type ListUILogsParams struct {
 	// CacheHitFilter 网关响应缓存命中或未命中，不是上游提示词缓存；非法值返回400 / Gateway response cache hit or miss, not provider prompt cache; invalid values return 400
 	CacheHitFilter *ListUILogsParamsCacheHitFilter `form:"cache_hit_filter,omitempty" json:"cache_hit_filter,omitempty"`
 }
+
+// ListUILogsParamsSeverity defines parameters for ListUILogs.
+type ListUILogsParamsSeverity string
 
 // ListUILogsParamsCacheHitFilter defines parameters for ListUILogs.
 type ListUILogsParamsCacheHitFilter string
@@ -482,11 +557,14 @@ type ListLogsParams struct {
 	ErrorCode *string `form:"error_code,omitempty" json:"error_code,omitempty"`
 
 	// ErrorMessage 完整错误正文中不区分大小写的字面子串；%和_不是通配符 / Case-insensitive literal substring of the full error; % and _ are not wildcards
-	ErrorMessage   *string `form:"error_message,omitempty" json:"error_message,omitempty"`
-	SortBy         *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
-	SortOrder      *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
-	StatusFilter   *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
-	GroupBySession *string `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
+	ErrorMessage *string `form:"error_message,omitempty" json:"error_message,omitempty"`
+	SortBy       *string `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+	SortOrder    *string `form:"sort_order,omitempty" json:"sort_order,omitempty"`
+	StatusFilter *string `form:"status_filter,omitempty" json:"status_filter,omitempty"`
+
+	// Severity 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter.
+	Severity       *ListLogsParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+	GroupBySession *string                 `form:"group_by_session,omitempty" json:"group_by_session,omitempty"`
 
 	// KeyHash 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID
 	KeyHash *string `form:"key_hash,omitempty" json:"key_hash,omitempty"`
@@ -503,6 +581,9 @@ type ListLogsParams struct {
 	// CacheHitFilter 网关响应缓存命中或未命中，不是上游提示词缓存；非法值返回400 / Gateway response cache hit or miss, not provider prompt cache; invalid values return 400
 	CacheHitFilter *ListLogsParamsCacheHitFilter `form:"cache_hit_filter,omitempty" json:"cache_hit_filter,omitempty"`
 }
+
+// ListLogsParamsSeverity defines parameters for ListLogs.
+type ListLogsParamsSeverity string
 
 // ListLogsParamsCacheHitFilter defines parameters for ListLogs.
 type ListLogsParamsCacheHitFilter string
@@ -686,6 +767,14 @@ func (a *LogRecord) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("error reading 'custom_llm_provider': %w", err)
 		}
 		delete(object, "custom_llm_provider")
+	}
+
+	if raw, found := object["diagnosis"]; found {
+		err = json.Unmarshal(raw, &a.Diagnosis)
+		if err != nil {
+			return fmt.Errorf("error reading 'diagnosis': %w", err)
+		}
+		delete(object, "diagnosis")
 	}
 
 	if raw, found := object["endTime"]; found {
@@ -904,6 +993,14 @@ func (a *LogRecord) UnmarshalJSON(b []byte) error {
 		delete(object, "session_total_tokens")
 	}
 
+	if raw, found := object["severity"]; found {
+		err = json.Unmarshal(raw, &a.Severity)
+		if err != nil {
+			return fmt.Errorf("error reading 'severity': %w", err)
+		}
+		delete(object, "severity")
+	}
+
 	if raw, found := object["spend"]; found {
 		err = json.Unmarshal(raw, &a.Spend)
 		if err != nil {
@@ -974,6 +1071,14 @@ func (a *LogRecord) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("error reading 'user': %w", err)
 		}
 		delete(object, "user")
+	}
+
+	if raw, found := object["user_name"]; found {
+		err = json.Unmarshal(raw, &a.UserName)
+		if err != nil {
+			return fmt.Errorf("error reading 'user_name': %w", err)
+		}
+		delete(object, "user_name")
 	}
 
 	if len(object) != 0 {
@@ -1061,6 +1166,13 @@ func (a LogRecord) MarshalJSON() ([]byte, error) {
 	object["custom_llm_provider"], err = json.Marshal(a.CustomLlmProvider)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'custom_llm_provider': %w", err)
+	}
+
+	if a.Diagnosis != nil {
+		object["diagnosis"], err = json.Marshal(a.Diagnosis)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'diagnosis': %w", err)
+		}
 	}
 
 	object["endTime"], err = json.Marshal(a.EndTime)
@@ -1216,6 +1328,13 @@ func (a LogRecord) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.Severity != nil {
+		object["severity"], err = json.Marshal(a.Severity)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'severity': %w", err)
+		}
+	}
+
 	object["spend"], err = json.Marshal(a.Spend)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'spend': %w", err)
@@ -1259,6 +1378,13 @@ func (a LogRecord) MarshalJSON() ([]byte, error) {
 	object["user"], err = json.Marshal(a.User)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'user': %w", err)
+	}
+
+	if a.UserName != nil {
+		object["user_name"], err = json.Marshal(a.UserName)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'user_name': %w", err)
+		}
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

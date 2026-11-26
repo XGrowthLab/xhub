@@ -2,18 +2,36 @@ import {test,expect} from "@playwright/test";
 import {createServer} from "node:http";
 import {once} from "node:events";
 import {GATEWAY,loginAdmin,sessionBearer,stableGoto} from "../../helpers";
+import { translate } from "../../../src/i18n/translate";
 
-// 双语真实链路：管理员创建隔离模型，HTTP上游返回首帧/中途错误或截断的非流式正文，客户端和日志抽屉保留同一诊断。
-// 前置真实网关/PG/浏览器；验证 Chat 原生及 Responses 转换和错误后的成功请求；finally 删除模型并关闭本地服务，schema 由运行器清理。
+// 双语真实链路：管理员创建隔离模型，HTTP 上游返回首帧/中途错误或截断正文，客户端和日志抽屉保留同一诊断。
+// 验证 Chat、Responses 转换和原生灰度的报错与恢复；finally 删除模型、清除配置并关闭上游，schema 由运行器清理。
 export function registerUpstreamStreamErrors(locale: "en" | "zh-CN") {
 test("upstream stream error details "+locale,async({page})=>{
  test.setTimeout(120000);
  let partial=false,fail=true,truncated=false,truncated4xx=false,truncated4xxEmpty=false,calls=0;
  const marker="Vendor capacity exhausted: 保留原文";
+ const nativeMarker = "Native capacity exhausted";
+ const interruptedMessage = "The upstream response ended before it was complete.";
+ let nativeTruncated = false;
  // 本地HTTP供应商夹具：接收真实请求，返回协议流或长度不足的完整 JSON，验证流错误及非流式读取错误；资源在finally回收。
  const upstream=createServer((req,res)=>{
   calls++;
   req.resume();
+  if (req.url === "/v1/responses") {
+   if (nativeTruncated) {
+    const body = JSON.stringify({ id: "resp_native_partial", status: "completed", output: [] });
+    res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(Buffer.byteLength(body) + 100), "Connection": "close" });
+    res.end(body);
+   } else {
+    const event = { type: "response.failed", request_id: "req-native-sse", response: {
+     id: "resp_native_failed", error: { type: "api_error", code: "native_capacity", message: nativeMarker },
+    } };
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end("data: " + JSON.stringify(event) + "\n\n");
+   }
+   return;
+  }
   if(truncated4xxEmpty){res.writeHead(400,{"Content-Type":"application/json","Content-Length":"100","Connection":"close"});res.end();return;}
   if(truncated4xx){const full=JSON.stringify({error:{code:"context_length_exceeded",message:"Input is too long"}});res.writeHead(400,{"Content-Type":"application/json","Content-Length":String(Buffer.byteLength(full)+100),"Connection":"close"});res.end(full);return;}
   if(truncated){const full=JSON.stringify({id:"r-trunc",object:"chat.completion",choices:[{index:0,message:{role:"assistant",content:"ok"},finish_reason:"stop"}]});res.writeHead(200,{"Content-Type":"application/json","Content-Length":String(Buffer.byteLength(full)+100),"Connection":"close"});res.end(full);return;}
@@ -24,7 +42,8 @@ test("upstream stream error details "+locale,async({page})=>{
  });
  upstream.listen(0,"127.0.0.1");await once(upstream,"listening");
  const port=(upstream.address() as {port:number}).port;
- let modelID="";
+ let modelID="", nativeModelID="";
+ let nativeEnabled = false;
  await loginAdmin(page);
  const headers={Authorization:"Bearer "+await sessionBearer(page)};
  const model="stream-detail-"+locale+"-"+Date.now();
@@ -96,9 +115,71 @@ test("upstream stream error details "+locale,async({page})=>{
   expect(emptyLog.status).toBe("error");expect(emptyLog.spend).toBe(0);expect(emptyLog.metadata.upstream_response.read_error).toContain("unexpected EOF");
   await stableGoto(page,"/logs?log_id="+emptyID);
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("400");
+  await page.keyboard.press("Escape");
+
+  const nativeModel = model + "-native";
+  const nativeDeployment = await page.request.post(GATEWAY + "/model/new", { headers, data: {
+   model_name: nativeModel,
+   litellm_params: { model: nativeModel, custom_llm_provider: "openai", api_base: `http://127.0.0.1:${port}/v1`,
+    api_key: "local-fixture", input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 },
+   model_info: { transport: "bypass_openai_responses", endpoint_types: ["responses"], pricing_source: "manual" },
+  } });
+  expect(nativeDeployment.status(), await nativeDeployment.text()).toBe(200);
+  nativeModelID = (await nativeDeployment.json()).model_info.id;
+  const me = await page.request.get(GATEWAY + "/auth/me", { headers });
+  const userID = (await me.json()).user_id;
+  expect(userID).toBeTruthy();
+  const config = await page.request.post(GATEWAY + "/config/update", { headers, data: {
+   general_settings: { native_responses: { enabled: true, user_ids: [userID] } },
+  } });
+  expect(config.status(), await config.text()).toBe(200);
+  nativeEnabled = true;
+
+  for (const stream of [true, false]) {
+   nativeTruncated = !stream;
+   const before = calls;
+   const response = await page.request.post(GATEWAY + "/v1/responses", {
+    headers, data: { model: nativeModel, input: "Check an interrupted native response.", stream },
+   });
+   expect(response.status(), await response.text()).toBe(502);
+   expect(response.headers()["x-xhub-responses-path"]).toBe("native");
+   expect(response.headers()["content-type"]).toContain("application/json");
+   expect(calls - before, "原生响应失败后应禁止重新生成").toBe(1);
+   const message = stream ? nativeMarker : interruptedMessage;
+   const error = await response.json();
+   expect(error).toMatchObject(stream ? {
+    error: { type: "api_error", code: "native_capacity", message },
+    request_id: "req-native-sse", response_id: "resp_native_failed",
+   } : { error: { reason: "upstream_stream_interrupted", message } });
+   const id = response.headers()["x-litellm-call-id"];
+   expect(id).toBeTruthy();
+   const detailURL = GATEWAY + "/spend/logs/ui/" + id;
+   await expect.poll(async () => (await page.request.get(detailURL, { headers })).status()).toBe(200);
+   const detail = await (await page.request.get(detailURL, { headers })).json();
+   expect(detail).toMatchObject({ status: "error", spend: 0 });
+   expect(JSON.parse(detail.error)).toEqual(error);
+   if (!stream) expect(detail.metadata.upstream_response.read_error).toContain("unexpected EOF");
+   const query = new URLSearchParams({ request_id: id, error_message: message });
+   const list = await page.request.get(GATEWAY + "/spend/logs/ui?" + query, { headers });
+   expect((await list.json()).data).toEqual([expect.objectContaining({ request_id: id })]);
+   await stableGoto(page, "/logs?log_id=" + id);
+   const dialog = page.getByRole("dialog");
+   await expect(dialog.getByRole("alert")).toContainText("502");
+   await expect(dialog.getByRole("alert")).toContainText(message);
+   if (!stream) await expect(dialog.getByRole("alert")).toContainText(translate(locale, "logsUX.upstreamStreamInterrupted"));
+   await page.keyboard.press("Escape");
+  }
  }finally{
-  if(modelID)expect((await page.request.post(GATEWAY+"/model/delete",{headers,data:{id:modelID}})).status()).toBe(200);
-  upstream.closeAllConnections();await new Promise<void>((resolve,reject)=>upstream.close(err=>err?reject(err):resolve()));
+  try {
+   if (nativeEnabled) expect((await page.request.post(GATEWAY + "/config/field/delete", {
+    headers, data: { config_type: "general_settings", field_name: "native_responses" },
+   })).status()).toBe(200);
+   for (const id of [nativeModelID, modelID]) {
+    if (id) expect((await page.request.post(GATEWAY + "/model/delete", { headers, data: { id } })).status()).toBe(200);
+   }
+  } finally {
+   upstream.closeAllConnections();await new Promise<void>((resolve,reject)=>upstream.close(err=>err?reject(err):resolve()));
+  }
  }
 });
 }

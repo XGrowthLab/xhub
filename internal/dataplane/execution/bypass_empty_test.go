@@ -71,7 +71,8 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 			h := officialHost(up, deployment)
 			h.settings = map[string]any{"model_routes": []any{}, "retry_policy": map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3, "cooldown_seconds": 0}}
 			rec := h.call(t, http.MethodPost, spec.path, `{"model":"public","messages":[{"role":"user","content":"Hello"}],"input":"Hello","max_tokens":16}`)
-			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "upstream request failed") || calls.Load() != 1 {
+			if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "upstream returned an empty dialogue response") ||
+				!strings.Contains(rec.Body.String(), "upstream_invalid_response") || calls.Load() != 1 {
 				t.Fatalf("空响应必须报错且不得重放: status=%d calls=%d body=%s", rec.Code, calls.Load(), rec.Body.String())
 			}
 			if len(h.spend) != 1 || h.spend[0].status != 502 || h.spend[0].usage["pricing_blocked"] != "upstream_usage_missing" {
@@ -82,7 +83,9 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 			}
 			found := false
 			for _, note := range h.notes {
-				if note.Upstream != nil && note.Upstream.StatusCode == 200 && note.Upstream.Failure != nil && note.Upstream.Failure.Kind == "empty_response" {
+				if note.Upstream != nil && note.Upstream.StatusCode == 200 &&
+					note.Upstream.Failure != nil && note.Upstream.Failure.Kind == "empty_response" &&
+					note.Upstream.Outcome != nil && note.Upstream.Outcome.Code == "upstream_invalid_response" {
 					found = true
 				}
 			}

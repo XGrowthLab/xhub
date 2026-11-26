@@ -338,8 +338,9 @@ func TestServePersistsNetworkFailure(t *testing.T) {
 	if note := h.upstreamNotes[h.spends[0].callID]; note.APIBase != "https://example.invalid/v1" || !note.UpstreamSelected {
 		t.Fatalf("网络失败丢失上游快照: %+v", note)
 	}
-	if got := string(h.exchanges[h.spends[0].callID]); !strings.Contains(got, "connection refused") {
-		t.Fatalf("网络错误正文缺失: %q", got)
+	if got := string(h.exchanges[h.spends[0].callID]); got != rec.Body.String() ||
+		!strings.Contains(got, "upstream_transport_error") || strings.Contains(got, "example.invalid") {
+		t.Fatalf("网络错误没有保留公开原因或泄漏内部地址: %q", got)
 	}
 }
 

@@ -105,9 +105,12 @@ func TestRouteDiagnosisStages(t *testing.T) {
 				t.Fatalf("阶段计数错误: %+v", d)
 			}
 			if tc.status != 0 {
-				status, kind, message := d.Failure(alias)
-				if status != tc.status || kind != tc.kind || !strings.Contains(message, tc.message) {
-					t.Fatalf("空路由分类错误: %d %s %s", status, kind, message)
+				status, kind, message, reason := d.Failure(alias)
+				if status != tc.status || kind != tc.kind || !strings.Contains(message, tc.message) || reason == "" {
+					t.Fatalf("空路由分类错误: %d %s %s %s", status, kind, message, reason)
+				}
+				if tc.name == "cooldown" && (reason != "all_deployments_cooling_down" || !strings.Contains(message, "(1 of 1)")) {
+					t.Fatalf("冷却原因或候选计数丢失: %s %s", reason, message)
 				}
 			}
 			if tc.name == "zero weight stale positive" && len(d.stale) != 1 {
@@ -173,8 +176,8 @@ func TestRouteDiagnosisImageDetailCapability(t *testing.T) {
 			if tc.compatible != 0 {
 				return
 			}
-			status, kind, message := d.Failure(name)
-			if status != 400 || kind != tc.wantKind || strings.Contains(message, "detail=auto") != tc.wantGuidance || strings.Contains(message, "private") {
+			status, kind, message, reason := d.Failure(name)
+			if status != 400 || kind != tc.wantKind || reason != "protocol_unsupported" || strings.Contains(message, "detail=auto") != tc.wantGuidance || strings.Contains(message, "private") {
 				t.Fatalf("公开图片精度错误不准确或泄漏连接信息: %d %s %q", status, kind, message)
 			}
 		})

@@ -187,8 +187,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	if len(pool) == 0 {
 		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.EndpointID, settings, state, nil, false, policyBody)
 		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(settings, "")})
-		if status, code, message := diagnosis.Failure(alias); code == "unsupported_capability" {
-			util.WriteTypedError(w, r.URL.Path, status, code, message)
+		if status, code, message, reason := diagnosis.Failure(alias); code == "unsupported_capability" || status == http.StatusServiceUnavailable {
+			util.WriteTypedReasonError(w, r.URL.Path, status, code, message, "", reason)
 			return
 		}
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "model not found: "+alias)
@@ -339,13 +339,14 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						continue
 					}
 					// 创建响应丢失时，上游可能已受理付费任务；结果不明确的创建请求不能重放。
-					h.RememberExchange(callID, r, raw, []byte(dpdiagnostics.SafeErr(err)))
+					reason, detail := dpdiagnostics.UpstreamFaultFeedback(response.Diagnostics, "")
+					h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, 502, "upstream_error", detail, "", reason))
 					note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 					applyStreamTiming(&note, response, start)
 					note.Upstream = response.Diagnostics
 					h.AnnotateCall(callID, note)
 					h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
-					util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
+					util.WriteTypedReasonError(w, r.URL.Path, 502, "upstream_error", detail, "", reason)
 					return
 				}
 				if emptyBypassDialogue(candidateHit, countOnly, response) {
@@ -359,12 +360,14 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					}
 					response.Diagnostics.Failure = dpdiagnostics.ObserveFailure(r.Context(), "upstream_body", errors.New(message), time.Since(start))
 					response.Diagnostics.Failure.Kind = "empty_response"
-					h.RememberExchange(callID, r, raw, []byte(message))
+					const reason = "upstream_invalid_response"
+					response.Diagnostics.Outcome = &dpdiagnostics.GatewayOutcome{Code: reason}
+					h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, http.StatusBadGateway, "upstream_error", message, "", reason))
 					note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 					note.Upstream = response.Diagnostics
 					h.AnnotateCall(callID, note)
 					h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, map[string]any{"pricing_blocked": "upstream_usage_missing"}, start, false, http.StatusBadGateway, selectedID)
-					util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", "upstream request failed")
+					util.WriteTypedReasonError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", message, "", reason)
 					return
 				}
 				if status >= 500 || status == http.StatusTooManyRequests {
@@ -403,17 +406,14 @@ forwarded:
 	// 转发结束后才提交任务事实与交互：HTTP 成功、任务创建、会话偏好和可计费用量是不同事实。
 	if status == 0 || (response.Diagnostics != nil && response.Diagnostics.Failure != nil) {
 		// 重试用尽时记录最后一次实际尝试。收到状态或部分正文也不能把读失败当成成功。
-		detail := "upstream request failed"
-		if response.Diagnostics != nil && response.Diagnostics.Failure != nil && response.Diagnostics.Failure.TransportError != "" {
-			detail = response.Diagnostics.Failure.TransportError
-		}
-		h.RememberExchange(callID, r, raw, []byte(detail))
+		reason, detail := dpdiagnostics.UpstreamFaultFeedback(response.Diagnostics, "")
+		h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, 502, "upstream_error", detail, "", reason))
 		note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 		applyStreamTiming(&note, response, start)
 		note.Upstream = response.Diagnostics
 		h.AnnotateCall(callID, note)
 		h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
-		util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
+		util.WriteTypedReasonError(w, r.URL.Path, 502, "upstream_error", detail, "", reason)
 		return
 	}
 	var doc map[string]any

@@ -328,6 +328,14 @@ export interface components {
              * @description 采集时固定的正文到期时刻 / Body expiry fixed at capture time
              */
             body_capture_expires_at?: string;
+            /** @description 授权日志可见的当前账号显示名。无显示名时省略 / Display name of the account on an authorized log row. Omitted if unavailable. */
+            user_name?: string;
+            /**
+             * @description 日志分级独立于原始状态，4xx 归警告，5xx 和缺少失败状态码的失败归错误 / Log severity is separate from the original status. HTTP 4xx are warnings. HTTP 5xx or failures without an HTTP failure status are errors.
+             * @enum {string}
+             */
+            severity?: "success" | "warning" | "error";
+            diagnosis?: components["schemas"]["LogDiagnosis"];
         } & {
             [key: string]: unknown;
         };
@@ -430,6 +438,19 @@ export interface components {
             page_size: number;
             has_more: boolean;
         };
+        /** @description 只读原因码和已观测事实，正文详情遵循原权限和审计 / Read-only reason codes and observed facts. Full bodies retain existing authorization and audit. */
+        LogDiagnosis: {
+            code?: string;
+            model_missing_reason?: string;
+            user_missing_reason?: string;
+            team_missing_reason?: string;
+            upstream_status?: number;
+            phase?: string;
+            cooling_deployments?: number;
+            compatible_deployments?: number;
+            /** @enum {string} */
+            request_method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+        };
     };
     responses: {
         /** @description 失败HTTP 400，不得当成功。 / Failure HTTP 400, never success. */
@@ -526,6 +547,8 @@ export interface operations {
                 sort_by?: string;
                 sort_order?: string;
                 status_filter?: string;
+                /** @description 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter. */
+                severity?: "warning" | "error";
                 group_by_session?: string;
                 /** @description 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID */
                 key_hash?: string;
@@ -585,6 +608,8 @@ export interface operations {
                 sort_by?: string;
                 sort_order?: string;
                 status_filter?: string;
+                /** @description 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter. */
+                severity?: "warning" | "error";
                 group_by_session?: string;
                 /** @description 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID */
                 key_hash?: string;
@@ -644,6 +669,8 @@ export interface operations {
                 sort_by?: string;
                 sort_order?: string;
                 status_filter?: string;
+                /** @description 警告与错误按级别筛选，在分页前生效。省略时沿用原状态筛选 / Filters warnings or errors before pagination. Omission preserves the existing status filter. */
+                severity?: "warning" | "error";
                 group_by_session?: string;
                 /** @description 密钥 Hash 精确匹配；api_key 仍指密钥 ID / Exact recorded key hash; api_key still means key ID */
                 key_hash?: string;
