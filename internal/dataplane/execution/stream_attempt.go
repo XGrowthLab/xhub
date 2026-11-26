@@ -31,19 +31,23 @@ func (a streamAttempt) mustStopAfterFailure(preparationFailed, nativeResponses b
 }
 
 // initialFailureBody 为因故必须结束的流生成首帧之前的 HTTP 错误，供 Serve 同时响应客户端和保存诊断。
-// path 决定网关错误的协议形状，nativeResponses 表示原生响应不可重放，diagnostic 保存已观察的上游事实。
-// 成功、已输出或写客户端失败时返回 nil。供应商明确的原生错误保留原字段，本地错误才写入网关原因。
-func (a streamAttempt) initialFailureBody(path string, nativeResponses bool, diagnostic *dpdiagnostics.UpstreamDiagnostics) []byte {
+// path、callerProtocol 决定 HTTP 错误的协议形状，upstreamFailure 表示原生响应或历史兼容尝试的上游失败。
+// diagnostic 保存已观察的上游事实。成功、已输出或写客户端失败时返回 nil，明确供应商错误保留原字段。
+func (a streamAttempt) initialFailureBody(path, callerProtocol string, upstreamFailure bool, diagnostic *dpdiagnostics.UpstreamDiagnostics) []byte {
 	if a.err == nil || a.clientStarted || errors.Is(a.err, dpstream.ErrClientWrite) {
 		return nil
 	}
 	const status = http.StatusBadGateway
-	if !nativeResponses {
+	if !upstreamFailure {
 		return util.TypedReasonErrorBody(path, status, "history_unavailable", dpdiagnostics.SafeErr(a.err), "", "history_unavailable")
 	}
 	var vendor *dpdiagnostics.UpstreamError
 	if errors.As(a.err, &vendor) {
-		if raw, err := json.Marshal(dpdiagnostics.ErrorEnvelope(vendor)); err == nil {
+		envelope := dpdiagnostics.ErrorEnvelope(vendor)
+		if callerProtocol == "anthropic-messages" {
+			envelope["type"] = "error"
+		}
+		if raw, err := json.Marshal(envelope); err == nil {
 			return raw
 		}
 	}

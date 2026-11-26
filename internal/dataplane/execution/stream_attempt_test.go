@@ -60,12 +60,13 @@ func TestInitialStreamFailureBody(t *testing.T) {
 		"response_id": "resp_vendor",
 	}}
 	for _, tc := range []struct {
-		name                    string
-		attempt                 streamAttempt
-		native                  bool
-		kind, code, reason, ref string
+		name, protocol                        string
+		attempt                               streamAttempt
+		native                                bool
+		kind, code, reason, ref, envelopeType string
 	}{
-		{name: "原生供应商错误", attempt: streamAttempt{err: vendor}, native: true, kind: "api_error", code: "vendor_busy", ref: "resp_vendor"},
+		{name: "原生供应商错误", protocol: "openai-responses", attempt: streamAttempt{err: vendor}, native: true, kind: "api_error", code: "vendor_busy", ref: "resp_vendor"},
+		{name: "消息历史兼容供应商错误", protocol: "anthropic-messages", attempt: streamAttempt{err: vendor}, native: true, kind: "api_error", code: "vendor_busy", ref: "resp_vendor", envelopeType: "error"},
 		{name: "原生传输中断", attempt: streamAttempt{err: io.ErrUnexpectedEOF}, native: true, kind: "upstream_error", code: "502", reason: "upstream_stream_interrupted"},
 		{name: "历史准备错误", attempt: streamAttempt{err: errors.New("history commit failed")}, kind: "history_unavailable", code: "502", reason: "history_unavailable"},
 		{name: "正常流"},
@@ -76,7 +77,7 @@ func TestInitialStreamFailureBody(t *testing.T) {
 			diagnostic := &dpdiagnostics.UpstreamDiagnostics{StatusCode: http.StatusOK, Failure: &dpdiagnostics.Failure{
 				Phase: "response_transfer", Kind: "unexpected_eof", TransportError: "unexpected EOF",
 			}}
-			raw := tc.attempt.initialFailureBody(path, tc.native, diagnostic)
+			raw := tc.attempt.initialFailureBody(path, tc.protocol, tc.native, diagnostic)
 			if tc.kind == "" {
 				if raw != nil || diagnostic.Outcome != nil {
 					t.Fatalf("不可写 HTTP 错误的流不应生成响应: %s", raw)
@@ -85,10 +86,11 @@ func TestInitialStreamFailureBody(t *testing.T) {
 			}
 			var doc struct {
 				Error      struct{ Type, Code, Reason string }
+				Type       string
 				ResponseID string `json:"response_id"`
 			}
 			if err := json.Unmarshal(raw, &doc); err != nil || doc.Error.Type != tc.kind ||
-				doc.Error.Code != tc.code || doc.Error.Reason != tc.reason || doc.ResponseID != tc.ref {
+				doc.Error.Code != tc.code || doc.Error.Reason != tc.reason || doc.ResponseID != tc.ref || doc.Type != tc.envelopeType {
 				t.Fatalf("首帧错误正文与观测事实不符: %s (%v)", raw, err)
 			}
 			if tc.native && tc.reason != "" {

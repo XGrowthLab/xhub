@@ -78,6 +78,8 @@ curl "$XHUB_BASE_URL/bypass/anthropic/v1/messages" \
 
 ## Errors and troubleshooting
 
+If the upstream returns a `400` for an invalid thinking signature, XHub can retry once on the same deployment with thinking blocks from completed turns omitted. Text and tool records stay in the request. During tool continuation, recovery requires the error to identify an earlier completed turn. The current tool round keeps its signed blocks intact.
+
 | HTTP | Meaning |
 | --- | --- |
 | 400 | Invalid request. Check JSON, parameters and query. |
