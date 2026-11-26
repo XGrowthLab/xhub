@@ -29,4 +29,16 @@
 
 标准安装使用 /opt/xhub/docker-compose.yml。源码构建更新时，重新构建镜像后用该文件重建应用服务。首次从界面切换镜像后，执行器会维护状态目录中的 compose.override.json。启用执行器后，人工运行 Compose 时应在原文件之后添加该覆盖文件，保持应用与指定摘要一致。不要删除上一版本镜像，直到不再需要该回退点。state.json 保留事务、操作者和最近回退依据，按实例运维权限保管。
 
-第一期要求两个版本的数据库兼容标识一致。标识覆盖 internal/iam、internal/store、cmd/gateway 下的 Go 和 SQL 源文件，以及 go.mod 和 go.sum。测试文件不参与计算。依赖和启动代码的变更即使没有改表，也可能需要走正常主机发布流程。数据库备份和恢复见[部署备份盘点与轮换](deployment-backup-rotation.md)。
+控制台升级要求两个版本使用相同的数据库兼容标识。发布 CI 根据建表和迁移 SQL、Go 迁移源码、ORM 建表定义、启动代码、存储格式和依赖锁来计算标识。普通日志查询的修改可以沿用现有标识。新增迁移放在 `migrations` 目录或按 `*_migration.go` 命名。更改上述指纹范围以外的不兼容持久化格式时，维护者须同步递增 `deploy/update_manifest.py` 中的 `DATABASE_FORMAT_VERSION`。兼容标识实际变化时，通过主机发布流程升级。数据库备份和恢复见[部署备份盘点与轮换](deployment-backup-rotation.md)。
+
+### 从 beta.3 或 beta.4 升级
+
+修复版沿用 `beta.3` 的兼容标识。`beta.3` 实例在测试版渠道检查修复版后，可以直接点击「立即更新」。已经运行 `beta.4` 且仍使用旧版主机执行器的实例，需先刷新一次执行器。管理员在确认更新器空闲后，从修复版的源码目录运行以下命令。自定义安装使用 systemd 单元 `ExecStart` 中的脚本目录。
+
+```sh
+updater_dir=/opt/xhub/updater
+sudo install -m 0644 deploy/update_manifest.py deploy/update_agent.py "$updater_dir/" &&
+  sudo systemctl restart xhub-updater.service
+```
+
+刷新执行器保留现有镜像、Compose 配置和数据库。重启完成后，在控制台重新检查更新即可。

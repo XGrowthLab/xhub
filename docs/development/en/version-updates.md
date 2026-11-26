@@ -29,4 +29,16 @@ The updater downloads and verifies both images before the switch. Gateway shutdo
 
 The standard installation uses /opt/xhub/docker-compose.yml. For a source deployment update, rebuild both images and recreate the application services with this file. The service manages compose.override.json in its state directory after the first in-console image switch. Include this file after the base Compose file in subsequent manual Compose operations. Retain the previous images while their rollback point is in use. Keep the state.json record restricted to deployment administrators.
 
-This version requires matching database identifiers. The fingerprint covers Go and SQL source files under internal/iam, internal/store and cmd/gateway, plus go.mod and go.sum. It excludes test files. A dependency or startup change can therefore require the ordinary host release procedure even when the schema is unchanged. See [deployment backup inventory and rotation](deployment-backup-rotation.md).
+Console updates require matching database compatibility identifiers. Release CI fingerprints table and migration SQL, Go migrations, ORM table definitions, startup code, storage formats, and dependency locks. Ordinary changes to log queries keep the same identifier. Put new migrations in a `migrations` directory or name them `*_migration.go`. Increment `DATABASE_FORMAT_VERSION` in `deploy/update_manifest.py` when introducing an incompatible stored format outside the fingerprinted sources. Use the host release procedure when the identifier changes. See [deployment backup inventory and rotation](deployment-backup-rotation.md).
+
+### Updating from beta.3 or beta.4
+
+The fixed release keeps the `beta.3` compatibility identifier. On `beta.3`, check the beta channel and select **Update now** when the fixed release appears. Installations running `beta.4` with an older host updater need a one-time updater refresh. While the updater is idle, run these commands from the fixed release source directory. With a custom installation, use the directory from the systemd unit's `ExecStart`.
+
+```sh
+updater_dir=/opt/xhub/updater
+sudo install -m 0644 deploy/update_manifest.py deploy/update_agent.py "$updater_dir/" &&
+  sudo systemctl restart xhub-updater.service
+```
+
+The updater refresh preserves the deployed images, Compose configuration, and database. Check for the release again in the console after the service restarts.

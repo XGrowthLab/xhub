@@ -16,6 +16,25 @@ REPO = "XGrowthLab/xhub"
 NAMESPACE = "ghcr.io/xgrowthlab/xhub"
 COMPAT_LABEL = "io.xhub.database-compatibility"
 
+# beta.3 与 beta.4 的建表、启动迁移和存储格式一致。保留 beta.3 标识才能让已安装的旧执行器
+# 直接更新；只为正式发布的 beta.4 三元组登记旧标识，镜像和清单仍按原始字段核验。
+BASE_DATABASE_COMPATIBILITY = "81994808d891746e8d5a64e790e5fd4dc4044eeef1a596e7ca9a0a3aed4c4612"
+BASE_DATABASE_CONTRACT = "bf050ec8f9989c6246c20e904ab4298c76082e204f8440442392b7c82d0f5df1"
+LEGACY_DATABASE_COMPATIBILITY = {
+    ("v0.1.0-beta.4", "2a6b1ff215efcdef22ce4f6e9db6c7f3a902d3ee",
+     "3893505e9d4a5959e4d51abd18808a1d40dd5aed9efca13590ad8f058061a142"): BASE_DATABASE_COMPATIBILITY,
+}
+
+# 修改无法从迁移源码识别的持久化格式时递增此版本。启动和 xorm 隐式建表代码没有独立 SQL 文件，
+# 必须和显式迁移一起参与标识。普通日志查询、路由和界面代码不影响标识。
+DATABASE_FORMAT_VERSION = 1
+DATABASE_CONTRACT_FILES = frozenset({
+    "go.mod", "go.sum",
+    "internal/iam/db.go", "internal/iam/quota.go",
+    "internal/store/beans.go", "internal/store/engine.go", "internal/store/store.go",
+    "internal/store/compact_history.go", "internal/store/packed_history.go",
+})
+
 
 def version_key(tag):
     """解析已登记的正式及预发布标签，用于严格排序。非法或超长标签抛 ValueError。"""
@@ -46,20 +65,40 @@ def validate_manifest(value, namespace=NAMESPACE):
     return value
 
 
-def database_fingerprint(root):
-    """计算启动、持久化和迁移代码的保守标识；仅 CI 使用已检出的 Git 树，不读取运行数据库。"""
-    files = subprocess.check_output(
-        ["git", "ls-files", "-z", "--", "internal/iam", "internal/store", "cmd/gateway", "go.mod", "go.sum"], cwd=root
-    ).split(b"\0")
-    sources = [p for p in files if p and p.endswith((b".go", b".sql", b".mod", b".sum")) and not p.endswith(b"_test.go")]
-    if not sources:
+def database_contract_fingerprint(root):
+    """读取 root 的已跟踪迁移与存储格式输入，返回 CI 使用的兼容指纹；缺少必要源码时失败，不连接数据库。"""
+    tracked = set(subprocess.check_output(
+        ["git", "ls-files", "-z", "--", "internal", "cmd/gateway", "go.mod", "go.sum"], cwd=root,
+    ).decode().split("\0"))
+    if not DATABASE_CONTRACT_FILES <= tracked or "internal/iam/schema.sql" not in tracked:
         raise ValueError("database source paths missing")
-    digest = hashlib.sha256()
-    for raw_path in sorted(sources):
-        path = raw_path.decode()
-        content = (root / path).read_bytes()
-        digest.update(raw_path + b"\0" + hashlib.sha256(content).digest())
+    sources = set(DATABASE_CONTRACT_FILES)
+    for path in tracked:
+        parts = Path(path).parts
+        if path.endswith(".sql") and (path.startswith(("internal/iam/", "internal/store/")) or "migrations" in parts):
+            sources.add(path)
+        elif path.endswith(".go") and not path.endswith("_test.go") and (
+            path.startswith("cmd/gateway/") or "migrations" in parts or
+            parts[-1] in {"migration.go", "migrations.go", "schema.go"} or
+            path.endswith(("_migration.go", "_schema.go"))
+        ):
+            sources.add(path)
+    digest = hashlib.sha256(f"xhub-database-contract-v{DATABASE_FORMAT_VERSION}\0".encode())
+    for path in sorted(sources):
+        digest.update(path.encode() + b"\0" + hashlib.sha256((root / path).read_bytes()).digest())
     return digest.hexdigest()
+
+
+def database_fingerprint(root):
+    """生成发布清单和镜像标签使用的数据库标识；旧基线仅在 root 的兼容指纹一致时复用。"""
+    contract = database_contract_fingerprint(root)
+    return BASE_DATABASE_COMPATIBILITY if contract == BASE_DATABASE_CONTRACT else contract
+
+
+def database_compatibility_key(manifest):
+    """把已校验清单映射为可比较标识，供主机检查、升级和回退使用；不修改清单、摘要或镜像标签。"""
+    identity = (manifest["version"], manifest["revision"], manifest["database_compatibility"])
+    return LEGACY_DATABASE_COMPATIBILITY.get(identity, manifest["database_compatibility"])
 
 
 def main():
