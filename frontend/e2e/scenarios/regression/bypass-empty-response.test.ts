@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
+import { translate } from "../../../src/i18n/translate";
 
 /** 经真实网关验证空响应、出站断开、空错误正文和恢复后的账单，并在浏览器核对双语诊断。
- * 使用独立数据库与本地上游，不依赖生产密钥；finally 删除模型和密钥，运行器清理 schema。 */
+ * 比较客户端安全原因和独立传输详情。使用隔离数据库与本地上游，finally 删除模型和密钥，运行器清理 schema。 */
 test("empty native response fails without replay and leaves confirmed billing intact", async ({ page }) => {
   await loginAdmin(page);
   const headers = { Authorization: "Bearer " + await sessionBearer(page) };
@@ -47,7 +48,11 @@ test("empty native response fails without replay and leaves confirmed billing in
     expect(result.failed.id).toBeTruthy();
     expect(result.recovered.id).toBeTruthy();
     expect(result.disconnected.status, result.disconnected.body).toBe(502);
-    expect(result.disconnected.body).toContain("upstream request failed");
+    expect(JSON.parse(result.disconnected.body)).toMatchObject({ error: {
+      type: "upstream_error", reason: "upstream_transport_error",
+      message: expect.stringContaining("could not receive a response from the upstream"),
+    } });
+    expect(result.disconnected.body).not.toContain("EOF");
     expect(result.emptyError).toMatchObject({ status: 502, body: "" });
     expect(result.interruptedStream).toMatchObject({ status: 200, body: expect.stringContaining("event: ping") });
     expect(result.interruptedError.status).toBe(502);
@@ -62,8 +67,12 @@ test("empty native response fails without replay and leaves confirmed billing in
     await expect.poll(async () => (await detail(result.failed.id))?.status).toBe("error");
     await expect.poll(async () => Number((await detail(result.failed.id))?.spend)).toBe(0);
     await expect.poll(async () => Number((await detail(result.recovered.id))?.spend)).toBeCloseTo(0.000012, 10);
-    await expect.poll(async () => (await detail(result.disconnected.id))?.metadata?.upstream_response).toMatchObject({
-      endpoint: "/v1/messages", status_code: 0, failure: { phase: "upstream_request", transport_error: expect.stringContaining("EOF") },
+    await expect.poll(async () => detail(result.disconnected.id)).toMatchObject({
+      spend: 0, diagnosis: { code: "upstream_transport_error", phase: "upstream_request" },
+      metadata: { upstream_response: {
+        endpoint: "/v1/messages", status_code: 0,
+        failure: { phase: "upstream_request", transport_error: expect.stringContaining("EOF") },
+      } },
     });
     await expect.poll(async () => (await detail(result.emptyError.id))?.error).toContain("upstream returned HTTP 502 without an error body");
     await expect.poll(async () => (await detail(result.interruptedError.id))?.error).toContain("Provider saturated");
@@ -76,10 +85,13 @@ test("empty native response fails without replay and leaves confirmed billing in
     await page.keyboard.press("Escape");
     await stableGoto(page, "/logs?log_id=" + result.disconnected.id);
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByRole("alert")).toContainText("EOF");
+    await expect(dialog.getByRole("alert")).toContainText(translate("zh-CN", "logsUX.upstreamTransportError"));
     await expect(dialog.getByRole("region", { name: "完整错误详情" })).toBeVisible();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "English", exact: true }).click();
+    await stableGoto(page, "/logs?log_id=" + result.disconnected.id);
+    await expect(dialog.getByRole("alert")).toContainText(translate("en", "logsUX.upstreamTransportError"));
+    await page.keyboard.press("Escape");
     await stableGoto(page, "/logs?log_id=" + result.emptyError.id);
     await expect(dialog.getByRole("alert")).toContainText("Upstream returned HTTP 502 without an error body.");
     await expect(dialog).toContainText("HTTP Status");

@@ -4,7 +4,7 @@ import { translate, type Locale } from "../src/i18n/translate";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册双语Key真实编辑流程；locale选择语言，隔离数据库/真实网关/本地上游为前置。
- * 验证仅修改名称不请求Skill接口、不提交隐藏字段，读回权限预算不变，允许推理和拒绝越权均真实生效。
+ * 验证仅修改名称不请求 Skill 接口、不提交隐藏字段，读回权限预算不变，推理可用且拒绝越权时给出原因和操作指引。
  * finally按唯一别名回收Key，失败不能视为通过；不访问生产或外部插件服务。
  */
 export function registerKeyBasicEdit(locale: Locale) {
@@ -56,7 +56,15 @@ export function registerKeyBasicEdit(locale: Locale) {
       expect(denied.status()).toBe(403);
       const disallowed = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: keyHeaders, data: { model: "not-allowed", messages: [{ role: "user", content: "Verify model restrictions remain enforced." }] } });
       expect(disallowed.status()).toBe(401);
-      expect((await disallowed.json()).error.message).toBe("model not in allowed model list");
+      expect(await disallowed.json()).toMatchObject({
+        error: {
+          type: "invalid_request_error",
+          code: "401",
+          reason: "model_not_allowed",
+          param: "model",
+          message: expect.stringContaining("List the models available to this credential"),
+        },
+      });
       const chat = await page.request.post(GATEWAY + "/v1/chat/completions", { headers: keyHeaders, data: { model: "gpt-4o-mini", messages: [{ role: "user", content: "Verify basic key editing leaves inference available." }] } });
       expect(chat.status(), await chat.text()).toBe(200);
       expect((await chat.json()).choices[0].message.content).toContain("e2e-ok");
