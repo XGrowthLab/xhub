@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "../../helpers";
 
-/** 真实浏览器经过管理界面确认来源 -1 上界的分档，并通过隔离网关调用验证实际账单和中英文展示。
+/** 真实浏览器在同一行核对统一价和两档候选，再通过隔离网关调用验证来源 -1 分档的实际账单及双语展示。
  * 使用独立数据库和本地供应商；finally 删除部署，测试运行器清理专属 schema 和进程。 */
 test("market tier confirmation controls actual billing", async ({ page }) => {
   await loginAdmin(page);
@@ -64,7 +64,20 @@ test("market tier confirmation controls actual billing", async ({ page }) => {
     await expect(row).toContainText("输入 Token：5 < 数量 ≤ 128,000");
     await row.getByRole("button", { name: "核对并更新" }).click();
     const dialog = page.getByRole("dialog", { name: "确认更新 1 个部署" });
-    await expect(dialog).toContainText("输入 Token：5 < 数量 ≤ 128,000");
+    const comparison = dialog.getByRole("table", { name: "e2e-tier-deployment 价格对比" });
+    const inputRow = comparison.getByRole("row", { name: /^输入/ });
+    await expect(inputRow).toHaveCount(1);
+    const cells = inputRow.getByRole("cell");
+    await expect(cells.nth(0)).toContainText("统一价");
+    await expect(cells.nth(0)).toContainText("$1");
+    await expect(cells.nth(1)).toContainText("输入 Token：5 < 数量 ≤ 128,000");
+    await expect(cells.nth(1).getByRole("listitem")).toHaveCount(2);
+    await expect(inputRow.getByRole("rowheader")).toContainText("改为分档");
+    await expect(dialog.getByRole("button", { name: "确认更新价格" })).toBeInViewport();
+    await test.info().attach("tiered-price-comparison", {
+      body: await dialog.screenshot({ animations: "disabled" }),
+      contentType: "image/png",
+    });
     await dialog.getByRole("button", { name: "取消", exact: true }).click();
     expect(await cost()).toBeCloseTo(before, 10);
     await row.getByRole("button", { name: "核对并更新" }).click();
