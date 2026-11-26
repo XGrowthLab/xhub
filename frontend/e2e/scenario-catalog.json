@@ -3345,6 +3345,13 @@
     "environment": "default offline"
   },
   {
+    "id": "REG-openai-history-recovery",
+    "file": "e2e/scenarios/regression/openai-history-recovery.test.ts",
+    "title": "Chat and Responses preserve public history during reasoning recovery",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
     "id": "REG-anthropic-thinking-recovery",
     "file": "e2e/scenarios/regression/anthropic-thinking-recovery.test.ts",
     "title": "Anthropic bypass recovers stale thinking after a model switch",

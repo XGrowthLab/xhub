@@ -114,6 +114,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		body = llmdialogue.PortableResponsesObject(body, "input")
 		w.Header().Set("X-XHub-History-Mode", "portable")
 	}
+	if op == "chat" {
+		// 新用户轮次使用公开历史，保持与标准 Responses 的迁移语义一致。
+		// 活跃工具轮次、服务器引用仍走原归属校验，并正常鉴权、预算校验和护栏。
+		if portable, ok := llmdialogue.PortableChatHistory(body); ok {
+			body = portable
+			w.Header().Set("X-XHub-History-Mode", "portable")
+		}
+	}
 	plan := h.PlanRoute(r, alias, body, p)
 	w.Header().Set("X-Session-Id", plan.SessionID)
 	h.AnnotateCall(callID, dpcontract.CallNote{SessionID: plan.SessionID, SessionSource: plan.SessionSource})
@@ -444,7 +452,10 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				}
 			}
 
-			for try := 0; try < routeCfg.Retries(); try++ {
+			execution, _ := providerdeployment.Execution(dep)
+			repairingHistory := false
+			limit := routeCfg.Retries()
+			for try := 0; try < limit; try++ {
 				if stopCanceled(nil, nil, did, 0) {
 					return
 				}
@@ -469,12 +480,8 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					util.Info("process step=capability_dropped call_id=%q deployment_id=%q capability=web_search reason=deployment_unsupported", callID, router.DeploymentID(rawDep))
 				}
 				if budget, ok := h.(dpcontract.BudgetHost); ok {
-					protocol := ""
-					if transport, exists := providerdeployment.Execution(dep); exists {
-						protocol = transport.Protocol
-					}
 					var allowed bool
-					built.Body, allowed = budget.PrepareBudgetAttempt(w, r, p, callID, dep, protocol, built.Body, start)
+					built.Body, allowed = budget.PrepareBudgetAttempt(w, r, p, callID, dep, execution.Protocol, built.Body, start)
 					if !allowed {
 						return
 					}
@@ -520,7 +527,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					}
 					h.NoteFailure(router.CooldownID(rawDep), routeCfg)
 					util.Error("upstream dial path=%s provider=%s model=%s base_host=%s err=%s", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), dpdiagnostics.SafeErr(err))
-					if dialogue.NativeResponses {
+					if dialogue.NativeResponses || repairingHistory {
 						// 提交后网络错误不能证明供应商未执行，原生灰度不自动重放生成。
 						writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(err), nil)
 						return
@@ -537,7 +544,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					diagnostic.FirstByteAt = *firstByte
 				}
 				h.AnnotateCall(callID, dpcontract.CallNote{Upstream: diagnostic})
-				if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+				if !repairingHistory && (resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests) {
 					// 重试前保存完整错误正文；若所有候选都失败，最终日志必须能还原最后一次上游响应。
 					var readErr error
 					lastResponse, readErr = io.ReadAll(resp.Body)
@@ -591,9 +598,20 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						util.WriteTypedError(w, r.URL.Path, resp.StatusCode, "upstream_error", "upstream error response body was interrupted")
 						return
 					}
+					if !repairingHistory && !plan.Required && errorAttempt.readErr == nil && r.Context().Err() == nil {
+						if recovered, ok := dptransport.RecoverDialogueHistory(execution.Protocol, built.Body, errorAttempt.status, errorAttempt.body); ok {
+							// 已收到完整拒绝且还未发客户端响应。同一部署只补发一次，
+							// 复用调用 ID 并重新进行鉴权、预算检查和出站计量。
+							cancelAttempt()
+							h.DecBusy(did)
+							util.Debug("retry after invalid reasoning history call_id=%s", callID)
+							built.Body, repairingHistory, limit = recovered, true, try+2
+							continue
+						}
+					}
 					resp.Body = io.NopCloser(bytes.NewReader(errorAttempt.body))
 					errorKind := dprouting.FallbackKind(errorAttempt.status, errorAttempt.body)
-					if errorAttempt.readErr == nil && errorKind != "" && !fallbacks.Disabled && len(baseRouteCfg.ModelFallbacks[fallbacks.Current].Targets(errorKind)) > 0 {
+					if !repairingHistory && errorAttempt.readErr == nil && errorKind != "" && !fallbacks.Disabled && len(baseRouteCfg.ModelFallbacks[fallbacks.Current].Targets(errorKind)) > 0 {
 						cancelAttempt()
 						h.DecBusy(did)
 						lastStatus = resp.StatusCode
@@ -671,14 +689,14 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 							}
 							util.Error("upstream stream path=%s provider=%s model=%s base_host=%s err=%s", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), dpdiagnostics.SafeErr(attempt.err))
 						}
-						if attempt.mustStopAfterFailure(preparationFailed, dialogue.NativeResponses) {
+						if attempt.mustStopAfterFailure(preparationFailed, dialogue.NativeResponses || repairingHistory) {
 							// 已开始输出、历史准备失败或原生响应不可安全重放时，不重试或换模型；记录已有用量与失败事实后结束。
 							h.RememberExchange(callID, r, raw, attempt.body)
 							h.AnnotateCall(callID, dpcontract.CallNote{Streamed: true, TTFTMs: dpusage.TtftMillis(attempt.ttft), Provider: supplier, CacheKey: ck, SessionID: plan.SessionID})
 							h.RecordSpend(w, p, callID, alias, op, attempt.usage, start, false, http.StatusBadGateway, did)
 							if !attempt.clientStarted && !errors.Is(attempt.err, dpstream.ErrClientWrite) {
 								kind := "history_unavailable"
-								if dialogue.NativeResponses {
+								if dialogue.NativeResponses || repairingHistory {
 									kind = "upstream_error"
 								}
 								util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, kind, dpdiagnostics.SafeErr(attempt.err))
@@ -721,14 +739,13 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						return
 					}
 					h.NoteFailure(did, routeCfg)
-					if dialogue.NativeResponses {
+					if dialogue.NativeResponses || repairingHistory {
 						writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(attempt.readErr), nil)
 						return
 					}
 					continue
 				}
 				if dpdialogue.CallerProtocol(op) != "" && attempt.status < 400 {
-					execution, _ := providerdeployment.Execution(dep)
 					var result llmdialogue.DialogueResult
 					var conversionErr error
 					if dialogue.NativeResponses {
@@ -737,7 +754,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						result, conversionErr = llmdialogue.ParseDialogueResult(execution.Protocol, attempt.body)
 					}
 					if conversionErr != nil {
-						if dialogue.NativeResponses {
+						if dialogue.NativeResponses || repairingHistory {
 							// 上游已返回成功HTTP，原生终态损坏不能再次生成；保留失败和已有用量供对账。
 							h.NoteFailure(did, routeCfg)
 							var observed map[string]any
@@ -814,6 +831,10 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				h.WriteChatJSON(w, p, callID, alias, ck, op, "", attempt.body, attempt.status, start, depID, fallbacks.PoolAlias, rawDep.ModelName)
 				return
 			}
+			if repairingHistory {
+				// 兼容出站已结束，即使没有成功终态也不能使用改写的历史换其他部署。
+				goto completedAttempts
+			}
 		}
 
 	nextFallbackModel:
@@ -824,6 +845,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 		}
 	}
 
+completedAttempts:
 	// 最终失败仍写交互与零费用用量行，使控制台能查到请求，而非只留下进程日志。
 	// 未发出 HTTP 时区分凭据和编码错误；已经尝试 HTTP 时保留最后上游状态/正文或安全错误。
 	if !triedHTTP {
