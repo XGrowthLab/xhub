@@ -159,7 +159,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
               model,
               stream,
               ...(stream && { stream_options: { include_usage: true } }),
-              messages: [{ role: "user", content: `Verify concurrent billing after recovery, request ${index}.` }],
+              messages: [{ role: "user", content: index === 1 ? "A".repeat(512 * 1024) : `Verify concurrent billing after recovery, request ${index}.` }],
             },
           });
           expect(reply.status(), await reply.text()).toBe(200);
@@ -212,11 +212,11 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       const deferred = await page.request.post(control + "/usage-spool/defer", { data: { model } });
       expect(deferred.status(), await deferred.text()).toBe(200);
       expect(await deferred.json()).toEqual({ pending: 1, quarantined: 0 });
-      // 多个调用同时观察同一份冲突账单，均需等待恢复或收到明确拒绝。
-      await Promise.all([0, 1].map(async () => {
+      // 普通和流式调用同时观察到未结清的账单。即使流式请求已提前探测磁盘，两种客户端均须收到相同的拒绝。
+      await Promise.all([false, true].map(async (stream) => {
         const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
           headers,
-          data: { model, messages: [{ role: "user", content: "Check admission while settlement is pending." }] },
+          data: { model, stream, messages: [{ role: "user", content: stream ? "A".repeat(512 * 1024) : "Check admission while settlement is pending." }] },
         });
         expect(refused.status(), await refused.text()).toBe(503);
         expect((await refused.json()).error.type).toBe("billing_storage_pending");

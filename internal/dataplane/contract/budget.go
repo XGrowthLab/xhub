@@ -18,3 +18,9 @@ type BudgetHost interface {
 	// 参数为响应、原请求和调用 ID；返回是否继续，ReleaseCall 负责释放临时快照和队列槽位。
 	MarkBudgetAttemptSubmitted(http.ResponseWriter, *http.Request, string) bool
 }
+
+// StreamBudgetProbeHost 允许统一流式入口在准备协议和路由时并行探测账单磁盘。
+// WithStreamBudgetProbe 返回携带本次探针的请求；未开启队列或已有探针时返回原请求。最终扣费准入仍由 BudgetHost 执行。
+type StreamBudgetProbeHost interface {
+	WithStreamBudgetProbe(*http.Request, string) *http.Request
+}
