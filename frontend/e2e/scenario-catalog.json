@@ -3359,6 +3359,13 @@
     "environment": "default offline"
   },
   {
+    "id": "REG-messages-beta-header",
+    "file": "e2e/scenarios/regression/messages-beta.test.ts",
+    "title": "standard Messages forwards Anthropic beta features",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
     "id": "REG-model-view-en",
     "file": "e2e/scenarios/regression/model-view-hot-update-en.test.ts",
     "title": "model view hot update en",
