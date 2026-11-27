@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// ErrInvalidUpstreamResponse 标记已读取的上游内容违反协议，由协议解析器包装具体字段，供日志与错误包络识别。
+var ErrInvalidUpstreamResponse = errors.New("invalid upstream response")
+
+// ErrUnsupportedResponseBridge 标记合法上游内容无法安全转换，由协议适配器包装具体字段，供日志与错误包络识别。
+var ErrUnsupportedResponseBridge = errors.New("unsupported response bridge")
+
 // Failure 保存请求中断时可观测的事实，不根据 499 推断用户操作或供应商责任。
 // Phase 指明读取入站正文、等待上游或传输响应；取消来源未知时固定标为 unknown。
 // 错误文本经过已有脱敏器并限制长度；不保存额外正文、鉴权头或任意 context cause。
@@ -47,6 +53,10 @@ func ObserveFailure(ctx context.Context, phase string, err error, elapsed time.D
 		f.Kind = "request_canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
 		f.Kind = "timeout"
+	case errors.Is(err, ErrInvalidUpstreamResponse):
+		f.Kind = "protocol_error"
+	case errors.Is(err, ErrUnsupportedResponseBridge):
+		f.Kind = "unsupported_response_bridge"
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		f.Kind = "unexpected_eof"
 	}
@@ -83,6 +93,12 @@ func BodyFailureStatus(f *Failure) (int, string, string) {
 func UpstreamFaultFeedback(d *UpstreamDiagnostics, fallback string) (string, string) {
 	if d != nil && d.Failure != nil {
 		failure := d.Failure
+		if failure.Kind == "protocol_error" {
+			return "upstream_invalid_response", fallback
+		}
+		if failure.Kind == "unsupported_response_bridge" {
+			return failure.Kind, fallback
+		}
 		if failure.Kind == "timeout" {
 			if failure.Phase == "response_transfer" {
 				return "upstream_timeout", "The upstream response timed out before it was complete."

@@ -118,7 +118,7 @@ type projectedFieldPositions struct {
 // ParseDialogue 同时保存原协议正文和可桥接的文本、用户图片和函数投影，参数为入口协议与护栏后的正文。
 // 统一入口调用；同协议交由上游校验新增字段，跨协议仅允许已映射的能力，返回输入错误或私有对话。
 // 参考 LiteLLM 的原生适配优先、桥接后备分层，不按模型名称猜测协议；未知能力不会被悄悄删除后外发。
-// Responses 规范已识别的完整公开历史：旧桥接 ID 和 Grok 公开摘要元数据；其他原生项、密文和引用保留身份。
+// Responses 规范已识别的公开历史和文本推理；其他原生项、密文和引用保留身份。
 func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 	if protocol != "openai-responses" && protocol != "openai-chat" && protocol != "anthropic-messages" {
 		return parseUnifiedDialogue(protocol, body, projectedFieldPositions{})
@@ -190,6 +190,7 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 	var positions projectedFieldPositions
 	responseTools := append([]any(nil), dialogueList(native["tools"])...)
 	toolPaths := map[int]string{}
+	previousResponseReasoning := ""
 	for i, item := range items {
 		m := dialogueMap(item)
 		if m == nil {
@@ -219,7 +220,10 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 			}
 		}
 		if protocol == "openai-responses" {
-			switch dialogueString(cp["type"]) {
+			itemType := dialogueString(cp["type"])
+			previousReasoning := previousResponseReasoning
+			previousResponseReasoning = ""
+			switch itemType {
 			case "additional_tools":
 				// Codex 会把延迟工具声明放在输入项里；它们是工具定义，不是用户消息，必须与顶层工具一同双向映射。
 				definitions, ok := cp["tools"].([]any)
@@ -254,6 +258,18 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 				if err := projectAgentCall(cp); err != nil {
 					return Dialogue{}, atRequestField(fmt.Sprintf("input[%d]", i), err)
 				}
+				if parts, ok := cp["content"].([]any); ok && (itemType == "message" || itemType == "") && cp["role"] == "assistant" {
+					// 续轮可能回传七牛的混合消息。同协议保留原历史，跨协议只投影经过验证的公开推理。
+					content, reasoning, err := splitResponsesReasoningText(parts, fmt.Sprintf("input[%d].content", i))
+					if err != nil {
+						return Dialogue{}, err
+					}
+					cp["content"] = content
+					if reasoning != "" && reasoning != previousReasoning {
+						turns = append(turns, map[string]any{"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": reasoning}}})
+						positions.turns = append(positions.turns, i)
+					}
+				}
 			case "reasoning":
 				if cp["encrypted_content"] != nil {
 					bridgeError = &RequestFieldError{Field: fmt.Sprintf("input[%d].encrypted_content", i), Message: "encrypted reasoning history requires native Responses"}
@@ -261,6 +277,18 @@ func ParseDialogue(protocol string, body map[string]any) (Dialogue, error) {
 				}
 				// 官方客户端会为公开推理补 encrypted_content:null；共享投影移除空占位，原生正文仍保留原值。
 				delete(cp, "encrypted_content")
+				block, err := MessagesReasoningBlock(cp)
+				if err != nil {
+					return Dialogue{}, atRequestField(fmt.Sprintf("input[%d]", i), err)
+				}
+				previousResponseReasoning = dialogueString(block["thinking"])
+				if _, exists := cp["content"]; exists {
+					// 独立 reasoning.content 是公开文本时，以既有 summary 形状接入共享投影。
+					delete(cp, "content")
+					if previousResponseReasoning != "" {
+						cp["summary"] = []any{map[string]any{"type": "summary_text", "text": previousResponseReasoning}}
+					}
+				}
 			case "compaction":
 				// 压缩历史承载不可重建的上下文，必须保留完整密文且只交原生 Responses 校验。
 				if cipher, ok := cp["encrypted_content"].(string); !ok || strings.TrimSpace(cipher) == "" {
@@ -704,62 +732,17 @@ func ParseDialogueResult(protocol string, raw []byte) (DialogueResult, error) {
 		return DialogueResult{}, err
 	}
 	bridgeError := ""
-	var messagesReasoning string
+	var reasoning, responsesMessageReasoning string
 	if protocol == "anthropic-messages" {
-		var err error
-		messagesReasoning, bridgeError, err = projectMessagesResult(projection)
+		reasoning, bridgeError, err = projectMessagesResult(projection)
 		if err != nil {
 			return DialogueResult{}, err
 		}
 	} else if protocol == "openai-responses" {
-		list, ok := projection["output"].([]any)
-		if !ok {
-			return DialogueResult{}, fmt.Errorf("invalid upstream output")
+		reasoning, responsesMessageReasoning, bridgeError, err = projectResponsesResult(projection)
+		if err != nil {
+			return DialogueResult{}, err
 		}
-		items := []any{}
-		for _, value := range list {
-			item := dialogueMap(value)
-			if item == nil {
-				return DialogueResult{}, fmt.Errorf("invalid upstream output item")
-			}
-			switch item["type"] {
-			case "message", "function_call":
-				if item["namespace"] != nil && item["namespace"] != "" {
-					bridgeError = "namespaced function call"
-				}
-				if item["type"] == "message" {
-					content := []any{}
-					for _, part := range dialogueList(item["content"]) {
-						block := dialogueMap(part)
-						if block["type"] == "refusal" {
-							if _, ok := block["refusal"].(string); !ok {
-								return DialogueResult{}, fmt.Errorf("invalid refusal")
-							}
-							bridgeError = "refusal output"
-						} else {
-							content = append(content, part)
-						}
-					}
-					if item["content"] != nil {
-						if _, ok := item["content"].([]any); ok {
-							item["content"] = content
-						}
-					}
-				}
-				items = append(items, item)
-			case "reasoning":
-				if dialogueString(item["id"]) == "" {
-					return DialogueResult{}, fmt.Errorf("reasoning item ID required")
-				}
-				// Responses 的 store=false 现会默认携带密文。校验后交给 Messages 的不透明封装，不能因此丢弃正常答案。
-				if _, err := MessagesReasoningBlock(item); err != nil {
-					return DialogueResult{}, err
-				}
-			default:
-				bridgeError = "output item " + dialogueString(item["type"])
-			}
-		}
-		projection["output"] = items
 	} else {
 		for _, value := range dialogueList(projection["choices"]) {
 			message := dialogueMap(dialogueMap(value)["message"])
@@ -777,6 +760,7 @@ func ParseDialogueResult(protocol string, raw []byte) (DialogueResult, error) {
 	if err != nil {
 		return r, err
 	}
+	r.Reasoning, r.ResponsesMessageReasoning = reasoning, responsesMessageReasoning
 	if protocol == "openai-chat" {
 		choices := dialogueList(native["choices"])
 		if len(choices) == 1 {
@@ -789,7 +773,6 @@ func ParseDialogueResult(protocol string, raw []byte) (DialogueResult, error) {
 			r.Reasoning = dialogueString(value)
 		}
 	} else if protocol == "anthropic-messages" {
-		r.Reasoning = messagesReasoning
 		if native["stop_reason"] == "refusal" {
 			r.Refused = true
 			r.Refusal, err = MessagesRefusalExplanation(native["stop_details"])
@@ -802,15 +785,6 @@ func ParseDialogueResult(protocol string, raw []byte) (DialogueResult, error) {
 				bridgeError = "partial output before Messages refusal requires native Messages"
 			}
 			r.Stop = "stop"
-		}
-	} else {
-		for _, part := range dialogueList(native["output"]) {
-			item := dialogueMap(part)
-			if item["type"] == "reasoning" {
-				for _, summary := range dialogueList(item["summary"]) {
-					r.Reasoning += dialogueString(dialogueMap(summary)["text"])
-				}
-			}
 		}
 	}
 	r.Source, r.Native, r.BridgeError = protocol, native, bridgeError

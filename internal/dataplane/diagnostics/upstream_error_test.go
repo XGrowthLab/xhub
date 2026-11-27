@@ -27,6 +27,7 @@ func TestLocalStreamFailureClassification(t *testing.T) {
 		{"network_timeout", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}, "request_timeout"},
 		{"truncated", io.ErrUnexpectedEOF, "stream_transport_error"},
 		{"decode", errors.New("invalid event"), "stream_transport_error"},
+		{"invalid_google_event", fmt.Errorf("%w: missing finishReason", ErrInvalidUpstreamResponse), "upstream_invalid_response"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ErrorEnvelope(tc.err)

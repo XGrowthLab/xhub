@@ -100,6 +100,10 @@ func ErrorEnvelope(err error) map[string]any {
 	kind := "stream_transport_error"
 	var timeout net.Error
 	switch {
+	case errors.Is(err, ErrInvalidUpstreamResponse):
+		kind = "upstream_invalid_response"
+	case errors.Is(err, ErrUnsupportedResponseBridge):
+		kind = "unsupported_response_bridge"
 	case errors.Is(err, context.Canceled):
 		kind = "request_canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():

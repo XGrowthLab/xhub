@@ -15,9 +15,9 @@ import (
 	"github.com/sunqirui1987/xhub/internal/util"
 )
 
-// PipeNativeDialogue 在同协议时保留完整 SSE 数据，参数与 PipeDialogue 相同；返回写出、用量、首帧耗时、日志捕获及错误。
+// PipeNativeDialogue 在同协议时保留 SSE 内容，参数与 PipeDialogue 相同；返回写出、用量、首帧耗时、日志捕获及错误。
 // 标准入口仍先经过鉴权、额度和护栏；本函数仅处理传输，复用共享增量校验，不转入 bypass 链。
-// Responses 校验完成对象；Messages 校验原生内容块/签名/工具快照，终态可见前提交归属；Chat 必须同时看到 finish_reason 与 DONE。
+// Responses 校验完成对象；Messages 校验原生内容块并整理序号，终态可见前提交归属；Chat 必须同时看到 finish_reason 与 DONE。
 // 截断、供应商失败、写入错误均返回失败，已写出时不能重试；关闭上游正文，捕获最多 2 MiB，不修改不透明推理项。
 func PipeNativeDialogue(w http.ResponseWriter, resp *http.Response, start time.Time, alias, protocol string, beforeComplete ...func(llmdialogue.DialogueResult)) (bool, map[string]any, time.Duration, []byte, error) {
 	return pipeNativeDialogue(w, resp, start, alias, protocol, false, false, nil, beforeComplete...)
@@ -100,6 +100,11 @@ func pipeNativeDialogue(w http.ResponseWriter, resp *http.Response, start time.T
 			state.usage = nativeMessages.usage
 			if err != nil {
 				break
+			}
+			// Anthropic 客户端按 content 数组下标读取。校验原始序号后同时整理 start、delta 和 stop，不触碰块内容或签名。
+			switch payload["type"] {
+			case "content_block_start", "content_block_delta", "content_block_stop":
+				payload["index"] = len(nativeMessages.blocks) - 1
 			}
 			if completed && len(beforeComplete) > 0 && beforeComplete[0] != nil {
 				// 客户端收到 message_stop 即可提交含原生签名的工具续轮；先记录同一连接归属。

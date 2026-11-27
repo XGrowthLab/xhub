@@ -3,6 +3,7 @@ package dialogue
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"google.golang.org/genai"
 )
@@ -333,9 +334,15 @@ func encodeGoogleDialogue(d Dialogue) (map[string]any, error) {
 	return out, nil
 }
 
-// parseGoogleDialogueResult 提取单候选文本、函数调用和实测用量；参数为原厂响应，返回结果或格式/安全阻断错误。
-// 同步与流解码调用；缺失用量禁止计价，未知内容不静默丢弃，工具 ID 缺失时按名称和位置关联。
-func parseGoogleDialogueResult(raw []byte) (DialogueResult, error) {
+// ParseGoogleDialogueFrame 解码 Gemini/Vertex SSE 单帧；raw 是 data JSON，返回正文、公开推理、用量和已明确的结束原因。
+// Google 流解码器调用。没有 finishReason 的增量保留空 Stop，独立用量帧不视为完成。不修改原始数据。
+func ParseGoogleDialogueFrame(raw []byte) (DialogueResult, error) {
+	return parseGoogleDialogueResult(raw, true)
+}
+
+// parseGoogleDialogueResult 解码单候选原厂响应；raw 是 JSON，frame 表示流式片段，返回共享结果或字段错误。
+// 同步和 SSE 解析共用。仅规范已知结束枚举，只转换公开思考文本，未知字段和签名不能静默丢弃。
+func parseGoogleDialogueResult(raw []byte, frame bool) (DialogueResult, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return DialogueResult{}, err
@@ -344,45 +351,71 @@ func parseGoogleDialogueResult(raw []byte) (DialogueResult, error) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return DialogueResult{}, err
 	}
-	r := DialogueResult{ID: result.ResponseID, Stop: "stop"}
+	r := DialogueResult{ID: result.ResponseID}
 	if m["error"] != nil {
 		return r, fmt.Errorf("Google upstream error")
 	}
 	candidates := result.Candidates
-	if len(candidates) != 1 || candidates[0] == nil {
-		return r, fmt.Errorf("one Google candidate required")
+	if block := result.PromptFeedback; len(candidates) == 0 && block != nil && block.BlockReason != "" {
+		return r, fmt.Errorf("Google prompt blocked: promptFeedback.blockReason=%q", block.BlockReason)
 	}
-	c := candidates[0]
-	stop := string(c.FinishReason)
-	if stop == "MAX_TOKENS" {
-		r.Stop = "length"
-	} else if stop != "" && stop != "STOP" {
-		return r, fmt.Errorf("Google candidate blocked: %s", stop)
-	}
-	// 官方类型解码后仍检查原始 part 的能力边界，避免忽略未知字段造成静默丢内容。
-	rawParts := dialogueList(dialogueMap(dialogueMap(dialogueList(m["candidates"])[0])["content"])["parts"])
-	if c.Content != nil {
-		for i, part := range c.Content.Parts {
-			if part == nil || i >= len(rawParts) || len(dialogueMap(rawParts[i])) != 1 {
-				return r, fmt.Errorf("unsupported Google response part")
+	switch {
+	case len(candidates) == 1 && candidates[0] != nil:
+		c := candidates[0]
+		switch strings.ToUpper(string(c.FinishReason)) {
+		case "STOP":
+			r.Stop = "stop"
+		case "MAX_TOKENS":
+			r.Stop = "length"
+		case "":
+			if !frame {
+				r.Stop = "stop"
 			}
-			if _, ok := dialogueMap(rawParts[i])["text"].(string); ok {
-				r.Text += part.Text
-			} else if f := part.FunctionCall; f != nil {
-				if f.Args == nil || f.Name == "" {
-					return r, fmt.Errorf("invalid Google function args or name")
+		default:
+			return r, fmt.Errorf("Google candidate blocked: candidates[0].finishReason=%q", c.FinishReason)
+		}
+		// SDK 类型解码后检查原始字段，避免把未知能力或厂商签名悄悄丢弃。
+		rawParts := dialogueList(dialogueMap(dialogueMap(dialogueList(m["candidates"])[0])["content"])["parts"])
+		if c.Content != nil {
+			for i, part := range c.Content.Parts {
+				if part == nil || i >= len(rawParts) {
+					return r, fmt.Errorf("invalid Google response part at candidates[0].content.parts[%d]", i)
 				}
-				args, _ := json.Marshal(f.Args)
-				id := f.ID
-				if id == "" {
-					id = fmt.Sprintf("google_%s_%d", f.Name, i)
+				fields := dialogueMap(rawParts[i])
+				if _, ok := fields["text"].(string); ok {
+					toThought, hasThought := fields["thought"].(bool)
+					if _, signed := fields["thoughtSignature"]; signed {
+						return r, fmt.Errorf("unsupported candidates[0].content.parts[%d].thoughtSignature", i)
+					}
+					if len(fields) != 1 && (len(fields) != 2 || !hasThought) {
+						return r, fmt.Errorf("unsupported Google text part fields at candidates[0].content.parts[%d]", i)
+					}
+					if toThought {
+						r.Reasoning += part.Text
+					} else {
+						r.Text += part.Text
+					}
+				} else if f := part.FunctionCall; f != nil && len(fields) == 1 {
+					if f.Args == nil || f.Name == "" {
+						return r, fmt.Errorf("invalid Google function args or name")
+					}
+					args, _ := json.Marshal(f.Args)
+					id := f.ID
+					if id == "" {
+						id = fmt.Sprintf("google_%s_%d", f.Name, i)
+					}
+					r.Calls = append(r.Calls, Turn{ID: id, Name: f.Name, Arguments: string(args)})
+				} else {
+					return r, fmt.Errorf("unsupported Google response capability at candidates[0].content.parts[%d]", i)
 				}
-				r.Calls = append(r.Calls, Turn{ID: id, Name: f.Name, Arguments: string(args)})
-			} else {
-				return r, fmt.Errorf("unsupported Google response capability")
 			}
 		}
+	case frame && len(candidates) == 0 && dialogueMap(m["usageMetadata"]) != nil:
+		// Google 可在终态后单独发送用量，candidates 可能省略或是空列表。
+	default:
+		return r, fmt.Errorf("one Google candidate required in candidates")
 	}
+
 	u := dialogueMap(m["usageMetadata"])
 	usage := map[string]any{}
 	for source, target := range map[string]string{"promptTokenCount": "prompt_tokens", "candidatesTokenCount": "completion_tokens"} {
@@ -409,16 +442,19 @@ func parseGoogleDialogueResult(raw []byte) (DialogueResult, error) {
 		usage["completion_tokens"] = n
 	}
 	r.Usage = NormalizeDialogueUsage(usage)
-	if len(r.Calls) > 0 {
+	if len(r.Calls) > 0 && r.Stop == "stop" {
 		r.Stop = "tool_calls"
 	}
 	return r, nil
 }
 
 // encodeGoogleDialogueResult 输出 Google 单候选结果；参数为共享回复，返回 JSON 或非法工具参数错误。
-// 同步和流终态调用；保持实测用量，安全或失败状态不制造成功结果。
+// 同步和流终态调用；正文与公开推理分别使用普通文本和 thought 部分，保持实际用量，不制造厂商签名。
 func encodeGoogleDialogueResult(r DialogueResult) ([]byte, error) {
 	parts := []any{}
+	if r.Reasoning != "" {
+		parts = append(parts, map[string]any{"text": r.Reasoning, "thought": true})
+	}
 	if r.Text != "" {
 		parts = append(parts, map[string]any{"text": r.Text})
 	}
