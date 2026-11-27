@@ -440,7 +440,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 			connection, upstreamModel := dep.MonitorIdentity()
 			h.AnnotateCall(callID, dpcontract.CallNote{Supplier: connection, APIBase: dep.LogAPIBase(), UpstreamModel: upstreamModel, UpstreamSelected: true})
 			if dpdialogue.CallerProtocol(op) != "" {
-				built, err = dpdialogue.BuildDialogue(dep, dialogue)
+				built, err = dpdialogue.BuildDialogue(dep, dialogue, r.Header)
 				if errors.Is(err, dpdialogue.ErrDialogueCredentials) {
 					missingCredential = true
 					util.Debug("skip deployment path=%s provider=%s model=%s reason=missing api key or api base", r.URL.Path, supplier, realModel)

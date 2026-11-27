@@ -90,7 +90,7 @@ func ProbeDialogue(ctx context.Context, client *http.Client, dep config.ModelEnt
 	upstream, err := BuildDialogue(dep, llmdialogue.Dialogue{
 		Turns:   []llmdialogue.Turn{{Role: "user", Text: "Reply with OK."}},
 		Options: map[string]any{"max_tokens": 1},
-	})
+	}, nil)
 	if err != nil {
 		return &DialogueProbeError{Kind: DialogueProbeConfiguration}
 	}
@@ -259,11 +259,12 @@ func DialogueRequestBody(body map[string]any) map[string]any {
 }
 
 // BuildDialogue 按部署登记的执行配置编码统一对话上游请求。
-// 参数 dep 为已附加凭据的部署，d 为治理后解析的对话。返回 Upstream 或凭据、能力、编码错误。
+// 参数 dep 为已附加凭据的部署，d 为治理后解析的对话，inbound 为调用方请求头，探测时为 nil。
+// 返回 Upstream 或凭据、能力、编码错误。
 // Serve 与 ProbeDialogue 调用；只使用登记 create 动作、鉴权头和协议编码器，不从域名或供应商名称猜路径。
 // 地址或密钥缺失返回 ErrDialogueCredentials；Google 流式使用登记 streaming 动作与 alt=sse。
-// 构造 URL、Header、Body，不实际发送 HTTP，不修改调用方对话；执行器负责上下文、重试和资源生命周期。
-func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue) (dptransport.Upstream, error) {
+// 同为 Anthropic Messages 时保留客户端 beta 标记。构造 URL、Header、Body，不发 HTTP 或修改输入；执行器负责重试和资源生命周期。
+func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue, inbound http.Header) (dptransport.Upstream, error) {
 	t, ok := providerdeployment.Execution(dep)
 	if !ok {
 		return dptransport.Upstream{}, fmt.Errorf("explicit upstream execution profile required")
@@ -300,6 +301,12 @@ func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue) (dptransport.U
 		for k, v := range t.Headers {
 			header.Set(k, v)
 		}
+		// Messages 的原生参数可能由 beta 头启用；跨协议没有对应语义，不能把此头转给其他协议。
+		if d.Source == "anthropic-messages" && t.Protocol == "anthropic-messages" {
+			for _, value := range anthropicBetaValues(inbound) {
+				header.Add("Anthropic-Beta", value)
+			}
+		}
 		value := key
 		if t.Auth.Prefix != "" {
 			value = t.Auth.Prefix + " " + value
@@ -322,6 +329,19 @@ func BuildDialogue(dep config.ModelEntry, d llmdialogue.Dialogue) (dptransport.U
 		return dptransport.Upstream{URL: target, Header: header, Body: raw, DroppedCapabilities: dropped}, nil
 	}
 	return dptransport.Upstream{}, fmt.Errorf("create operation is not registered")
+}
+
+// anthropicBetaValues 读取同协议出站所需的 beta 头值。参数 inbound 为入站头，可为 nil。
+// 若 Connection 指定该头为逐跳字段则返回 nil，否则返回原始多值供 BuildDialogue 逐个添加，不修改输入。
+func anthropicBetaValues(inbound http.Header) []string {
+	for _, line := range inbound.Values("Connection") {
+		for token := range strings.SplitSeq(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "Anthropic-Beta") {
+				return nil
+			}
+		}
+	}
+	return inbound.Values("Anthropic-Beta")
 }
 
 // BuildRegisteredOperation 构造 embedding、图片、音频、重排等非对话统一操作的登记请求。
