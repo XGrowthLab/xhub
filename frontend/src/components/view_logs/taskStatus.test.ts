@@ -10,4 +10,11 @@ describe("task lifecycle status", () => {
     expect(requestLogStatus({}).label).toBe("Success");
     expect(requestLogStatus({ status: "completed", error: "bad" }).tone).toBe("error");
   });
+
+  /** 前置服务端分级、历史状态和未成功的 HTTP 状态；验证警告与错误的颜色及翻译键，纯函数无需清理。 */
+  it("distinguishes warnings and service errors even when legacy status is absent", () => {
+    expect(requestLogStatus({ severity: "warning" })).toEqual({ tone: "warning", label: "logsUX.severityWarning" });
+    expect(requestLogStatus({ status: "success", metadata: { http_status: 401 } }).tone).toBe("warning");
+    expect(requestLogStatus({ severity: "error", metadata: { http_status: 499 } })).toEqual({ tone: "error", label: "logsUX.severityError" });
+  });
 });

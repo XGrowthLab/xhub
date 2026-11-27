@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { LogEntry } from "../columns";
-import { logErrorSummary } from "../logPresentation";
+import { logErrorSummary, logMissingReasonKey } from "../logPresentation";
 import { fullErrorDetails, isRequestFailure } from "../logErrors";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { formatLogCost } from "../formatLogCost";
@@ -154,7 +154,12 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
           </CardHeader>
           <CardContent>
             <DescriptionList>
-              <DescriptionItem label={t("Model")}>{logEntry.model}</DescriptionItem>
+              <DescriptionItem label={t("Model")}>{logEntry.model || t(logMissingReasonKey(logEntry, "model"))}</DescriptionItem>
+              <DescriptionItem label={t("Internal User")}>{logEntry.user_name || t(logMissingReasonKey(logEntry, "user"))}</DescriptionItem>
+              {logEntry.user && <DescriptionItem label={t("User ID")}><TruncatedValue value={logEntry.user} /></DescriptionItem>}
+              <DescriptionItem label={t("Team Name")}>
+                {metadata.user_api_key_team_alias || t(logMissingReasonKey(logEntry, "team"))}
+              </DescriptionItem>
               <DescriptionItem label={t("Credential Name")}>{logEntry.credential_name || "-"}</DescriptionItem>
               <DescriptionItem label={t("Call Type")}>{logEntry.call_type}</DescriptionItem>
               <DescriptionItem label={t("logs.reasoningEffort")}>
@@ -164,9 +169,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
                     : t("logs.reasoningEffortUnknown")}
                 </span>
               </DescriptionItem>
-              <DescriptionItem label={t("Model ID")}>
+              {logEntry.model_id && <DescriptionItem label={t("Model ID")}>
                 <TruncatedValue value={logEntry.model_id} />
-              </DescriptionItem>
+              </DescriptionItem>}
               <DescriptionItem label={t("API Base")}>
                 <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
               </DescriptionItem>

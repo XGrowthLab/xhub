@@ -54,6 +54,7 @@ func TestChatPublicReasoningSwitchRegression(t *testing.T) {
 		{"public-to-messages", "bypass_anthropic_messages", "", 200},
 		{"public-to-responses", "bypass_openai_responses", "", 200},
 		{"cipher-blocked", "bypass_anthropic_messages", "cipher", 400},
+		{"cipher-completed", "bypass_anthropic_messages", "cipher-completed", 200},
 		{"malformed-blocked", "bypass_anthropic_messages", "invalid", 400},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,13 +125,17 @@ func TestChatPublicReasoningSwitchRegression(t *testing.T) {
 				t.Fatalf("首轮丢失结构化推理: %v", message)
 			}
 			item := items[0].(map[string]any)
-			if tc.mutation == "cipher" {
+			if tc.mutation == "cipher" || tc.mutation == "cipher-completed" {
 				item["encrypted_content"] = "private-cipher"
 			}
 			if tc.mutation == "invalid" {
 				item["summary"].([]any)[0].(map[string]any)["signature"] = "unknown-signature"
 			}
-			second := call(map[string]any{"model": "target", "messages": []any{initial, message, map[string]any{"role": "tool", "tool_call_id": "call_read", "content": "unique-value"}}})
+			history := []any{initial, message, map[string]any{"role": "tool", "tool_call_id": "call_read", "content": "unique-value"}}
+			if tc.mutation == "cipher-completed" {
+				history = append(history, map[string]any{"role": "assistant", "content": "Finished."}, map[string]any{"role": "user", "content": "Continue."})
+			}
+			second := call(map[string]any{"model": "target", "messages": history})
 			if second.Code != tc.want {
 				t.Fatalf("切换接口状态错误: %d want=%d body=%s", second.Code, tc.want, second.Body.String())
 			}

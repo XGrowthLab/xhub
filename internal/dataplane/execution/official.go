@@ -82,6 +82,7 @@ func ServeBypass(h dpcontract.Bypass, w http.ResponseWriter, r *http.Request, hi
 // 每个候选都复核实际模型/组权限，附加服务端凭据，用登记传输替换模型并移除网关字段。
 // 同步对话且非 background 才允许安全重放；异步创建遭遇网络中断、超时或 5xx 时可能已创建付费任务，因此不能盲目再创建。
 // disable_fallbacks 只禁止跨目标回退；Required 父响应归属同时禁止普通重放。流写出后发生错误也立即终止。
+// 原生对话遇到明确的历史验签 400 时，可保留正在执行的工具轮次，用同一部署补一次兼容请求。
 // 成功时按调用方与传输隔离任务 ID，保存部署和创建时计费事实，改写队列查询 URL，并提交成功会话目标。
 // 每次执行记录协议实测用量与出站诊断；资源清理由尝试上下文和响应正文关闭完成，远程任务生命周期由调用方管理。
 func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Request, hit providercontract.Hit, principal *auth.Principal, requestBody dptransport.BypassBody, callID string, start time.Time) {
@@ -187,8 +188,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	if len(pool) == 0 {
 		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.EndpointID, settings, state, nil, false, policyBody)
 		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{Routing: diagnosis.Snapshot(settings, "")})
-		if status, code, message := diagnosis.Failure(alias); code == "unsupported_capability" {
-			util.WriteTypedError(w, r.URL.Path, status, code, message)
+		if status, code, message, reason := diagnosis.Failure(alias); code == "unsupported_capability" || status == http.StatusServiceUnavailable {
+			util.WriteTypedReasonError(w, r.URL.Path, status, code, message, "", reason)
 			return
 		}
 		util.WriteTypedError(w, r.URL.Path, 400, "invalid_request", "model not found: "+alias)
@@ -266,7 +267,9 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				return
 			}
 			url := dptransport.WithQuery(dptransport.BypassDeploymentURL(base, candidateHit), r)
-			for attempt := 0; attempt < settings.Retries(); attempt++ {
+			repairingHistory := false
+			limit := settings.Retries()
+			for attempt := 0; attempt < limit; attempt++ {
 				if tried {
 					fresh, err := h.ResolveRequest(r)
 					if err != nil || fresh == nil || !fresh.CanInfer() {
@@ -302,7 +305,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				selectedID = router.CooldownID(rawDep)
 				if err != nil {
 					// 检查入站上下文，不能检查上面已释放的尝试上下文。取消记 499 且不发起重试。
-					failure := classifyBypassFailure(r.Context().Err(), response.Streamed, replayDialogue)
+					failure := classifyBypassFailure(r.Context().Err(), response.Streamed, replayDialogue && !repairingHistory)
 					if failure == bypassCanceled {
 						var errorBody []byte
 						if status >= 400 && response.Diagnostics != nil && response.Diagnostics.Error != nil && json.Valid(respBody) {
@@ -339,13 +342,14 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						continue
 					}
 					// 创建响应丢失时，上游可能已受理付费任务；结果不明确的创建请求不能重放。
-					h.RememberExchange(callID, r, raw, []byte(dpdiagnostics.SafeErr(err)))
+					reason, detail := dpdiagnostics.UpstreamFaultFeedback(response.Diagnostics, "")
+					h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, 502, "upstream_error", detail, "", reason))
 					note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 					applyStreamTiming(&note, response, start)
 					note.Upstream = response.Diagnostics
 					h.AnnotateCall(callID, note)
 					h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
-					util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
+					util.WriteTypedReasonError(w, r.URL.Path, 502, "upstream_error", detail, "", reason)
 					return
 				}
 				if emptyBypassDialogue(candidateHit, countOnly, response) {
@@ -359,18 +363,20 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					}
 					response.Diagnostics.Failure = dpdiagnostics.ObserveFailure(r.Context(), "upstream_body", errors.New(message), time.Since(start))
 					response.Diagnostics.Failure.Kind = "empty_response"
-					h.RememberExchange(callID, r, raw, []byte(message))
+					const reason = "upstream_invalid_response"
+					response.Diagnostics.Outcome = &dpdiagnostics.GatewayOutcome{Code: reason}
+					h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, http.StatusBadGateway, "upstream_error", message, "", reason))
 					note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 					note.Upstream = response.Diagnostics
 					h.AnnotateCall(callID, note)
 					h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, map[string]any{"pricing_blocked": "upstream_usage_missing"}, start, false, http.StatusBadGateway, selectedID)
-					util.WriteTypedError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", "upstream request failed")
+					util.WriteTypedReasonError(w, r.URL.Path, http.StatusBadGateway, "upstream_error", message, "", reason)
 					return
 				}
 				if status >= 500 || status == http.StatusTooManyRequests {
 					h.NoteFailure(router.CooldownID(rawDep), settings)
 					// 服务端可能在受理付费任务后才返回错误，不能因此创建第二个任务。
-					if status >= 500 && !replayDialogue {
+					if repairingHistory || (status >= 500 && !replayDialogue) {
 						goto forwarded
 					}
 					if cause := r.Context().Err(); cause != nil {
@@ -379,6 +385,18 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						return
 					}
 					continue
+				}
+				if repairingHistory {
+					goto forwarded
+				}
+				if replayDialogue && !countOnly && !response.Streamed && r.Context().Err() == nil {
+					if recovered, ok := dptransport.RecoverDialogueHistory(candidateHit.Transport.Protocol, payload, status, respBody); ok {
+						// 上游已拒绝原请求且没有输出。兼容调用不换部署，仍重新鉴权和检查预算，
+						// 使用同一个 call ID 记录最终结果。补发失败时不再重试或回退。
+						util.Debug("bypass retry after invalid reasoning history call_id=%s", callID)
+						payload, repairingHistory, limit = recovered, true, attempt+2
+						continue
+					}
 				}
 				errorKind := dprouting.FallbackKind(status, respBody)
 				if errorKind != "" && !fallbacks.Disabled && len(baseSettings.ModelFallbacks[fallbacks.Current].Targets(errorKind)) > 0 {
@@ -403,17 +421,14 @@ forwarded:
 	// 转发结束后才提交任务事实与交互：HTTP 成功、任务创建、会话偏好和可计费用量是不同事实。
 	if status == 0 || (response.Diagnostics != nil && response.Diagnostics.Failure != nil) {
 		// 重试用尽时记录最后一次实际尝试。收到状态或部分正文也不能把读失败当成成功。
-		detail := "upstream request failed"
-		if response.Diagnostics != nil && response.Diagnostics.Failure != nil && response.Diagnostics.Failure.TransportError != "" {
-			detail = response.Diagnostics.Failure.TransportError
-		}
-		h.RememberExchange(callID, r, raw, []byte(detail))
+		reason, detail := dpdiagnostics.UpstreamFaultFeedback(response.Diagnostics, "")
+		h.RememberExchange(callID, r, raw, util.TypedReasonErrorBody(r.URL.Path, 502, "upstream_error", detail, "", reason))
 		note := dataplaneNote(hit, dep, plan.SessionID, time.Since(start))
 		applyStreamTiming(&note, response, start)
 		note.Upstream = response.Diagnostics
 		h.AnnotateCall(callID, note)
 		h.RecordSpend(w, principal, callID, alias, hit.Transport.ID+":"+hit.Action.Name, nil, start, false, http.StatusBadGateway, selectedID)
-		util.WriteTypedError(w, r.URL.Path, 502, "upstream_error", "upstream request failed")
+		util.WriteTypedReasonError(w, r.URL.Path, 502, "upstream_error", detail, "", reason)
 		return
 	}
 	var doc map[string]any

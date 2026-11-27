@@ -569,6 +569,7 @@ func (s *Server) requireLLMPrincipal(w http.ResponseWriter, r *http.Request) *au
 		util.WriteTypedError(w, r.URL.Path, 403, "forbidden", "this credential cannot call inference")
 		return nil
 	}
+	rememberLogPrincipal(w, p)
 	util.Debug("process %s %s step=auth kind=%s", r.Method, r.URL.Path, p.Kind)
 	return p
 }

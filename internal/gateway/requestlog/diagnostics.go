@@ -56,7 +56,7 @@ func diagnosticHeaders(headers http.Header) http.Header {
 
 // FailureJSON 选取流内明确错误、原失败正文或空正文时已观测到的诊断，避免失败日志只剩状态。
 // 参数 upstream 为观测事实、fallback 为原失败正文；recordSpend 调用，返回日志错误详情，不修改客户端响应或正文捕获。
-// 非空 HTTP 错误正文优先；只有收到上游错误状态且没有正文或读取错误时，才生成缺失正文的说明。
+// 已识别的供应商错误或网关生成的明确正文优先；没有这些正文时使用观测到的读取错误或空正文说明。
 func FailureJSON(upstream *dpdiagnostics.UpstreamDiagnostics, fallback string) string {
 	// 取消不能把整个部分 SSE 当作错误原因；保留独立供应商错误，未观测到时显式为 null。
 	if upstream != nil && upstream.Failure != nil && upstream.Failure.Kind == "request_canceled" {
@@ -79,6 +79,10 @@ func FailureJSON(upstream *dpdiagnostics.UpstreamDiagnostics, fallback string) s
 		if raw, err := json.Marshal(upstream.Error); err == nil {
 			return string(raw)
 		}
+	}
+	if upstream.Outcome != nil && upstream.Outcome.Code != "" && strings.TrimSpace(fallback) != "" {
+		// 执行器已返回可检索的网关错误；底层传输原因独立保存在诊断中。
+		return fallback
 	}
 	if failure := upstream.Failure; failure != nil && failure.Phase == "response_transfer" && upstream.StatusCode < 400 && failure.TransportError != "" {
 		// 已开始输出的流可能没有供应商错误帧；用观测到的中断原因解释失败，生成内容仍走正文策略。

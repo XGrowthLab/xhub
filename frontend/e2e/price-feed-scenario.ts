@@ -25,8 +25,10 @@ export function registerSC111() {
       .click();
     expect((await reload).status()).toBe(200);
     const prompt = page.getByRole("dialog", { name: "是否添加价格表中的模型？" });
-    await expect(prompt.getByRole("status")).toHaveText("发现 2 个尚未部署的在售公开模型。");
-    await expect(prompt.getByRole("link", { name: "添加此模型" })).toHaveCount(2);
+    // 本地上游可按需开启分档测试模型；它也是在售公开模型，应该出现在添加建议里。
+    const eligibleCount = process.env.E2E_MARKET_TIER === "1" ? 3 : 2;
+    await expect(prompt.getByRole("status")).toHaveText(`发现 ${eligibleCount} 个尚未部署的在售公开模型。`);
+    await expect(prompt.getByRole("link", { name: "添加此模型" })).toHaveCount(eligibleCount);
     await prompt.getByRole("button", { name: "暂不添加" }).click();
     await expect(page.getByTestId("price-row-e2e-market-chat")).toBeVisible();
     const marketAvatar = page.getByTestId("price-row-e2e-market-chat").getByTestId("model-avatar");
@@ -145,7 +147,7 @@ export function registerSC111() {
     expect((await page.request.delete(GATEWAY + "/schedule/model_cost_map_reload", { headers })).status()).toBe(200);
   });
   /** 真实浏览器确认单个及批量调价，并经网关调用验证费用变化；使用本地上游和独立数据库。
-   * 覆盖中英文、历史搜索价对齐、取消不写、过期批次整笔回滚和实际按次计费；finally 删除测试部署。 */
+   * 覆盖中英文、历史搜索价对齐、窄屏预览切换、取消不写、过期批次整笔回滚和实际按次计费；finally 删除测试部署。 */
   test("market deployment prices require explicit single or batch confirmation", async ({ page }) => {
     await loginAdmin(page);
     const headers = { Authorization: "Bearer " + (await sessionBearer(page)) };
@@ -165,13 +167,14 @@ export function registerSC111() {
       { measure: "second", side: "output", variant: "search", window: "all", unit_size: 1, source_key: "web_search_req", usd: 0.01 },
     ];
     try {
-      for (const name of ["e2e-price-one", "e2e-price-two"]) {
+      for (const name of ["e2e-price-one", "e2e-price-two", "e2e-price-three"]) {
         const result = await page.request.post(GATEWAY + "/model/new", {
           headers,
           data: {
             model_name: name,
             litellm_params: {
-              model: name,
+              // 第三个公开部署复用已有搜索用量夹具，独立部署仍由网关生成各自的 ID。
+              model: name === "e2e-price-three" ? "e2e-price-two" : name,
               custom_llm_provider: "custom",
               api_base: UPSTREAM,
               api_key: "sk-fake",
@@ -212,7 +215,7 @@ export function registerSC111() {
       expect(preview.status()).toBe(200);
       const versions = (await preview.json()).deployments as { id: string; version: string }[];
       const originalItems = versions.filter(({ id }) => ids.includes(id)).map(({ id, version }) => ({ id, version }));
-      expect(originalItems).toHaveLength(2);
+      expect(originalItems).toHaveLength(3);
       const before = await cost("e2e-price-one", "Before update");
       expect(before).toBeGreaterThan(0);
       // 管理员在个人模型入口看到的是已部署价，旧搜索标记在这里也以次数显示。
@@ -261,15 +264,31 @@ export function registerSC111() {
       const english = page.getByRole("region", { name: "Deployment price updates", exact: true });
       await expect(english).toContainText("Market data updates daily");
       await english.getByRole("checkbox", { name: "Select all eligible deployments" }).check();
-      await english.getByRole("button", { name: "Review selected prices (1)", exact: true }).click();
-      const confirm = page.getByRole("dialog", { name: "Confirm prices for 1 deployments" });
+      await english.getByRole("button", { name: "Review selected prices (2)", exact: true }).click();
+      const confirm = page.getByRole("dialog", { name: "Confirm prices for 2 deployments" });
       await expect(confirm).toContainText("This replaces this deployment’s manually configured prices.");
+      await page.setViewportSize({ width: 390, height: 740 });
+      await expect(confirm.getByRole("status")).toHaveText("1 of 2");
+      await confirm.getByRole("button", { name: "Next deployment" }).click();
+      await expect(confirm.getByRole("status")).toHaveText("2 of 2");
+      await confirm.getByRole("combobox", { name: "Deployment to review" }).click();
+      await page.getByRole("option", { name: /\. e2e-price-three$/ }).click();
+      await expect(confirm.getByRole("table")).toHaveCount(1);
+      await expect(confirm.getByRole("table", { name: "Compare prices for e2e-price-three" })).toBeVisible();
       const searchEnglish = confirm.getByRole("row", { name: /^Web search/ });
       await expect(searchEnglish.getByRole("cell")).toHaveText(["$0.01 / request", "$0.02 / request"]);
       await expect(searchEnglish).toContainText("Price changed");
-      await confirm.getByRole("button", { name: "Confirm price update", exact: true }).click();
-      await expect(english.getByRole("status")).toHaveText("Updated prices for 1 deployments.");
+      const applyPrice = confirm.getByRole("button", { name: "Confirm price update", exact: true });
+      await expect(applyPrice).toBeInViewport();
+      expect(await confirm.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+      await test.info().attach("batch-price-review-mobile", {
+        body: await confirm.screenshot({ animations: "disabled" }),
+        contentType: "image/png",
+      });
+      await applyPrice.click();
+      await expect(english.getByRole("status")).toHaveText("Updated prices for 2 deployments.");
       expect(await cost("e2e-price-two", "Batch confirmed", 0.02)).toBeCloseTo(before * 2, 10);
+      expect(await cost("e2e-price-three", "Batch confirmed", 0.02)).toBeCloseTo(before * 2, 10);
       await page.getByRole("button", { name: "中文", exact: true }).click();
     } finally {
       for (const id of ids)

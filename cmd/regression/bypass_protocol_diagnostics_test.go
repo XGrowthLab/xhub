@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// TestBypassProtocolFailureDiagnostics 验证 OpenAI Chat、Responses、Gemini 和 Vertex 透传共用的失败落库契约。
-// 通过真实网关和隔离 PostgreSQL 对照 HTTP 原文、出站诊断及零费用；测试不调用外部供应商，自动回收本地上游和数据库。
+// TestBypassProtocolFailureDiagnostics 验证 OpenAI Chat、Anthropic、Responses、Gemini 和 Vertex 透传的失败落库契约。
+// 通过真实网关和隔离 PostgreSQL 对照原始供应商响应、网关错误原因、出站诊断及零费用；测试自动回收本地上游和数据库。
 func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 	for _, protocol := range []struct {
 		name, transport, endpoint, path, outbound string
@@ -85,7 +85,7 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 				upstream, client, logged, attempts int
 			}
 			cases := []failureCase{
-				{"disconnect", "transport_error", "EOF", 0, 502, 502, 2},
+				{"disconnect", "transport_error", "could not receive a response from the upstream", 0, 502, 502, 2},
 				{"empty-error", "", "upstream returned HTTP 502 without an error body", 502, 502, 502, 2},
 				{"vendor-error", "", "Provider saturated", 502, 502, 502, 2},
 				{"interrupted-error", "", "Provider saturated", 502, 502, 502, 2},
@@ -138,6 +138,16 @@ func TestBypassProtocolFailureDiagnostics(t *testing.T) {
 					diag, _ := metadata["upstream_response"].(map[string]any)
 					failure, _ := diag["failure"].(map[string]any)
 					summary := fmt.Sprint(detail["error"])
+					if tc.fixture == "disconnect" {
+						const reason = "upstream_transport_error"
+						clientError, _ := reply.json()["error"].(map[string]any)
+						classification, _ := detail["diagnosis"].(map[string]any)
+						if clientError["reason"] != reason || !strings.Contains(errorMessage(reply), tc.reason) ||
+							strings.Contains(reply.text(), "EOF") || classification["code"] != reason ||
+							failure["phase"] != "upstream_request" || !strings.Contains(fmt.Sprint(failure["transport_error"]), "EOF") {
+							t.Fatalf("断连应返回安全的客户端原因并独立保存传输诊断: reply=%s diagnosis=%v failure=%v", reply.describe(), classification, failure)
+						}
+					}
 					if diag["endpoint"] != outbound || firstFloat(diag, "status_code") != float64(tc.upstream) || firstFloat(metadata, "http_status") != float64(tc.logged) ||
 						detail["status"] != "error" || detail["body_capture_status"] != "disabled" ||
 						!strings.Contains(summary, tc.reason) || strings.Contains(summary, "private-echo") ||

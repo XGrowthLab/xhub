@@ -79,41 +79,43 @@ func LogsV2(s Host, w http.ResponseWriter, r *http.Request) {
 		util.WriteJSON(w, 200, logPageResponse(nil, 0, page, pageSize))
 		return
 	}
-	var rows []map[string]any
+	var events []iam.UsageEvent
+	var groups []iam.UsageSession
 	var total int64
 	if r.URL.Query().Get("group_by_session") == "true" {
 		// SQL 在合并会话之后分页，保证行数、总数和会话汇总采用同一粒度。
-		groups, count, readErr := db.ListUsageSessions(r.Context(), q)
-		if readErr != nil {
-			s.WriteIAMError(w, r, readErr)
-			return
-		}
-		total = count
-		rows = make([]map[string]any, 0, len(groups))
-		for _, group := range groups {
-			row := eventRows([]iam.UsageEvent{group.UsageEvent})[0]
-			if group.SessionID != "" && (group.KeyID != "" || group.UserID != "") {
-				row["session_total_count"] = group.SessionCount
-				row["session_llm_count"] = group.SessionCount
-				row["session_total_spend"] = group.SessionSpend
-				row["session_total_tokens"] = group.SessionTokens
-				row["session_total_prompt_tokens"] = group.SessionPromptTokens
-				row["session_total_completion_tokens"] = group.SessionCompletionTokens
+		groups, total, err = db.ListUsageSessions(r.Context(), q)
+		if err == nil {
+			events = make([]iam.UsageEvent, 0, len(groups))
+			for _, group := range groups {
+				events = append(events, group.UsageEvent)
 			}
-			rows = append(rows, row)
 		}
 	} else {
-		events, readErr := db.ListUsage(r.Context(), q)
-		if readErr != nil {
-			s.WriteIAMError(w, r, readErr)
-			return
+		events, err = db.ListUsage(r.Context(), q)
+		if err == nil {
+			total, err = db.CountUsage(r.Context(), q)
 		}
-		total, err = db.CountUsage(r.Context(), q)
-		if err != nil {
-			s.WriteIAMError(w, r, err)
-			return
+	}
+	if err != nil {
+		s.WriteIAMError(w, r, err)
+		return
+	}
+	rows := eventRows(events)
+	for i, group := range groups {
+		if group.SessionID != "" && (group.KeyID != "" || group.UserID != "") {
+			row := rows[i]
+			row["session_total_count"] = group.SessionCount
+			row["session_llm_count"] = group.SessionCount
+			row["session_total_spend"] = group.SessionSpend
+			row["session_total_tokens"] = group.SessionTokens
+			row["session_total_prompt_tokens"] = group.SessionPromptTokens
+			row["session_total_completion_tokens"] = group.SessionCompletionTokens
 		}
-		rows = eventRows(events)
+	}
+	if err := enrichLogRows(r.Context(), db, events, rows, nil); err != nil {
+		s.WriteIAMError(w, r, err)
+		return
 	}
 	util.WriteJSON(w, 200, logPageResponse(rows, total, page, pageSize))
 }
@@ -202,7 +204,7 @@ func collapseSessions(rows []map[string]any) []map[string]any {
 
 // logQuery builds the scoped log query from the request's filters. The scope is applied first and the filters only narrow inside it, so `user_id` or `api_key` from the query string can never widen a read beyond what the scope allows.
 // 参数 r（*http.Request）：入站 HTTP 请求；sc（*authz.Scope）：日志查询使用的权限范围。
-// 返回错误表示非法时间窗口、错误码或响应缓存条件，调用方必须拒绝查询，不能忽略条件。
+// 返回错误表示非法时间窗口、错误码、级别或响应缓存条件，调用方必须拒绝查询，不能忽略条件。
 // 返回 UsageQuery（iam.UsageQuery）：在权限范围之内、再按请求筛选收窄的日志查询。筛选不能把范围扩大。
 // 调用：仅在 reports.go 内使用
 // 错误码按最终客户端状态精确匹配，消息按完整诊断正文匹配；非法码不会扩大查询。
@@ -233,11 +235,15 @@ func logQuery(r *http.Request, sc *authz.Scope) (iam.UsageQuery, error) {
 		Search:       raw.Get("search"),
 		ErrorCode:    strings.TrimSpace(raw.Get("error_code")),
 		ErrorMessage: raw.Get("error_message"),
+		Severity:     raw.Get("severity"),
 		SortBy:       raw.Get("sort_by"),
 		SortAsc:      raw.Get("sort_order") == "asc",
 	}
 	q.KeyHash, q.KeyAlias = raw.Get("key_hash"), raw.Get("key_alias")
 	q.Supplier, q.InboundEndpoint = raw.Get("supplier"), raw.Get("inbound_endpoint")
+	if q.Severity != "" && q.Severity != iam.UsageSeverityWarning && q.Severity != iam.UsageSeverityError {
+		return iam.UsageQuery{}, errors.New("severity must be warning or error")
+	}
 	if v := q.ErrorCode; v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 100 || n > 599 {
@@ -686,8 +692,14 @@ func LogByID(s Host, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	row := eventRows([]iam.UsageEvent{*event})[0]
-	// 诊断仅进入鉴权后的详情，列表不暴露上游响应头。
+	events := []iam.UsageEvent{*event}
+	rows := eventRows(events)
+	if err := enrichLogRows(r.Context(), db, events, rows, body); err != nil {
+		s.WriteIAMError(w, r, err)
+		return
+	}
+	row := rows[0]
+	// 完整诊断仅进入鉴权后的详情，列表只投影固定原因和数值，不暴露上游响应头。
 	if body.UpstreamResponse != "" {
 		metadata := row["metadata"].(map[string]any)
 		metadata["upstream_response"] = jsonOrEmpty(body.UpstreamResponse)

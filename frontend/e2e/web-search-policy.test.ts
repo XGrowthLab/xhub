@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { translate } from "../src/i18n/translate";
-import { GATEWAY, UPSTREAM, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, UPSTREAM, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 
 for (const locale of ["zh-CN", "en"] as const) {
   /** 前置真实浏览器、私有数据库与本地 Chat 上游；验证默认拒绝、双语编辑保存、JSON/SSE 降级、强制搜索拒绝及日志提示。
@@ -125,6 +125,7 @@ for (const locale of ["zh-CN", "en"] as const) {
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog")).not.toBeVisible();
       await page.getByRole("tab", { name: tr("Error Logs"), exact: true }).click();
+      await selectFailureSeverity(page, "warning");
       await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).filter({ visible: true }).fill(rejected.callID!);
       const rejectedRow = page.getByRole("row").filter({ hasText: rejected.callID! });
       await expect(rejectedRow).toBeVisible();

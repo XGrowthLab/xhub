@@ -159,6 +159,55 @@ describe("RequestLogsPanel", () => {
     debounce.settled = null;
   });
 
+  /** 以多页后台响应验证默认故障筛选、警告及全部模式的真实查询参数，并在切换级别时回到第一页。测试卸载组件并清理缓存。 */
+  it("changes failure severity on the server and resets pagination", async () => {
+    const user = userEvent.setup();
+    vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page = 1, page_size = 25 }) => ({
+      data: [logEntry({ request_id: `failure-page-${page}` })],
+      total: 40,
+      page,
+      page_size,
+      total_pages: 2,
+    }));
+    const view = renderWithProviders(<RequestLogsPanel {...defaultProps} errorsOnly />);
+    try {
+      const group = screen.getByRole("group", { name: translate("en", "logsUX.severityFilter") });
+      const error = within(group).getByRole("button", { name: translate("en", "logsUX.severityError") });
+      const warning = within(group).getByRole("button", { name: translate("en", "logsUX.severityWarning") });
+      const all = within(group).getByRole("button", { name: translate("en", "logsUX.severityAll") });
+      expect(error).toHaveAttribute("aria-pressed", "true");
+      await screen.findByText("failure-page-1");
+      expect(lastCall()?.params).toMatchObject({ status_filter: "error", severity: "error", group_by_session: false });
+      await user.click(screen.getByRole("button", { name: /next page/i }));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      await user.click(warning);
+      await waitFor(() => expect(lastCall()).toMatchObject({ page: 1, params: { status_filter: "error", severity: "warning" } }));
+      expect(warning).toHaveAttribute("aria-pressed", "true");
+      await user.click(all);
+      await waitFor(() => expect(lastCall()?.params?.severity).toBeUndefined());
+      expect(lastCall()?.params?.status_filter).toBe("error");
+      expect(all).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      view.unmount();
+      testQueryClient.clear();
+    }
+  });
+
+  /** 前置失败视图没有匹配当前级别的数据；验证切换后的空态区分故障和警告，并提示可调整级别，查询缓存由 finally 清理。 */
+  it("labels an empty severity without implying there were no other requests", async () => {
+    const user = userEvent.setup();
+    const view = renderWithProviders(<RequestLogsPanel {...defaultProps} errorsOnly />);
+    try {
+      expect(await screen.findByText(translate("en", "logsUX.noErrors"))).toBeVisible();
+      expect(screen.getByText(translate("en", "logsUX.severityEmptyHint"))).toBeVisible();
+      await user.click(screen.getByRole("button", { name: translate("en", "logsUX.severityWarning") }));
+      expect(await screen.findByText(translate("en", "logsUX.noWarnings"))).toBeVisible();
+    } finally {
+      view.unmount();
+      testQueryClient.clear();
+    }
+  });
+
   /** 前置流式与同步日志；TPS 默认隐藏，通过列菜单开启后保留真实数值与无样本状态，finally 清理组件和缓存。 */
   it("restores the optional TPS column through its accessible menu", async () => {
     respondWith([

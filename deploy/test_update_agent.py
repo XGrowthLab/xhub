@@ -2,13 +2,17 @@
 
 import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
-from deploy.update_manifest import MANIFEST_NAME, NAMESPACE, validate_manifest, version_key
+from deploy.update_manifest import (
+    BASE_DATABASE_COMPATIBILITY, DATABASE_CONTRACT_FILES, LEGACY_DATABASE_COMPATIBILITY, MANIFEST_NAME,
+    NAMESPACE, database_compatibility_key, database_contract_fingerprint, database_fingerprint, validate_manifest, version_key,
+)
 from deploy.update_agent import ACTIVE, Agent, Compose, Releases, UntrackedRelease, save_json, valid_health_url
 
 
@@ -18,6 +22,48 @@ def manifest(number, compatibility="a"):
             "database_compatibility": compatibility * 64,
             "images": {service: f"{NAMESPACE}-{service}@sha256:" + str(number) * 64
                        for service in ("gateway", "console")}}
+
+
+class DatabaseCompatibilityTests(unittest.TestCase):
+    def test_database_contract_keeps_read_only_changes_compatible(self):
+        """在临时 Git 树验证纯查询变更沿用旧标识，迁移、ORM 表结构和存储格式变更产生新标识；退出自动清理。"""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            for name in DATABASE_CONTRACT_FILES | {"internal/iam/schema.sql", "internal/iam/usage_read.go"}:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("baseline\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            baseline = database_contract_fingerprint(root)
+            with patch("deploy.update_manifest.BASE_DATABASE_CONTRACT", baseline):
+                (root / "internal/iam/usage_read.go").write_text("updated read-only query\n", encoding="utf-8")
+                self.assertEqual(database_fingerprint(root), BASE_DATABASE_COMPATIBILITY)
+                for name in ("internal/iam/schema.sql", "internal/store/beans.go", "internal/store/packed_history.go"):
+                    with self.subTest(name=name):
+                        path = root / name
+                        path.write_text("changed database contract\n", encoding="utf-8")
+                        self.assertNotEqual(database_fingerprint(root), BASE_DATABASE_COMPATIBILITY)
+                        path.write_text("baseline\n", encoding="utf-8")
+                with patch("deploy.update_manifest.DATABASE_FORMAT_VERSION", 2):
+                    self.assertNotEqual(database_fingerprint(root), BASE_DATABASE_COMPATIBILITY)
+                migration = root / "internal/iam/recovery_migration.go"
+                migration.write_text("new data migration\n", encoding="utf-8")
+                subprocess.run(["git", "add", str(migration)], cwd=root, check=True)
+                self.assertNotEqual(database_fingerprint(root), BASE_DATABASE_COMPATIBILITY)
+            subprocess.run(["git", "rm", "--cached", "go.sum"], cwd=root, check=True, capture_output=True)
+            with self.assertRaisesRegex(ValueError, "database source paths missing"):
+                database_fingerprint(root)
+
+    def test_legacy_database_alias_requires_the_exact_release(self):
+        """以正式发布的三元组和三个错误字段变体验证旧标识映射边界；仅构造内存清单，无需清理。"""
+        (version, revision, compatibility), = LEGACY_DATABASE_COMPATIBILITY
+        legacy = {**manifest(4), "version": version, "revision": revision, "database_compatibility": compatibility}
+        self.assertEqual(database_compatibility_key(legacy), BASE_DATABASE_COMPATIBILITY)
+        self.assertEqual(legacy["database_compatibility"], compatibility)
+        for change in ({"revision": "0" * 40}, {"version": "v0.1.0-beta.8"}, {"database_compatibility": "c" * 64}):
+            candidate = {**legacy, **change}
+            self.assertEqual(database_compatibility_key(candidate), candidate["database_compatibility"])
 
 
 class Runtime:
@@ -238,6 +284,21 @@ class UpdateTests(unittest.TestCase):
         result = self.agent.submit("apply", {"actor": "test-admin", "version": self.next["version"], "revision": self.next["revision"]})
         self.assertEqual(result[0], 409)
         self.assertEqual(self.compose.switched, [])
+
+    def test_legacy_beta_four_can_update_and_roll_back_without_relabeling(self):
+        """以已发布 beta.4 标识验证检查、升级及回退使用同一兼容判断，并保留原始镜像身份；临时状态自动清理。"""
+        (version, revision, compatibility), = LEGACY_DATABASE_COMPATIBILITY
+        self.base = {**manifest(4), "version": version, "revision": revision, "database_compatibility": compatibility}
+        self.next = {**manifest(5), "database_compatibility": BASE_DATABASE_COMPATIBILITY}
+        self.compose.running = self.base
+        save_json(self.source, self.next)
+        self.assertTrue(self.check()["candidate"]["compatible"])
+        self.apply()
+        self.assertEqual(self.await_idle()["current"], self.next["version"])
+        self.assertEqual(self.agent.state["previous"], self.base)
+        self.assertEqual(self.agent.submit("rollback", {"version": self.base["version"], "actor": "test-admin"})[0], 202)
+        self.assertEqual(self.await_idle()["current"], self.base["version"])
+        self.assertEqual(self.compose.running, self.base)
 
     def test_health_failure_and_crash_recovery(self):
         """新镜像启动但不健康即恢复两项服务；模拟进程中断的持久事务也可复原。"""

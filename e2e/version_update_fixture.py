@@ -15,9 +15,11 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from deploy.publish_release import Publisher
+from deploy.update_manifest import BASE_DATABASE_COMPATIBILITY, LEGACY_DATABASE_COMPATIBILITY, database_fingerprint
 
 REGISTRY = os.environ.get("E2E_UPDATE_REGISTRY", "ghcr.io/distribution/distribution:3.0.0")
 NGINX = "nginx:1.28-alpine"
+BETA_THREE_REVISION = "02c4466c018cbe2fb5295ba18d55917f264de8e1"
 
 
 def run(*args, timeout=180):
@@ -62,15 +64,19 @@ def endpoint(url):
         return response.read(1024).decode().strip()
 
 
-def make_release(directory, registry, variant, resources):
-    """创建两份带版本标签的实际测试镜像。提交至临时 Registry，转为真实已拉取摘要。"""
+def make_release(directory, registry, variant, resources, update_compatibility):
+    """按 variant 创建实际镜像对，更新目标使用给定兼容标识，返回临时 Registry 中的摘要；由 resources 清理。"""
     release = f"v0.1.0-beta.{variant}"
     revision = str(variant) * 40
-    compatibility = ("b" if variant == 4 else "a") * 64
+    compatibility = "b" * 64 if variant == 7 else update_compatibility
+    if variant == 3:
+        revision, compatibility = BETA_THREE_REVISION, BASE_DATABASE_COMPATIBILITY
+    elif variant == 4:
+        (release, revision, compatibility), = LEGACY_DATABASE_COMPATIBILITY
     images = {}
     for service in ("gateway", "console"):
         config = directory / "nginx.conf"
-        status = 503 if variant == 3 and service == "gateway" else 200
+        status = 503 if variant == 6 and service == "gateway" else 200
         config.write_text(f'server {{ listen 80; location / {{ return {status} "{release}"; }} }}\n')
         tag = f"{registry}/xhub-{service}:{release[1:]}"
         with ExitStack() as stack:
@@ -113,6 +119,14 @@ def main():
         image(dependency)
     with TemporaryDirectory(prefix="xhub-upd-", dir="/tmp") as local, ExitStack() as resources:
         directory = Path(local)
+        agent_path = ROOT / "deploy/update_agent.py"
+        base_variant, update_compatibility = 4, BASE_DATABASE_COMPATIBILITY
+        if os.environ.get("E2E_VERSION_LEGACY_BETA3") == "1":
+            # 对照已安装的旧执行器验证发布标识，读取本地 Git 对象，测试结束随临时目录清理。
+            base_variant, update_compatibility = 3, database_fingerprint(ROOT)
+            for script in ("update_agent.py", "update_manifest.py"):
+                (directory / script).write_text(run("git", "show", f"{BETA_THREE_REVISION}:deploy/{script}") + "\n")
+            agent_path = directory / "update_agent.py"
         project = "xhub-upd-" + secrets.token_hex(4)
         registry_name = project + "-registry"
         run("docker", "run", "-d", "--name", registry_name, "-p", "127.0.0.1::5000", REGISTRY)
@@ -121,7 +135,9 @@ def main():
         wait_for(lambda: endpoint("http://" + registry_host + "/v2/") == "{}")
         registry = "localhost:" + registry_host.rsplit(":", 1)[1]
         print("Preparing versioned Compose images in a private test registry", flush=True)
-        base, update, broken, incompatible = [make_release(directory, registry, v, resources) for v in range(1, 5)]
+        base, update, broken, incompatible = [
+            make_release(directory, registry, v, resources, update_compatibility) for v in (base_variant, 5, 6, 7)
+        ]
         # 在隔离 Registry 实测重跑发布重新发现同一摘要，GitHub 读写另由命令边界测试覆盖。
         publisher = Publisher("example/xhub", base["version"])
         publisher.namespace = registry + "/xhub"
@@ -159,7 +175,7 @@ def main():
         state = directory / "state"
         out = resources.enter_context((directory / "agent.log").open("w"))
         agent_args = [
-            sys.executable, "-B", str(ROOT / "deploy/update_agent.py"), "--compose", str(compose), "--project", project,
+            sys.executable, "-B", str(agent_path), "--compose", str(compose), "--project", project,
             "--state-dir", str(state), "--socket", str(ipc), "--manifest-file", str(feed),
             "--enable-channel-switch", "--namespace", registry + "/xhub", "--health-url", gateway_url,
             "--health-url", console_url, "--health-timeout", "7",
@@ -171,6 +187,7 @@ def main():
         env = {
             **os.environ, "E2E_VERSION_UPDATE": "1", "XHUB_UPDATE_SOCKET": str(ipc), "E2E_VERSION_FEED": str(feed),
             "E2E_VERSION_GATEWAY_URL": gateway_url, "E2E_VERSION_CONSOLE_URL": console_url,
+            "E2E_VERSION_BASE": base["version"],
             "E2E_PORTABLE_CONSOLE": "1", "E2E_ENTERPRISE_FIXTURE": "0",
         }
         print("Running browser against the updater, real Compose services, PostgreSQL and Redis", flush=True)

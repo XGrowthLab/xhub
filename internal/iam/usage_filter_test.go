@@ -2,7 +2,10 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/sunqirui1987/xhub/internal/logframe"
 )
 
 // TestUsageLogCategories 验证日志分类在数据库分页前执行且普通日志和错误日志互补。
@@ -63,6 +66,101 @@ func TestUsageLogCategories(t *testing.T) {
 		if err != nil || len(found) != tc.count {
 			t.Fatalf("请求 ID 搜索 %+v 应有 %d 条，实际 %d，错误 %v", tc.q, tc.count, len(found), err)
 		}
+	}
+}
+
+// TestUsageSeverityFilters 验证 SQL 分级对历史状态、4xx、5xx 与无状态码失败的分类与单行诊断一致。
+// 前置私有 PostgreSQL；覆盖权限交集、分页与会话计数，testDB 自动回收私有 schema。
+func TestUsageSeverityFilters(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	cases := []struct {
+		id, status, severity string
+		code                 int
+	}{
+		{"legacy-failure", "failed", "error", 200},
+		{"missing-http", "error", "error", 0},
+		{"not-yet-failed", "polling", "success", 200},
+		{"first-warning", "success", "warning", 400},
+		{"last-warning", "error", "warning", 499},
+		{"first-error", "success", "error", 500},
+	}
+	for _, tc := range cases {
+		rec := usageRecord(tc.id, "", 0)
+		rec.UserID, rec.SessionID, rec.Status, rec.HTTPStatus = "owner", "same-session", tc.status, tc.code
+		if err := db.RecordUsage(ctx, []UsageRecord{rec}); err != nil {
+			t.Fatal(err)
+		}
+		if got := (UsageEvent{Status: tc.status, HTTPStatus: tc.code}).LogSeverity(); got != tc.severity {
+			t.Fatalf("%s 应为 %s，得到 %s", tc.id, tc.severity, got)
+		}
+	}
+	foreign := usageRecord("foreign-warning", "", 0)
+	foreign.UserID, foreign.Status, foreign.HTTPStatus = "foreign", "error", 401
+	if err := db.RecordUsage(ctx, []UsageRecord{foreign}); err != nil {
+		t.Fatal(err)
+	}
+	for level, want := range map[string]int64{"error": 3, "warning": 2, "invalid": 0} {
+		q := UsageQuery{UserID: "owner", Status: "error", Severity: level, Limit: 1, Offset: 1}
+		count, err := db.CountUsage(ctx, q)
+		if err != nil || count != want {
+			t.Fatalf("级别 %s 计数应为 %d，得到 %d %v", level, want, count, err)
+		}
+		list, err := db.ListUsage(ctx, q)
+		if err != nil || want == 0 && len(list) != 0 ||
+			want > 0 && (len(list) != 1 || list[0].LogSeverity() != level) {
+			t.Fatalf("级别 %s 分页未按分类收窄: %v %v", level, list, err)
+		}
+		q.Offset = 0
+		sessions, groups, err := db.ListUsageSessions(ctx, q)
+		if err != nil || want == 0 && (groups != 0 || len(sessions) != 0) ||
+			want > 0 && (groups != 1 || len(sessions) != 1 || sessions[0].SessionCount != want) {
+			t.Fatalf("级别 %s 会话筛选与计数不符: %v %d %v", level, sessions, groups, err)
+		}
+	}
+}
+
+// TestLogSummariesByIDsBoundsStoredEvidence 验证已授权请求的批量摘要不会加载原始正文。
+// 前置私有 PostgreSQL，构造良好、超限及损坏压缩记录；结果按请求 ID 收窄，坏行降级，schema 自动回收。
+func TestLogSummariesByIDsBoundsStoredEvidence(t *testing.T) {
+	db := testDB(t)
+	ctx := t.Context()
+	raw := `{"status_code":502,"failure":{"phase":"response_transfer"}}`
+	compressed, err := logframe.Encode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversize := strings.Repeat("x", 64<<10+1)
+	oversizeCompressed, err := logframe.Encode(oversize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ id, errorText, upstream string }{
+		{"bounded", "summary", compressed},
+		{"oversize", oversize, oversizeCompressed},
+		{"broken", "error", logframe.Prefix + "invalid"},
+		{"excluded", "other", raw},
+	} {
+		if _, err := db.Engine.Exec("INSERT INTO usage_events(request_id,owner_type) VALUES(?,'personal')", tc.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Engine.Exec("INSERT INTO request_logs(request_id,error,upstream_response,request_body,proxy_request,response_body) VALUES(?,?,?,?,?,?)",
+			tc.id, tc.errorText, tc.upstream, "private request", "private proxy", "private response"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.LogSummariesByIDs(ctx, []string{"bounded", "oversize", "broken", "absent"})
+	if err != nil || len(rows) != 3 || rows["bounded"].UpstreamResponse != raw || rows["bounded"].Error != "summary" ||
+		rows["oversize"].UpstreamResponse != "" || rows["oversize"].Error != "" || rows["broken"].UpstreamResponse != "" {
+		t.Fatalf("摘要读取边界不符合预期: %v %v", rows, err)
+	}
+	for _, row := range rows {
+		if row.RequestBody != "" || row.ProxyRequest != "" || row.ResponseBody != "" {
+			t.Fatal("摘要查询不得提取私有请求或响应正文")
+		}
+	}
+	if none, err := db.LogSummariesByIDs(ctx, nil); err != nil || len(none) != 0 {
+		t.Fatal("空 ID 过滤不得返回其他日志", err)
 	}
 }
 

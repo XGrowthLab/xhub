@@ -124,15 +124,15 @@ func (d routeDiagnosis) Log(path, callID, alias string, settings router.RouteSet
 }
 
 // Failure 把路由诊断转换为客户端可处理的 HTTP 状态、错误类型和简短说明。
-// 参数 alias 为请求公开模型；返回 status、code、message，供执行器写路径对应的错误包络。
+// 参数 alias 为请求公开模型；返回 status、code、message 和可选的稳定原因，供执行器写协议错误包络。
 // 不存在、停用或能力不兼容通常返回 400；分配不可用、冷却或没有当前可选部署返回 503。
 // 纯映射，不写 HTTP 或日志，不把诊断当作绕过资格检查的降级策略。
-func (d routeDiagnosis) Failure(alias string) (int, string, string) {
+func (d routeDiagnosis) Failure(alias string) (int, string, string, string) {
 	if d.matched == 0 {
 		if d.disabled > 0 {
-			return 400, "model_disabled", "model is disabled: " + alias
+			return 400, "model_disabled", "model is disabled: " + alias, "model_disabled"
 		}
-		return 400, "invalid_request", "model not found: " + alias
+		return 400, "invalid_request", "model not found: " + alias, "model_not_found"
 	}
 	if d.compatible == 0 {
 		// 保留原有两个公开错误分类。其他兼容拒绝沿用 model_unavailable，
@@ -146,18 +146,18 @@ func (d routeDiagnosis) Failure(alias string) (int, string, string) {
 				}
 			}
 			if all {
-				return 400, "unsupported_capability", known.Error()
+				return 400, "unsupported_capability", known.Error(), "protocol_unsupported"
 			}
 		}
-		return 400, "model_unavailable", fmt.Sprintf("model %s exists but has no deployment compatible with endpoint %s and this request; check model transport, endpoint configuration and request capabilities", alias, d.endpoint)
+		return 400, "model_unavailable", fmt.Sprintf("model %s exists but has no deployment compatible with endpoint %s and this request; check model transport, endpoint configuration and request capabilities", alias, d.endpoint), "protocol_unsupported"
 	}
 	if d.zeroWeight == d.compatible {
-		return 503, "model_unavailable", "model " + alias + " has no allocated traffic; check deployment weights in model defaults or the selected route template"
+		return 503, "model_unavailable", "model " + alias + " has no allocated traffic; check deployment weights in model defaults or the selected route template", "routing_no_capacity"
 	}
 	if d.cooling == d.compatible {
-		return 503, "model_unavailable", "model " + alias + " has all compatible deployments cooling down; retry later"
+		return 503, "model_unavailable", fmt.Sprintf("model %s has all compatible deployments cooling down (%d of %d); this request was not sent upstream. Retry later.", alias, d.cooling, d.compatible), "all_deployments_cooling_down"
 	}
-	return 503, "model_unavailable", "model " + alias + " has no available deployment; check cooldowns and route allocations"
+	return 503, "model_unavailable", "model " + alias + " has no available deployment; check cooldowns and route allocations", "routing_no_capacity"
 }
 
 // ProtocolProblems 返回启用候选中的公开能力拒绝。pinned 非空时只查看必须续接的部署；

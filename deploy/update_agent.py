@@ -21,9 +21,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
 
 if __package__:
-    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
+    from .update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, database_compatibility_key, validate_manifest, version_key
 else:
-    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, validate_manifest, version_key
+    from update_manifest import COMPAT_LABEL, MANIFEST_NAME, NAMESPACE, REPO, REVISION, SERVICES, database_compatibility_key, validate_manifest, version_key
 
 ACTIVE = {"checking", "pulling", "switching", "recovering"}
 CHANNELS = {"stable", "beta"}
@@ -403,7 +403,7 @@ class Agent:
                     candidate = {"version": manifest["version"], "revision": manifest["revision"],
                                  "prerelease": version_key(manifest["version"])[3] < 3,
                                  "notes": checked["notes"], "compatible": bool(current and
-                                     current["database_compatibility"] == manifest["database_compatibility"])}
+                                     database_compatibility_key(current) == database_compatibility_key(manifest))}
             return {"enabled": True, "channel": "beta" if self.releases.beta else "stable",
                     "channel_switch_enabled": self.channel_switch, "stage": state["stage"],
                     "current": current["version"] if current else None,
@@ -481,7 +481,7 @@ class Agent:
                 self.record(current=current, current_build=build)
                 self.record(checked=self.releases.latest(), checked_at=int(time.time()), stage="idle")
                 return
-            if current != expected or target["database_compatibility"] != current["database_compatibility"]:
+            if current != expected or database_compatibility_key(target) != database_compatibility_key(current):
                 self.record(stage="failed", error="invalid_target")
                 return
             self.compose.prepare(target, pull=action == "apply")

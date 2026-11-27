@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { logColumnVisibility, logOutcomeKey, logErrorSummary } from "./logPresentation";
+import { logColumnVisibility, logOutcomeKey, logErrorSummary, logMissingReasonKey } from "./logPresentation";
 
 /** 有传输证据时显示实际摘要，保留明确上游错误和旧日志的中性分类。使用内存，不需要清理。 */
 it("优先展示可核对的传输诊断", () => {
@@ -18,6 +18,15 @@ it("优先展示可核对的传输诊断", () => {
 });
 
 describe("日志展示摘要", () => {
+  /** 后端原因优先于宽泛的 401；未知或损坏的旧原因回退到中性说明，使用内存无需清理。 */
+  it("uses known diagnostic and missing-field codes with conservative legacy fallbacks", () => {
+    const metadata = { http_status: 401 };
+    expect(logOutcomeKey({ metadata, diagnosis: { code: "model_not_allowed" } })).toBe("logsUX.modelNotAllowed");
+    expect(logOutcomeKey({ metadata, diagnosis: { code: "future_reason" } })).toBe("logsUX.denied");
+    expect(logMissingReasonKey({ diagnosis: { code: "unsupported_method", model_missing_reason: "model_not_applicable" } }, "model")).toBe("logsUX.modelNotApplicable");
+    expect(logMissingReasonKey({ diagnosis: { code: "unknown", user_missing_reason: "future_reason" } }, "user")).toBe("logsUX.userNotRecorded");
+    expect(logMissingReasonKey({}, "team")).toBe("logsUX.teamUnknown");
+  });
   /** 前置不同 HTTP 状态，包括缺失和异常输入；只描述现象不推断责任方，纯函数无需清理。 */
   it.each([
     [499, "interrupted"],
@@ -39,6 +48,7 @@ describe("日志展示摘要", () => {
   it("uses different default columns for errors and usage", () => {
     expect(logColumnVisibility(true)).toMatchObject({
       diagnosis: true,
+      team_alias: true,
       spend: false,
       total_tokens: false,
       key_hash: false,

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,34 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
+
+// TestResponsesMethodFailureExplainsUnsupportedTransport 用真实路由验证错误方法与 WebSocket 请求的返回说明。
+// t 使用内存引擎和请求，不连接数据库。普通未知路径应保留原 404，所有响应均无外部资源需要清理。
+func TestResponsesMethodFailureExplainsUnsupportedTransport(t *testing.T) {
+	engine := newEngine()
+	for _, tc := range []struct {
+		path, upgrade, reason, message string
+	}{
+		{"/responses", "", "unsupported_method", "accepts HTTP POST"},
+		{"/v1/responses", "websocket", "unsupported_method", "does not support WebSocket"},
+		{"/unknown", "", "", "Not Found"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req.Header.Set("Upgrade", tc.upgrade)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		var doc struct {
+			Error struct {
+				Message string `json:"message"`
+				Reason  string `json:"reason"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &doc); err != nil || response.Code != 404 ||
+			doc.Error.Reason != tc.reason || !strings.Contains(doc.Error.Message, tc.message) {
+			t.Fatalf("路径 %s 的反馈错误: %d %s，解析错误 %v", tc.path, response.Code, response.Body.String(), err)
+		}
+	}
+}
 
 // TestStatusRecorderCapturesOnlyCompleteFailures 验证错误收集器对多次写入保留完整字节且不缓存成功响应。
 // 参数 t 为测试上下文；前置内存 HTTP writer，覆盖隐式 200、显式 200、400 边界和 502；

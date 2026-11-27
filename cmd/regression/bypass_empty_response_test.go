@@ -68,16 +68,16 @@ func TestBypassEmptyResponseAccounting(t *testing.T) {
 }
 
 // TestBypassFailureDiagnostics 使用真实 Anthropic 透传、两次重试和 PostgreSQL 验证失败详情可查询。
-// 本地上游模拟首包超时、200 正文截断和无正文 502；验证原始状态、终态及脱敏摘要，禁止保存提示词或扣费。
+// 本地上游模拟首包超时、200 正文截断和无正文 502；验证客户端原因、原始状态及独立传输诊断，禁止保存提示词或扣费。
 // 私有 schema 与本地 HTTP 服务由各子测试清理。
 func TestBypassFailureDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
-		name, phase, kind, detail string
-		upstreamStatus            int
+		name, phase, kind, summary, transportDetail, reason string
+		upstreamStatus                                      int
 	}{
-		{"timeout", "upstream_request", "timeout", "context deadline exceeded", 0},
-		{"truncated", "response_transfer", "unexpected_eof", "unexpected EOF", http.StatusOK},
-		{"empty-502", "", "", "upstream returned HTTP 502 without an error body", http.StatusBadGateway},
+		{"timeout", "upstream_request", "timeout", "Timed out waiting for a response from the upstream.", "context deadline exceeded", "upstream_timeout", 0},
+		{"truncated", "response_transfer", "unexpected_eof", "unexpected EOF", "unexpected EOF", "upstream_stream_interrupted", http.StatusOK},
+		{"empty-502", "", "", "upstream returned HTTP 502 without an error body", "", "", http.StatusBadGateway},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
@@ -122,23 +122,30 @@ func TestBypassFailureDiagnostics(t *testing.T) {
 			if tc.name == "empty-502" && (reply.text() != "" || reply.header("X-Request-ID") != "upstream-empty-502") {
 				t.Fatalf("日志摘要不得改变透传响应: %s", reply.describe())
 			}
+			if tc.reason != "" {
+				clientError, _ := reply.json()["error"].(map[string]any)
+				if clientError["reason"] != tc.reason || strings.Contains(reply.text(), tc.transportDetail) {
+					t.Fatalf("客户端应收到稳定原因且不暴露底层传输错误: %s", reply.describe())
+				}
+			}
 			id := reply.header("x-litellm-call-id")
 			detail := logDetail(t, h, admin, id)
 			metadata, _ := detail["metadata"].(map[string]any)
 			diagnostic, _ := metadata["upstream_response"].(map[string]any)
 			failure, _ := diagnostic["failure"].(map[string]any)
 			row, err := h.db.GetRequestLog(t.Context(), id)
-			if err != nil || row.RequestBody != "" || row.ResponseBody != "" || !strings.Contains(row.Error, tc.detail) {
+			if err != nil || row == nil || row.RequestBody != "" || row.ResponseBody != "" || !strings.Contains(row.Error, tc.summary) {
 				t.Fatalf("数据库必须独立保存安全失败摘要: row=%+v err=%v", row, err)
 			}
 			if diagnostic["endpoint"] != "/v1/messages" || firstFloat(diagnostic, "status_code") != float64(tc.upstreamStatus) ||
 				firstFloat(metadata, "http_status") != 502 || detail["status"] != "error" ||
-				!strings.Contains(fmt.Sprint(detail["error"]), tc.detail) || detail["body_capture_status"] != "disabled" ||
+				!strings.Contains(fmt.Sprint(detail["error"]), tc.summary) || detail["body_capture_status"] != "disabled" ||
 				firstFloat(detail, "spend") != 0 || h.moneyOf(t, owner) != before {
 				t.Fatalf("诊断、状态、正文隐私或账单错误: %v", detail)
 			}
-			if tc.kind != "" && (failure["phase"] != tc.phase || failure["kind"] != tc.kind) {
-				t.Fatalf("失败阶段或类型丢失: %v", diagnostic)
+			if tc.kind != "" && (failure["phase"] != tc.phase || failure["kind"] != tc.kind ||
+				!strings.Contains(fmt.Sprint(failure["transport_error"]), tc.transportDetail)) {
+				t.Fatalf("失败阶段、类型或原始传输诊断丢失: %v", diagnostic)
 			}
 		})
 	}

@@ -1927,6 +1927,8 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  /** 失败级别由日志服务在分页前筛选。 */
+  severity?: "warning" | "error";
   cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;

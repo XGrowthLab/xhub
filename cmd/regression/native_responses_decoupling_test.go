@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -146,7 +147,7 @@ func TestNativeResponsesGovernance(t *testing.T) {
 }
 
 // TestNativeResponsesFailureNoReplay 验证已收到上游成功HTTP后遇无效终态或断流，不重放生成，错误及日志一致。
-// 每个子例真实HTTP和隔离PG；截断正文设置可重试路由并断言调用次数、费用及错误日志，harness清理。
+// 每个子例经过真实 HTTP 和隔离 PG，核对真实上游错误字段、客户端可检索的安全说明和零费用；harness 清理。
 func TestNativeResponsesFailureNoReplay(t *testing.T) {
 	for _, kind := range []string{"malformed", "stream-first-error", "stream-truncated", "connection-lost", "body-truncated"} {
 		t.Run(kind, func(t *testing.T) {
@@ -179,7 +180,7 @@ func TestNativeResponsesFailureNoReplay(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				if kind == "stream-first-error" {
-					fmt.Fprint(w, "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"r\",\"error\":{\"message\":\"Vendor unavailable\",\"type\":\"api_error\"}}}\n\n")
+					fmt.Fprint(w, "data: {\"type\":\"response.failed\",\"request_id\":\"vendor-sse-1\",\"response\":{\"id\":\"r\",\"error\":{\"message\":\"Vendor unavailable\",\"type\":\"api_error\",\"code\":\"vendor_busy\"}}}\n\n")
 					return
 				}
 				fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Partial\"}\n\n")
@@ -202,16 +203,31 @@ func TestNativeResponsesFailureNoReplay(t *testing.T) {
 			} else if got.status != 502 {
 				t.Fatalf("错误终态未返回502: %s", got.describe())
 			}
-			if kind == "stream-first-error" && !strings.Contains(got.text(), "Vendor unavailable") {
-				t.Fatal("上游错误丢失")
-			}
 			h.flushSpend()
 			log := h.ok("GET", "/spend/logs/ui/"+got.header("x-litellm-call-id"), admin, nil).json()
 			if log["status"] != "error" {
 				t.Fatal("失败未记入日志")
 			}
 			switch kind {
-			case "malformed", "connection-lost", "body-truncated":
+			case "stream-first-error":
+				body := got.json()
+				detail, _ := body["error"].(map[string]any)
+				if got.header("Content-Type") != "application/json" || detail["type"] != "api_error" || detail["code"] != "vendor_busy" ||
+					detail["message"] != "Vendor unavailable" || body["request_id"] != "vendor-sse-1" || body["response_id"] != "r" {
+					t.Fatalf("客户端未收到原生流首帧的供应商错误: %s", got.describe())
+				}
+				assertSearchableResponsesFailure(t, h, admin, got, "api_error")
+			case "body-truncated":
+				detail, _ := got.json()["error"].(map[string]any)
+				if detail["reason"] != "upstream_stream_interrupted" || strings.Contains(got.text(), "Completed result") {
+					t.Fatalf("截断的上游结果未转换为安全错误: %s", got.describe())
+				}
+				assertSearchableResponsesFailure(t, h, admin, got, "upstream_error")
+				query := url.Values{"error_message": {"upstream_stream_interrupted"}, "request_id": {got.header("x-litellm-call-id")}}
+				if rows := rowsOf(h.ok("GET", "/spend/logs/ui?"+query.Encode(), admin, nil), "data"); len(rows) != 1 {
+					t.Fatalf("网关原因码不可检索: %v", rows)
+				}
+			case "malformed", "connection-lost":
 				assertSearchableResponsesFailure(t, h, admin, got, "upstream_error")
 			}
 			if spend, ok := log["spend"].(float64); !ok || spend != 0 {

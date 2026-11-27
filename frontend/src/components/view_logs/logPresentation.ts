@@ -31,8 +31,41 @@ export function logErrorSummary(
   return text.length > 240 ? `${text.slice(0, 240)}…` : text;
 }
 
-/** 优先根据已记录的写入失败事实，其次根据 HTTP 状态生成中性摘要键；参数为日志，返回翻译键，不把取消或状态码推断为责任方。供列表与详情共用，无副作用。 */
-export function logOutcomeKey(log: Pick<LogEntry, "metadata">): string {
+const outcomeKeys: Readonly<Record<string, string>> = {
+  model_not_allowed: "modelNotAllowed",
+  unsupported_method: "methodNotSupported",
+  route_not_found: "routeNotFound",
+  model_required: "modelNotProvided",
+  model_not_found: "modelNotFound",
+  model_disabled: "modelDisabled",
+  protocol_unsupported: "protocolUnsupported",
+  request_body_unreadable: "unreadableRequestBody",
+  request_body_too_large: "requestBodyTooLarge",
+  request_body_timeout: "requestBodyTimedOut",
+  credentials_missing: "credentialsMissing",
+  credentials_rejected: "credentialsRejected",
+  request_canceled: "interrupted",
+  client_write_error: "clientWriteFailed",
+  all_deployments_cooling_down: "deploymentsCooling",
+  routing_no_capacity: "routingNoCapacity",
+  upstream_http_error: "upstreamReturnedError",
+  upstream_timeout: "upstreamTimeout",
+  upstream_stream_interrupted: "upstreamStreamInterrupted",
+  upstream_transport_error: "upstreamTransportError",
+  upstream_invalid_response: "upstreamInvalidResponse",
+  upstream_credentials_unavailable: "upstreamCredentialsUnavailable",
+  continuation_unavailable: "continuationUnavailable",
+  history_unavailable: "historyUnavailable",
+  guardrail_rejected: "guardrailRejected",
+  budget_exceeded: "budgetExceeded",
+  rate_limit: "limited",
+};
+
+/** 根据服务端诊断选取原因翻译键，旧日志回退到已记录的传输事实和 HTTP 状态。
+ * 列表和详情调用；不基于状态猜测是哪一端中断，也不展示未知的内部诊断代码。 */
+export function logOutcomeKey(log: Pick<LogEntry, "metadata" | "diagnosis">): string {
+  const code = log.diagnosis?.code;
+  if (code && Object.hasOwn(outcomeKeys, code)) return `logsUX.${outcomeKeys[code]}`;
   // 客户端写入失败不等于上游服务错误，状态码不能覆盖更具体的已观测事实。
   if (log.metadata?.upstream_response?.failure?.kind === "client_write_error") return "logsUX.clientWriteFailed";
   const status = Number(log.metadata?.http_status);
@@ -48,6 +81,42 @@ export function logOutcomeKey(log: Pick<LogEntry, "metadata">): string {
   return "logsUX.requestFailed";
 }
 
+const missingKeys = {
+  model: {
+    model_not_applicable: "modelNotApplicable",
+    model_not_provided: "modelNotProvided",
+    model_not_recorded: "modelNotRecorded",
+    body_unreadable: "modelBodyUnreadable",
+  },
+  user: {
+    unverified_identity: "identityUnverified",
+    user_not_recorded: "userNotRecorded",
+    user_name_not_configured: "userNameNotConfigured",
+    user_unavailable: "userUnavailable",
+    credentials_missing: "credentialsMissing",
+    credentials_rejected: "credentialsRejected",
+    unattributed_credential: "credentialHasNoUser",
+    identity_lookup_failed: "identityLookupFailed",
+  },
+  team: {
+    unverified_identity: "identityUnverified",
+    team_not_recorded: "teamUnknown",
+    team_name_not_recorded: "teamNameNotRecorded",
+    no_team: "teamNotAssigned",
+    team_lookup_failed: "teamLookupFailed",
+  },
+} satisfies Record<string, Readonly<Record<string, string>>>;
+
+const missingFallback = { model: "modelNotRecorded", user: "userNotRecorded", team: "teamUnknown" } as const;
+
+/** 生成缺失字段原因翻译键。接收日志与字段名，由列表和详情在字段缺失时调用。
+ * 旧记录或未知原因只标注未记录，不能根据用户当前团队推断历史归属。 */
+export function logMissingReasonKey(log: Pick<LogEntry, "diagnosis">, field: keyof typeof missingKeys): string {
+  const code = log.diagnosis?.[`${field}_missing_reason`];
+  const keys: Readonly<Record<string, string>> = missingKeys[field];
+  return `logsUX.${code && Object.hasOwn(keys, code) ? keys[code] : missingFallback[field]}`;
+}
+
 /** 生成列表初始列可见性；参数是错误视图标志，返回列映射。只影响展示，所有字段仍可通过列选择器恢复。 */
 export function logColumnVisibility(errorsOnly: boolean): Record<string, boolean> {
   return {
@@ -56,7 +125,7 @@ export function logColumnVisibility(errorsOnly: boolean): Record<string, boolean
     session_id: false,
     ttft_ms: false,
     tps: false,
-    team_alias: false,
+    team_alias: errorsOnly,
     key_hash: false,
     end_user: false,
     request_tags: false,

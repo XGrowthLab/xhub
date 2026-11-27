@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
-import { GATEWAY, MASTER, UPSTREAM, login, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, MASTER, UPSTREAM, login, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
  * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从日志详情和监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
@@ -81,6 +81,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       guardID = "";
       await stableGoto(page, "/logs");
       await page.getByRole("tab", { name: t("Error Logs"), exact: true }).click();
+      await selectFailureSeverity(page, "warning");
       const errorPanel = page.getByRole("tabpanel", { name: t("Error Logs"), exact: true });
       // 两个日志面板共用搜索提示；切换后只应显示一个输入框，并从错误日志核对真实失败记录。
       const searchLabel = t("Search logs by ID…");

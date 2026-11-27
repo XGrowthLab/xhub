@@ -183,7 +183,12 @@ func (s *Server) checkIdentityLimits(w http.ResponseWriter, path string, p *auth
 		}
 	}
 	if alias != "" && !modelaccess.AllowsModel(s, ctx, p, p.TeamID, alias) {
-		util.WriteTypedError(w, path, 401, "invalid_request_error", "model not in allowed model list")
+		dpdiagnostics.RecordEarlyFailure(w, &dpdiagnostics.UpstreamDiagnostics{
+			Outcome: &dpdiagnostics.GatewayOutcome{Code: "model_not_allowed"},
+		})
+		util.WriteTypedReasonError(w, path, 401, "invalid_request_error",
+			"model not in allowed model list for this credential. List the models available to this credential or ask your administrator for access.",
+			"model", "model_not_allowed")
 		return false
 	}
 	return !initial || s.admitRateLimits(w, path, plan, est)

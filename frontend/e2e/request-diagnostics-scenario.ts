@@ -1,6 +1,6 @@
 import net from "node:net";
 import { expect, test } from "@playwright/test";
-import { GATEWAY, loginAdmin, sessionBearer, stableGoto } from "./helpers";
+import { GATEWAY, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 import { translate } from "../src/i18n/translate";
 
 /** 通过真实 TCP 发送截断的 HTTP 正文并半关闭写入；返回网关状态与 call id。仅使用隔离 E2E 网关，结束销毁 socket，不记录凭据。 */
@@ -53,6 +53,7 @@ export function registerRequestDiagnostics(locale: "zh-CN" | "en") {
       expect((await oversizedDetail.json()).metadata.upstream_response.failure).toMatchObject({kind:"body_too_large",bytes_read:67108864,body_limit:67108864,request_body_omitted:true});
       await stableGoto(page, "/logs");
       await page.getByRole("tab", { name: translate(locale, "Error Logs"), exact: true }).click();
+      await selectFailureSeverity(page, "warning");
       await page.getByPlaceholder(/按 ID 搜索日志|Search logs by ID/).filter({ visible: true }).fill(failure.id);
       const row = page.getByRole("row").filter({ hasText: failure.id });
       await expect(row).toBeVisible();

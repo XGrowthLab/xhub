@@ -18,6 +18,7 @@ import { formatLogCost } from "../formatLogCost";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useT } from "@/i18n";
+import { logMissingReasonKey } from "../logPresentation";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
@@ -292,6 +293,9 @@ export function LogDetailsDrawer({
     return {
       ...currentLog,
       status: detailsData?.status || currentLog.status,
+      severity: detailsData?.severity ?? currentLog.severity,
+      diagnosis: detailsData?.diagnosis ?? currentLog.diagnosis,
+      user_name: detailsData?.user_name ?? currentLog.user_name,
       messages: detailsData?.messages || currentLog.messages,
       response: detailsData?.response || currentLog.response,
       error: detailsData?.error ?? currentLog.error,
@@ -306,7 +310,8 @@ export function LogDetailsDrawer({
 
   // Status display values
   const status = requestLogStatus(enrichedLog || { status: "" });
-  const environment = metadata?.user_api_key_team_alias || t("logsUX.teamUnknown");
+  const environment = enrichedLog?.metadata?.user_api_key_team_alias
+    || (enrichedLog ? t(logMissingReasonKey(enrichedLog, "team")) : t("logsUX.teamUnknown"));
   const minimumWidth = viewportWidth > 0 ? Math.min(100, Math.max(MIN_DRAWER_WIDTH, 640 / viewportWidth * 100)) : MIN_DRAWER_WIDTH;
   const displayedWidth = Math.max(minimumWidth, drawerWidth);
 
