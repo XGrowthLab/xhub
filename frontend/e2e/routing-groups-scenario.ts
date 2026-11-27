@@ -13,7 +13,7 @@ export function registerSC123() {
       group = "group-" + suffix;
     const models = ["primary-" + suffix, "backup-" + suffix],
       ids = models.map((m) => "dep-" + m),
-      upstreams = ["e2e-fallback-500-" + suffix, "good-" + suffix];
+      upstreams = ["e2e-fallback-503-" + suffix, "good-" + suffix];
     let key = "",
       templateID = "";
     try {
@@ -71,6 +71,14 @@ export function registerSC123() {
       await dialog.getByLabel("回退目标 1").selectOption(models[1]);
       await page.screenshot({ path: "../.e2e/routing-templates/fallback-dialog.png", fullPage: true });
       await dialog.getByRole("button", { name: "保存到模板" }).click();
+      const upstreamBeforePreview = await (await page.request.get(UPSTREAM + "/e2e/request-count")).json();
+      const preview = editor.getByRole("region", { name: "真实路由预览" });
+      await preview.getByLabel("预览公开模型").selectOption({ label: group + "（路由组）" });
+      await preview.getByRole("button", { name: "预览草稿路由" }).click();
+      await expect(preview.getByText("配置的回退顺序")).toBeVisible();
+      await expect(preview.getByRole("region", { name: "配置的回退顺序" })).toContainText(models[1]);
+      await expect(preview.getByText(/规则：路由组/)).toBeVisible();
+      expect((await (await page.request.get(UPSTREAM + "/e2e/request-count")).json()).requests).toBe(upstreamBeforePreview.requests);
       await editor.getByRole("tab", { name: "JSON", exact: true }).click();
       const json = editor.getByRole("textbox", { name: "JSON", exact: true });
       const body = JSON.parse(await json.inputValue());
@@ -85,7 +93,7 @@ export function registerSC123() {
       body.retry_policy.failure_threshold = 0;
       await json.fill(JSON.stringify(body, null, 2));
       const saved = page.waitForResponse(
-        (r) => new URL(r.url()).pathname === "/route_template/new" && r.request().method() === "POST",
+        (r) => new URL(r.url()).pathname.endsWith("/route_template/new") && r.request().method() === "POST",
       );
       await editor.getByRole("button", { name: "保存模板" }).click();
       const response = await saved;
@@ -102,11 +110,20 @@ export function registerSC123() {
       expect(minted.status(), await minted.text()).toBe(200);
       const mintedBody = await minted.json();
       key = mintedBody.key;
-      const binding = await page.request.post(GATEWAY + "/route_template/binding", {
-        headers,
-        data: { scope: "key", scope_id: mintedBody.token_id || mintedBody.key_id, route_template_id: templateID },
-      });
-      expect(binding.status(), await binding.text()).toBe(200);
+      // 从保存提示进入真实绑定界面，确认读取的是内置配置，并从后台结果验证密钥绑定。
+      const row = page.getByRole("row").filter({ has: page.getByText(name, { exact: true }) });
+      await expect(row.getByText("待绑定", { exact: true })).toBeVisible();
+      await expect(row).toContainText("1 个路由组");
+      await page.getByRole("button", { name: "应用模板", exact: true }).click();
+      let apply = page.getByRole("dialog", { name: `应用「${name}」`, exact: true });
+      await apply.getByRole("textbox", { name: "按名称搜索" }).fill(name);
+      await apply.getByLabel("选择应用对象", { exact: true }).click();
+      await page.getByRole("option", { name: new RegExp(name) }).click();
+      await expect(apply.getByText("内置模型默认配置", { exact: true })).toBeVisible();
+      await apply.getByRole("button", { name: "确认应用", exact: true }).click();
+      await expect(apply.getByRole("status")).toContainText(`${name}（来自密钥）`);
+      await page.keyboard.press("Escape");
+      await expect(row.getByRole("button", { name: "1 个对象直接绑定" })).toBeVisible();
       // 适配入口的组回退成功响应可缓存；命中前仍复核实际备用成员权限。
       const cachedRequest = { model: group, session_id: "group-cache-" + suffix, messages: [{ role: "user", content: "Reply only OK. group cache" }] };
       for (let round = 0; round < 2; round++) {
@@ -166,10 +183,14 @@ export function registerSC123() {
           return log.ok() ? Number((await log.json()).spend) : 0;
         })
         .toBeGreaterThan(0);
+      // 重载前读取完已发出的可选设置响应，避免浏览器取消 501 正文校验。
+      await guard.assertOk();
       await page.reload();
-      const row = page.getByRole("row").filter({ has: page.getByText(name, { exact: true }) });
       await row.getByRole("button", { name: /^(编辑|Edit)$/ }).click();
       const edited = page.getByRole("region", { name: /^(编辑|Edit)$/ });
+      await edited.getByRole("button", { name: "1 个对象直接绑定" }).click();
+      await expect(page.getByRole("dialog").getByText(new RegExp(`密钥 · ${name}`))).toBeVisible();
+      await page.keyboard.press("Escape");
       await edited.getByRole("tab", { name: "路由组", exact: true }).click();
       await edited.getByRole("button", { name: "编辑路由组 " + group, exact: true }).click();
       dialog = page.getByRole("dialog", { name: "编辑路由组" });
@@ -179,10 +200,10 @@ export function registerSC123() {
       await edited.getByRole("tab", { name: "故障转移", exact: true }).click();
       await edited.getByRole("button", { name: "编辑故障转移 " + group + " 通用错误", exact: true }).click();
       dialog = page.getByRole("dialog", { name: "配置模板故障转移" });
-      await dialog.getByRole("button", { name: "清空回退" }).click();
+      await dialog.getByLabel("回退方式").selectOption("disabled");
       await dialog.getByRole("button", { name: "保存到模板" }).click();
       const updated = page.waitForResponse(
-        (r) => new URL(r.url()).pathname === "/route_template/" + templateID + "/update",
+        (r) => new URL(r.url()).pathname.endsWith("/route_template/" + templateID + "/update"),
       );
       await edited.getByRole("button", { name: "保存模板" }).click();
       expect((await updated).status()).toBe(200);
@@ -193,10 +214,10 @@ export function registerSC123() {
       expect(disabled.status()).toBeGreaterThanOrEqual(400);
       const afterDisabled = await (await page.request.get(UPSTREAM + "/e2e/request-count")).json();
       expect(afterDisabled.requests - afterReused.requests, "撤销回退后只重试主部署两次").toBe(2);
-      await page.getByRole("button", { name: "完整 JSON 配置指南" }).click();
-      const guide = page.getByRole("dialog", { name: "完整 JSON 配置指南" });
-      await expect(guide.getByRole("cell", { name: "routing_groups", exact: true })).toBeVisible();
-      await guide.getByRole("tab", { name: "可导入示例", exact: true }).click();
+      await page.getByRole("button", { name: "JSON 配置指南" }).click();
+      const guide = page.getByRole("dialog", { name: "JSON 配置指南" });
+      await expect(guide.getByText("routing_groups", { exact: true })).toBeVisible();
+      await guide.getByRole("tab", { name: "导入示例", exact: true }).click();
       await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
       await guide.getByRole("button", { name: "复制示例", exact: true }).click();
       await expect(guide.getByRole("status")).toHaveText("已复制");
@@ -227,15 +248,42 @@ export function registerSC123() {
       await englishEditor.getByRole("button", { name: "Expand routing group " + group, exact: true }).click();
       await expect(englishEditor.getByText('"content": "Hello"', { exact: false }).first()).toBeVisible();
       await englishEditor.getByRole("button", { name: "Cancel", exact: true }).click();
-      await page.getByRole("button", { name: "Complete JSON configuration guide", exact: true }).click();
-      const englishGuide = page.getByRole("dialog", { name: "Complete JSON configuration guide" });
-      await englishGuide.getByRole("tab", { name: "Importable example", exact: true }).click();
+      await page.getByRole("button", { name: "JSON configuration guide", exact: true }).click();
+      const englishGuide = page.getByRole("dialog", { name: "JSON configuration guide" });
+      await englishGuide.getByRole("tab", { name: "Import example", exact: true }).click();
       await expect(englishGuide.getByRole("button", { name: "Copy example", exact: true })).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(englishGuide).toHaveCount(0);
+      // 从英文模板库恢复继承，验证测试密钥随后无法再路由旧组，上游调用计数保持不变。
+      await row.getByRole("button", { name: `Actions for ${name}` }).click();
+      await page.getByRole("menuitem", { name: "Apply template", exact: true }).click();
+      apply = page.getByRole("dialog", { name: `Apply “${name}”`, exact: true });
+      await apply.getByRole("textbox", { name: "Search by name" }).fill(name);
+      await apply.getByLabel("Select a target", { exact: true }).click();
+      await page.getByRole("option", { name: new RegExp(name) }).click();
+      await expect(apply.getByText("Built-in model defaults", { exact: true })).toBeVisible();
+      const concurrent = await page.request.post(GATEWAY + "/route_template/binding", {
+        headers,
+        data: { scope: "key", scope_id: mintedBody.token_id, route_template_id: "" },
+      });
+      expect(concurrent.status()).toBe(200);
+      await apply.getByRole("button", { name: "Restore inheritance", exact: true }).click();
+      await expect(apply.getByRole("alert")).toContainText("Another change updated this binding");
+      await apply.getByRole("button", { name: "Confirm application", exact: true }).click();
+      await expect(apply.getByRole("status")).toContainText(`${name} (from Key)`);
+      await apply.getByRole("button", { name: "Restore inheritance", exact: true }).click();
+      await expect(apply.getByRole("status")).toContainText("Now in effect: Built-in model defaults");
+      await page.keyboard.press("Escape");
+      await expect(row.getByText("Unbound", { exact: true })).toBeVisible();
+      const restored = await page.request.post(GATEWAY + "/bypass/openai/v1/chat/completions", {
+        headers: { Authorization: "Bearer " + key },
+        data: { model: group, messages: [{ role: "user", content: "Check the inherited route" }] },
+      });
+      expect(restored.status(), "恢复继承后密钥不再拥有该路由组").toBeGreaterThanOrEqual(400);
+      expect((await (await page.request.get(UPSTREAM + "/e2e/request-count")).json()).requests).toBe(afterDisabled.requests);
       await page.getByRole("button", { name: "中文", exact: true }).click();
-      await page.getByRole("button", { name: "完整 JSON 配置指南", exact: true }).click();
-      await guide.getByRole("tab", { name: "可导入示例", exact: true }).click();
+      await page.getByRole("button", { name: "JSON 配置指南", exact: true }).click();
+      await guide.getByRole("tab", { name: "导入示例", exact: true }).click();
       await expect(guide.getByRole("button", { name: "复制示例", exact: true })).toBeVisible();
       await page.screenshot({ path: "../.e2e/routing-templates/guide-desktop.png", fullPage: true });
       await page.setViewportSize({ width: 390, height: 844 });
@@ -246,19 +294,17 @@ export function registerSC123() {
       expect((await page.request.post(GATEWAY + "/key/delete", { headers, data: { keys: [key] } })).ok()).toBeTruthy();
       key = "";
       await page.setViewportSize({ width: 1280, height: 720 });
-      await page.reload();
-      const deletionRow = page.getByRole("row").filter({ has: page.getByText(name, { exact: true }) });
-      await deletionRow.getByRole("button", { name: name + " 的操作" }).click();
+      await row.getByRole("button", { name: name + " 的操作" }).click();
       await page.getByRole("menuitem", { name: t("pages.routeTemplates.delete"), exact: true }).click();
       const deletion = page.waitForResponse(
-        (r) => new URL(r.url()).pathname === "/route_template/" + templateID + "/delete",
+        (r) => new URL(r.url()).pathname.endsWith("/route_template/" + templateID + "/delete"),
       );
       await page
         .getByRole("dialog")
         .getByRole("button", { name: t("pages.routeTemplates.delete"), exact: true })
         .click();
       expect((await deletion).status()).toBe(200);
-      await expect(deletionRow).toHaveCount(0);
+      await expect(row).toHaveCount(0);
       templateID = "";
       await guard.assertOk();
     } finally {

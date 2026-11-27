@@ -36,6 +36,7 @@ it("previews current draft and scope without translating user model", async () =
   await screen.findByText("No matching deployments");
   expect(apiClient.post).toHaveBeenCalledWith("/route_template/preview", {
     accessToken: "test",
+    signal: expect.any(AbortSignal),
     body: {
       model_name: "用户模型",
       endpoint_id: "chat",
@@ -83,4 +84,24 @@ it("reports endpoint catalog failure", async () => {
   render(<RoutePreview {...props} />);
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Unable to load"));
   expect(screen.getByRole("button", { name: "Preview draft route" })).toBeDisabled();
+});
+
+/** 前置合法组别名及有序回退，验证预览发送原始组名且显示本地化原因和顺序；mock 及组件自动清理。 */
+it("previews routing groups and shows the configured fallback order", async () => {
+  vi.mocked(apiClient.post).mockResolvedValue({
+    source: "draft",
+    rule_source: "routing-group",
+    routing_strategy: "traffic-split",
+    fallback_policy: { fallbacks: ["A", "B"] },
+    data: [{ deployment_id: "id", connection: "Connection", upstream_model: "m", excluded_reason: "deployment is cooling down" }],
+  });
+  render(<RoutePreview {...props} groups={["测试组"]} />);
+  await screen.findByRole("option", { name: "测试组 (routing group)" });
+  fireEvent.change(screen.getByLabelText("Preview public model"), { target: { value: "测试组" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview draft route" }));
+  expect(await screen.findByText("A → B")).toBeVisible();
+  expect(screen.getByText(/Deployment is cooling down/)).toBeVisible();
+  expect(apiClient.post).toHaveBeenCalledWith("/route_template/preview", expect.objectContaining({
+    body: expect.objectContaining({ model_name: "测试组" }),
+  }));
 });

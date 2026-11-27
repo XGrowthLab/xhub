@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import DeploymentIdentity from "./DeploymentIdentity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import CopyButton from "@/components/shared/CopyButton";
 import {
   Dialog,
   DialogContent,
@@ -222,7 +223,7 @@ export function TemplateGroups({ form, deployments, onChange }: Props) {
                 >
                   {Object.entries(groupStrategies).map(([key, label]) => (
                     <option key={key} value={key}>
-                      {t(label)} · {key}
+                      {t(label)}
                     </option>
                   ))}
                 </select>
@@ -299,22 +300,23 @@ function GroupRow({
   const t = useT();
   const [language, setLanguage] = useState("cURL");
   const request = { model: g.group_name, messages: [{ role: "user", content: "Hello" }] };
-  const endpoint = "$XHUB_BASE_URL";
-  const code =
-    language === "cURL"
-      ? [
-          "curl -X POST '" + endpoint + "/v1/chat/completions' \\",
-          "  -H 'Authorization: Bearer $XHUB_API_KEY' \\",
-          "  -H 'Content-Type: application/json' \\",
-          "  -d '" + JSON.stringify(request, null, 2) + "'",
-        ].join("\n")
-      : language === "Python"
-        ? 'import os\nfrom openai import OpenAI\n\nclient = OpenAI(base_url=os.environ["XHUB_BASE_URL"] + "/v1", api_key=os.environ["XHUB_API_KEY"])\nresponse = client.chat.completions.create(\n    model="' +
-          g.group_name +
-          '",\n    messages=[{"role": "user", "content": "Hello"}]\n)'
-        : 'import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: process.env.XHUB_BASE_URL + "/v1", apiKey: process.env.XHUB_API_KEY });\nconst response = await client.chat.completions.create(' +
-          JSON.stringify(request, null, 2) +
-          ");";
+  let code =
+    'import OpenAI from "openai";\n\nconst client = new OpenAI({ baseURL: process.env.XHUB_BASE_URL + "/v1", apiKey: process.env.XHUB_API_KEY });\nconst response = await client.chat.completions.create(' +
+    JSON.stringify(request, null, 2) +
+    ");";
+  if (language === "cURL") {
+    code = [
+      'curl -X POST "$XHUB_BASE_URL/v1/chat/completions" \\',
+      '  -H "Authorization: Bearer $XHUB_API_KEY" \\',
+      "  -H 'Content-Type: application/json' \\",
+      "  -d '" + JSON.stringify(request, null, 2).replaceAll("'", "'\\''") + "'",
+    ].join("\n");
+  } else if (language === "Python") {
+    code =
+      'import os\nfrom openai import OpenAI\n\nclient = OpenAI(base_url=os.environ["XHUB_BASE_URL"] + "/v1", api_key=os.environ["XHUB_API_KEY"])\nresponse = client.chat.completions.create(\n    model=' +
+      JSON.stringify(g.group_name) +
+      ',\n    messages=[{"role": "user", "content": "Hello"}]\n)';
+  }
   return (
     <>
       <tr className="border-t">
@@ -338,10 +340,7 @@ function GroupRow({
             ))}
           </div>
         </td>
-        <td className="p-4">
-          <p>{t(groupStrategies[g.routing_strategy])}</p>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{g.routing_strategy}</p>
-        </td>
+        <td className="p-4">{t(groupStrategies[g.routing_strategy])}</td>
         <td className="p-4">
           <div className="flex justify-end gap-2">
             <Button
@@ -381,6 +380,7 @@ function GroupRow({
                   {n}
                 </Button>
               ))}
+              <CopyButton value={code} label={t("pages.routeTemplates.editor.copyGroupRequest")} className="ml-auto" />
             </div>
             <pre className="overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">{code}</pre>
           </td>
@@ -389,11 +389,18 @@ function GroupRow({
     </>
   );
 }
-/** TemplateFallbacks 用表单维护模板三类有序回退映射；确认写本地草稿，清空或删除随模板整体保存。
+type FallbackMode = "inherit" | "custom" | "disabled";
+
+/** TemplateFallbacks 用表单维护三类有序回退映射，分别表达继承、定制和禁用，随模板整体保存。
  * 参数为草稿和实时目录；允许模型或本模板组名，禁止重复、自引用及跨类型循环，无独立API写入。 */
 export function TemplateFallbacks({ form, deployments, onChange }: Props) {
   const t = useT();
-  const [draft, setDraft] = useState<{ source: string; field: FallbackField; targets: string[] } | null>(null);
+  const [draft, setDraft] = useState<{
+    source: string;
+    field: FallbackField;
+    targets: string[];
+    mode: FallbackMode;
+  } | null>(null);
   const [editing, setEditing] = useState<{ source: string; field: FallbackField } | null>(null);
   const names = [
     ...new Set([...deployments.map((d) => d.model_name), ...(form.routing_groups ?? []).map((g) => g.group_name)]),
@@ -407,23 +414,25 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
         ...next,
         [editing.field]: (next[editing.field] ?? []).filter((row) => !Object.hasOwn(row, editing.source)),
       };
-    return { ...next, [draft.field]: [...(next[draft.field] ?? []), { [draft.source]: draft.targets }] };
+    if (draft.mode === "inherit") return next;
+    return {
+      ...next,
+      [draft.field]: [...(next[draft.field] ?? []), { [draft.source]: draft.mode === "disabled" ? [] : draft.targets }],
+    };
   };
-  const invalid = !draft
-    ? ""
-    : !names.includes(draft.source)
-      ? t("pages.routeTemplates.editor.choosePrimaryError")
-      : draft.targets.some((t) => !names.includes(t))
-        ? t("pages.routeTemplates.editor.chooseTargetError")
-        : (form[draft.field] ?? []).some(
-              (row) =>
-                Object.hasOwn(row, draft.source) &&
-                !(editing?.field === draft.field && editing.source === draft.source),
-            )
-          ? t("pages.routeTemplates.editor.duplicateChainError")
-          : validateSections(candidate())
-            ? t("pages.routeTemplates.editor.cycleError")
-            : "";
+  /** 校验当前回退草稿，返回最先需要修正的本地化信息，无网络调用。继承操作允许清除已下架模型的覆盖。 */
+  const validateDraft = () => {
+    if (!draft || (draft.mode === "inherit" && editing)) return "";
+    if (!names.includes(draft.source)) return t("pages.routeTemplates.editor.choosePrimaryError");
+    const invalidTarget = !draft.targets.length || draft.targets.some((target) => !names.includes(target));
+    if (draft.mode === "custom" && invalidTarget) return t("pages.routeTemplates.editor.chooseTargetError");
+    const sameRule = editing?.field === draft.field && editing.source === draft.source;
+    if (!sameRule && (form[draft.field] ?? []).some((row) => Object.hasOwn(row, draft.source))) {
+      return t("pages.routeTemplates.editor.duplicateChainError");
+    }
+    return validateSections(candidate()) ? t("pages.routeTemplates.editor.cycleError") : "";
+  };
+  const invalid = validateDraft();
   /** move 按索引交换相邻目标；只更新弹窗草稿，边界按钮被禁用，无返回值。 */
   const move = (i: number, offset: number) => {
     if (!draft) return;
@@ -441,7 +450,7 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
         <Button
           onClick={() => {
             setEditing(null);
-            setDraft({ source: "", field: "fallbacks", targets: [] });
+            setDraft({ source: "", field: "fallbacks", targets: [], mode: "custom" });
           }}
         >
           {t("pages.routeTemplates.editor.addFallback")}
@@ -487,14 +496,19 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
                           })}
                           onClick={() => {
                             setEditing({ source, field });
-                            setDraft({ source, field, targets: [...targets] });
+                            setDraft({
+                              source,
+                              field,
+                              targets: [...targets],
+                              mode: targets.length ? "custom" : "disabled",
+                            });
                           }}
                         >
                           {t("pages.routeTemplates.editor.edit")}
                         </Button>
                         <Button
                           variant="ghost"
-                          aria-label={t("pages.routeTemplates.editor.deleteFallbackFor", {
+                          aria-label={t("pages.routeTemplates.editor.inheritFallbackFor", {
                             source,
                             category: t(categories[field]),
                           })}
@@ -502,7 +516,7 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
                             onChange({ ...form, [field]: (form[field] ?? []).filter((r) => !Object.hasOwn(r, source)) })
                           }
                         >
-                          {t("pages.routeTemplates.editor.delete")}
+                          {t("pages.routeTemplates.editor.inheritFallback")}
                         </Button>
                       </div>
                     </td>
@@ -537,6 +551,7 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
                   aria-label={t("pages.routeTemplates.editor.primaryLabel")}
                   className="w-full rounded-md border bg-background p-3"
                   value={draft.source}
+                  disabled={draft.mode === "inherit"}
                   onChange={(e) => setDraft({ ...draft, source: e.target.value })}
                 >
                   <option value="">{t("pages.routeTemplates.editor.choosePrimary")}</option>
@@ -551,6 +566,7 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
                   aria-label={t("pages.routeTemplates.editor.triggerLabel")}
                   className="w-full rounded-md border bg-background p-3"
                   value={draft.field}
+                  disabled={draft.mode === "inherit"}
                   onChange={(e) => setDraft({ ...draft, field: e.target.value as FallbackField })}
                 >
                   {fallbackFields.map((field) => (
@@ -560,69 +576,86 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
                   ))}
                 </select>
               </label>
-              <div className="rounded-lg border p-4">
-                <p className="mb-3 text-center text-xs font-medium text-primary">
-                  {t("pages.routeTemplates.editor.tryNext")}
-                </p>
-                <div className="space-y-3">
-                  {draft.targets.map((target, i) => (
-                    <div key={i} className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm text-muted-foreground">{i + 1}</span>
-                      <select
-                        aria-label={t("pages.routeTemplates.editor.targetFor", { index: i + 1 })}
-                        className="min-w-0 flex-1 rounded-md border bg-background p-2"
-                        value={target}
-                        onChange={(e) =>
-                          setDraft({ ...draft, targets: draft.targets.map((t, j) => (i === j ? e.target.value : t)) })
-                        }
-                      >
-                        <option value="">{t("pages.routeTemplates.editor.chooseTarget")}</option>
-                        {names
-                          .filter((n) => n !== draft.source)
-                          .map((n) => (
-                            <option key={n} disabled={draft.targets.includes(n) && n !== target}>
-                              {n}
-                            </option>
-                          ))}
-                      </select>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={t("pages.routeTemplates.editor.moveUp", { index: i + 1 })}
-                        disabled={i === 0}
-                        onClick={() => move(i, -1)}
-                      >
-                        ↑
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={t("pages.routeTemplates.editor.moveDown", { index: i + 1 })}
-                        disabled={i === draft.targets.length - 1}
-                        onClick={() => move(i, 1)}
-                      >
-                        ↓
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={t("pages.routeTemplates.editor.removeTarget", { index: i + 1 })}
-                        onClick={() => setDraft({ ...draft, targets: draft.targets.filter((_, j) => i !== j) })}
-                      >
-                        {t("pages.routeTemplates.editor.remove")}
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-                <Button
-                  className="mt-4"
-                  variant="outline"
-                  disabled={!draft.source || draft.targets.length >= 32}
-                  onClick={() => setDraft({ ...draft, targets: [...draft.targets, ""] })}
+              <label className="block space-y-2">
+                <span className="font-medium">{t("pages.routeTemplates.editor.fallbackMode")}</span>
+                <select
+                  className="w-full rounded-md border bg-background p-3"
+                  value={draft.mode}
+                  onChange={(event) => {
+                    const mode = event.target.value as FallbackMode;
+                    setDraft({ ...draft, ...(mode === "inherit" && editing ? editing : {}), mode });
+                  }}
                 >
-                  {t("pages.routeTemplates.editor.addTarget")}
-                </Button>
-              </div>
+                  {editing && <option value="inherit">{t("pages.routeTemplates.editor.inheritFallback")}</option>}
+                  <option value="custom">{t("pages.routeTemplates.editor.customFallback")}</option>
+                  <option value="disabled">{t("pages.routeTemplates.editor.disableFallback")}</option>
+                </select>
+              </label>
+              {draft.mode === "custom" && (
+                <div className="rounded-lg border p-4">
+                  <p className="mb-3 text-center text-xs font-medium text-primary">
+                    {t("pages.routeTemplates.editor.tryNext")}
+                  </p>
+                  <div className="space-y-3">
+                    {draft.targets.map((target, i) => (
+                      <div key={i} className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm text-muted-foreground">{i + 1}</span>
+                        <select
+                          aria-label={t("pages.routeTemplates.editor.targetFor", { index: i + 1 })}
+                          className="min-w-0 flex-1 rounded-md border bg-background p-2"
+                          value={target}
+                          onChange={(e) =>
+                            setDraft({ ...draft, targets: draft.targets.map((t, j) => (i === j ? e.target.value : t)) })
+                          }
+                        >
+                          <option value="">{t("pages.routeTemplates.editor.chooseTarget")}</option>
+                          {names
+                            .filter((n) => n !== draft.source)
+                            .map((n) => (
+                              <option key={n} disabled={draft.targets.includes(n) && n !== target}>
+                                {n}
+                              </option>
+                            ))}
+                        </select>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t("pages.routeTemplates.editor.moveUp", { index: i + 1 })}
+                          disabled={i === 0}
+                          onClick={() => move(i, -1)}
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t("pages.routeTemplates.editor.moveDown", { index: i + 1 })}
+                          disabled={i === draft.targets.length - 1}
+                          onClick={() => move(i, 1)}
+                        >
+                          ↓
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t("pages.routeTemplates.editor.removeTarget", { index: i + 1 })}
+                          onClick={() => setDraft({ ...draft, targets: draft.targets.filter((_, j) => i !== j) })}
+                        >
+                          {t("pages.routeTemplates.editor.remove")}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    className="mt-4"
+                    variant="outline"
+                    disabled={!draft.source || draft.targets.length >= 32}
+                    onClick={() => setDraft({ ...draft, targets: [...draft.targets, ""] })}
+                  >
+                    {t("pages.routeTemplates.editor.addTarget")}
+                  </Button>
+                </div>
+              )}
               {invalid && draft.source && (
                 <p role="alert" className="text-sm text-destructive">
                   {invalid}
@@ -631,13 +664,6 @@ export function TemplateFallbacks({ form, deployments, onChange }: Props) {
             </div>
           )}
           <DialogFooter className="shrink-0 border-t pt-4">
-            <Button
-              variant="ghost"
-              disabled={!draft?.targets.length}
-              onClick={() => draft && setDraft({ ...draft, targets: [] })}
-            >
-              {t("pages.routeTemplates.editor.clearFallback")}
-            </Button>
             <Button variant="outline" onClick={() => setDraft(null)}>
               {t("pages.routeTemplates.editor.cancel")}
             </Button>

@@ -1,7 +1,7 @@
 "use client";
 
-import { Copy, FileJson, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
-import { useT, t } from "@/i18n";
+import { Copy, FileJson, MoreHorizontal, Plus, Search, Trash2, Waypoints } from "lucide-react";
+import { useT } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,9 +17,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { summarizeTemplate, type RouteTemplateRow } from "@/components/route_templates/routeTemplatePayload";
 import { formatUpdatedAt } from "@/components/route_templates/templateForm";
 
-const usedByLabel = (count: number) =>
-  count > 0 ? t("pages.routeTemplates.usedByCount", { count }) : t("pages.routeTemplates.unused");
-
 type Props = {
   rows: RouteTemplateRow[];
   search: string;
@@ -30,9 +27,11 @@ type Props = {
   onCopy: (row: RouteTemplateRow) => void;
   onDelete: (row: RouteTemplateRow) => void;
   onEdit: (row: RouteTemplateRow) => void;
+  onApply: (row: RouteTemplateRow) => void;
   onUsage: (row: RouteTemplateRow) => void;
 };
 
+/** 呈现模板库的搜索、摘要与操作入口。Props 由模板页提供，列表只读，写入通过选中行的回调发起。 */
 export default function RouteTemplateLibrary({
   rows,
   search,
@@ -43,6 +42,7 @@ export default function RouteTemplateLibrary({
   onCopy,
   onDelete,
   onEdit,
+  onApply,
   onUsage,
 }: Props) {
   const t = useT();
@@ -83,7 +83,7 @@ export default function RouteTemplateLibrary({
                 <TableRow>
                   <TableHead>{t("pages.routeTemplates.name")}</TableHead>
                   <TableHead>{t("pages.routeTemplates.summary")}</TableHead>
-                  <TableHead>{t("pages.routeTemplates.usedBy")}</TableHead>
+                  <TableHead>{t("pages.routeTemplates.binding.directBindings")}</TableHead>
                   <TableHead>{t("pages.routeTemplates.updatedAt")}</TableHead>
                   <TableHead className="text-right">
                     <span className="sr-only">{t("pages.routeTemplates.actions")}</span>
@@ -103,14 +103,11 @@ export default function RouteTemplateLibrary({
                       {summarizeTemplate(row.body, summaryLabels)}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-auto px-0 py-1 text-xs text-muted-foreground"
-                        onClick={() => onUsage(row)}
-                      >
-                        {usedByLabel(row.usedBy)}
-                      </Button>
+                      {row.usedBy > 0 ? (
+                        <Button size="sm" variant="link" className="h-auto px-0 py-1" onClick={() => onUsage(row)}>
+                          {t("pages.routeTemplates.binding.boundCount", { count: row.usedBy })}
+                        </Button>
+                      ) : <Badge variant="outline">{t("pages.routeTemplates.binding.pending")}</Badge>}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {formatUpdatedAt(row.updated_at) || "—"}
@@ -133,6 +130,10 @@ export default function RouteTemplateLibrary({
                             <MoreHorizontal />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-40">
+                            <DropdownMenuItem onClick={() => onApply(row)}>
+                              <Waypoints />
+                              {t("pages.routeTemplates.binding.open")}
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => onViewJson(row)}>
                               <FileJson />
                               {t("pages.routeTemplates.viewJson")}

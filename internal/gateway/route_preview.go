@@ -32,7 +32,7 @@ type previewDeployment struct {
 
 // routePreview 校验可见模板或授权草稿并预览候选，不请求上游、不扣额度、不修改轮询状态。
 // 参数 w、r：HTTP 响应及包含 model_name、endpoint_id、template_id、可选 body/request 的请求。
-// 返回：规则来源、策略及安全部署列表；无效输入返回 400，不可见模板按统一授权规则拒绝。
+// 返回：规则来源、策略、安全部署列表和调用方有权看到的有序回退；无效输入返回 400，不可见模板按统一授权规则拒绝。
 // 调用：路由模板及部署页面；草稿的权限与对应模板写入权限相同。
 func (s *Server) routePreview(w http.ResponseWriter, r *http.Request) {
 	p := s.RequireUser(w, r)
@@ -211,5 +211,24 @@ func (s *Server) routePreview(w http.ResponseWriter, r *http.Request) {
 			rows[i].Share = &share
 		}
 	}
-	util.WriteJSON(w, 200, map[string]any{"model_name": input.Model, "endpoint_id": input.Endpoint, "template_id": settings.TemplateID, "source": settings.Source, "rule_source": settings.RuleSource, "routing_strategy": settings.Strategy(), "data": rows})
+	// 回退沿用编译器已合并的类别顺序。可见性按目标模型再筛一遍，避免通过默认链暴露不允许的目标。
+	visibleTargets := func(targets []string) []string {
+		visible := make([]string, 0, len(targets))
+		for _, name := range targets {
+			if models.AllowsModel(s, r.Context(), p, p.TeamID, name) {
+				visible = append(visible, name)
+			}
+		}
+		return visible
+	}
+	policy := settings.ModelFallbacks[input.Model]
+	fallbackPolicy := router.FallbackPolicy{
+		Fallbacks: visibleTargets(policy.Fallbacks), ContextWindow: visibleTargets(policy.ContextWindow),
+		ContentPolicy: visibleTargets(policy.ContentPolicy),
+	}
+	util.WriteJSON(w, 200, map[string]any{
+		"model_name": input.Model, "endpoint_id": input.Endpoint, "template_id": settings.TemplateID,
+		"source": settings.Source, "rule_source": settings.RuleSource, "routing_strategy": settings.Strategy(),
+		"data": rows, "fallback_policy": fallbackPolicy,
+	})
 }

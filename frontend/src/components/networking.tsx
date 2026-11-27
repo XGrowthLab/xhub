@@ -3017,7 +3017,7 @@ export type RouteTemplateUsage = {
 export type EffectiveRouteTemplate = {
   template_id?: string;
   name?: string;
-  scope_type: "organization" | "team" | "key" | "platform";
+  scope_type: "organization" | "team" | "key" | "builtin" | "platform";
   scope_id?: string;
 };
 
@@ -3080,16 +3080,24 @@ export const getRouteTemplateBindingCall = async (
   };
 };
 
-/** Points a scope at a template, or clears the selection when the id is empty. */
+/** 提交单个范围的路由绑定；change 接受原模板 ID 或带确认值的变更，空 ID 恢复继承。
+ * 模板库调用后返回后台解析的生效范围；绑定被其他操作改变或调用失败时抛错。 */
 export const setRouteTemplateBindingCall = async (
   accessToken: string,
   scope: "organization" | "team" | "key",
   scopeId: string,
-  templateId: string,
-) => {
+  change: string | { id: string; expected: string },
+): Promise<{ effective: EffectiveRouteTemplate }> => {
+  const templateId = typeof change === "string" ? change : change.id;
+  const expectedTemplateId = typeof change === "string" ? undefined : change.expected;
   return apiClient.post(`/route_template/binding`, {
     accessToken,
-    body: { scope, scope_id: scopeId, route_template_id: templateId },
+    body: {
+      scope,
+      scope_id: scopeId,
+      route_template_id: templateId,
+      expected_route_template_id: expectedTemplateId,
+    },
   });
 };
 

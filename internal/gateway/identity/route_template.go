@@ -314,7 +314,9 @@ func RouteTemplateUsage(g Gate, w http.ResponseWriter, r *http.Request) {
 	util.WriteJSON(w, 200, map[string]any{"data": usage})
 }
 
-// RouteTemplateBinding reads or writes which template one scope selects.
+// RouteTemplateBinding 读取或修改组织、团队、密钥的直接绑定。
+// 参数 g 和 r 提供身份库、授权及范围信息，w 接收结果。写入可带 expected_route_template_id，
+// 使控制台确认期间被修改的绑定返回 409。旧调用可省略该字段，读取及生效优先级维持原契约。
 //
 // Selecting is narrower than editing: an organization administrator may point
 // their own organization, a team administrator their own team, and a key's owner
@@ -408,8 +410,23 @@ func RouteTemplateBinding(g Gate, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := g.Identity().SetScopeRouteTemplate(ctx0(r), actorOf(p), scope, scopeID, templateID); err != nil {
-		g.WriteIAMError(w, r, err)
+	var writeErr error
+	if raw, present := body["expected_route_template_id"]; present {
+		expected, valid := raw.(string)
+		if !valid {
+			util.WriteError(w, 400, "invalid_request", "expected_route_template_id must be a string")
+			return
+		}
+		writeErr = g.Identity().CompareAndSetScopeRouteTemplate(ctx0(r), actorOf(p), scope, scopeID, templateID, expected)
+	} else {
+		writeErr = g.Identity().SetScopeRouteTemplate(ctx0(r), actorOf(p), scope, scopeID, templateID)
+	}
+	if errors.Is(writeErr, iam.ErrRouteTemplateBindingConflict) {
+		util.WriteError(w, http.StatusConflict, "route_template_binding_conflict", "the scope now selects a different route template")
+		return
+	}
+	if writeErr != nil {
+		g.WriteIAMError(w, r, writeErr)
 		return
 	}
 	util.Info("route template bound scope=%s id=%s template=%s", scope, scopeID, templateID)

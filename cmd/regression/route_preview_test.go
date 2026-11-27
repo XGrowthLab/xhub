@@ -89,3 +89,35 @@ func TestRoutePreviewMatchesInference(t *testing.T) {
 		t.Fatalf("预览绕过模型名单: %s", r.describe())
 	}
 }
+
+// TestRoutePreviewFallbackVisibility 验证真实预览列出有权限的回退目标且保留顺序。
+// 前置隔离网关及三条回退，密钥只允许其中两条；核对结果与上游和账单副作用，测试 harness 回收 schema。
+func TestRoutePreviewFallbackVisibility(t *testing.T) {
+	h := newHarness(t)
+	admin := h.adminSession()
+	scope := h.openScope(t, admin, "preview-fallback-visibility")
+	for _, name := range []string{"preview-main", "preview-first", "preview-hidden", "preview-last"} {
+		addFlatPricedModel(t, h, admin, name, map[string]any{
+			"input_cost_per_token": testInputRate, "output_cost_per_token": testOutputRate,
+		}, "chat")
+	}
+	body := routeTemplateBody([]any{}, 1, 60, 0, 0)
+	body["fallbacks"] = []any{map[string]any{"preview-main": []string{"preview-first", "preview-hidden", "preview-last"}}}
+	template := routeTemplate(t, h, admin, "preview visible fallback", body)
+	bindTemplate(t, h, admin, "key", scope.keyID, template)
+	h.ok(http.MethodPost, "/key/update", admin, map[string]any{
+		"key": scope.key, "models": []string{"preview-main", "preview-first", "preview-last"},
+	})
+	before := h.moneyOf(t, scope)
+	result := h.ok(http.MethodPost, "/route_template/preview", scope.key, map[string]any{
+		"model_name": "preview-main", "endpoint_id": "chat",
+	}).json()
+	fallback, _ := result["fallback_policy"].(map[string]any)
+	order, _ := fallback["fallbacks"].([]any)
+	if len(order) != 2 || order[0] != "preview-first" || order[1] != "preview-last" {
+		t.Fatalf("可见回退目标或顺序不正确: %v", fallback)
+	}
+	if len(h.upstreamCalls()) != 0 || !h.moneyOf(t, scope).same(before) {
+		t.Fatal("回退预览不应调用上游或改变消费")
+	}
+}
