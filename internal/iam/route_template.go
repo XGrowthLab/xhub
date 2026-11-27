@@ -3,6 +3,7 @@ package iam
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 
@@ -11,6 +12,9 @@ import (
 )
 
 var logTraceOnceRouteTemplate sync.Once
+
+// ErrRouteTemplateBindingConflict 表示目标已被重新绑定，调用方须先重新读取再确认。
+var ErrRouteTemplateBindingConflict = errors.New("route template binding changed")
 
 // TemplateOwner is who a router template belongs to. Both empty is a platform
 // template; it is not an error, it is the default level.
@@ -299,6 +303,20 @@ func (db *DB) RouteTemplateUsageCounts(ctx context.Context) (map[string]int, err
 // 调用：gateway/route_template.go
 // 测试：route_template_test.go
 func (db *DB) SetScopeRouteTemplate(ctx context.Context, by Actor, scope, scopeID, templateID string) error {
+	return db.setScopeRouteTemplate(ctx, by, scope, scopeID, templateID, nil)
+}
+
+// CompareAndSetScopeRouteTemplate 在直接绑定仍等于 expected 时更新绑定并写入审计。
+// ctx、by、scope、scopeID、templateID 的含义同 SetScopeRouteTemplate，expected 为空允许从继承状态更新。
+// 供绑定确认流程调用，返回冲突、范围不存在或写入错误；冲突时不会写绑定或审计。
+func (db *DB) CompareAndSetScopeRouteTemplate(ctx context.Context, by Actor, scope, scopeID, templateID, expected string) error {
+	return db.setScopeRouteTemplate(ctx, by, scope, scopeID, templateID, &expected)
+}
+
+// setScopeRouteTemplate 在同一事务内写入指定范围的模板与审计记录。
+// ctx 和 by 提供上下文与操作者，scope、scopeID、templateID 指定目标；expected 可选，指定客户端已确认的直接绑定。
+// 供普通和条件绑定共用，返回数据库错误或绑定状态冲突。
+func (db *DB) setScopeRouteTemplate(ctx context.Context, by Actor, scope, scopeID, templateID string, expected *string) error {
 	table, ok := scopeTable(scope)
 	if !ok {
 		return ErrUnknownScope
@@ -318,14 +336,31 @@ func (db *DB) SetScopeRouteTemplate(ctx context.Context, by Actor, scope, scopeI
 			}
 			value = trimmed
 		}
-		affected, err := s.Exec(
-			"UPDATE "+table+" SET route_template_id = ?, updated_at = now() WHERE id = ?",
-			value, scopeID,
-		)
+		query := "UPDATE " + table + " SET route_template_id = ?, updated_at = now() WHERE id = ?"
+		args := []any{value, scopeID}
+		if expected != nil {
+			// 比较和写入在一条语句里完成，旧客户端的无条件写入也不能插入两步之间。
+			query += " AND COALESCE(route_template_id, '') = ?"
+			args = append(args, strings.TrimSpace(*expected))
+		}
+		affected, err := s.Exec(append([]any{query}, args...)...)
 		if err != nil {
 			return mapErr(err)
 		}
-		if n, err := affected.RowsAffected(); err == nil && n == 0 {
+		n, err := affected.RowsAffected()
+		if err != nil {
+			return mapErr(err)
+		}
+		if n == 0 {
+			if expected != nil {
+				exists, err := s.Table(table).Where("id = ?", scopeID).Exist()
+				if err != nil {
+					return mapErr(err)
+				}
+				if exists {
+					return ErrRouteTemplateBindingConflict
+				}
+			}
 			return ErrUnknownScope
 		}
 		return writeAudit(s, by, Audit{Action: "route_template.bind", ObjectType: table, ObjectID: scopeID})

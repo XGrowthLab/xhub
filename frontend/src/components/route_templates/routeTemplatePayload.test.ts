@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRouteTemplateCall } from "@/components/networking";
+import { createRouteTemplateCall, updateRouteTemplateCall } from "@/components/networking";
 import { setActiveLocale } from "@/i18n";
 import { deleteRefusalText, saveRouteTemplate, summarizeTemplate, toTemplateRows } from "./routeTemplatePayload";
 
@@ -26,14 +26,21 @@ afterEach(() => {
 
 const labels = {
   models: (value: number) => value + " models",
-  strategy: (value: string) => `strategy:${value}`,
   retries: (value: number) => `${value} retries`,
   timeout: (seconds: number) => `${seconds}s`,
   fallbacks: (value: number) => `${value} fallbacks`,
+  groups: (value: number) => `${value} groups`,
   none: "defaults",
 };
 
 describe("saveRouteTemplate", () => {
+  /** 用隔离的创建与更新响应验证保存返回可绑定 ID，mock 由测试清理。 */
+  it("returns the saved identity", async () => {
+    vi.mocked(createRouteTemplateCall).mockResolvedValueOnce({ id: "new" });
+    await expect(saveRouteTemplate("token", { name: "Example", body: {} })).resolves.toBe("new");
+    await expect(saveRouteTemplate("token", { id: "old", name: "Example", body: {} })).resolves.toBe("old");
+    expect(updateRouteTemplateCall).toHaveBeenCalledWith("token", "old", { name: "Example", body: {} });
+  });
   /** 前置中文语言和空白名称；验证本地校验返回准确中文且不调用后台；恢复语言并清空 mock，无测试数据。 */
   it("localizes the required-name failure before creating", async () => {
     setActiveLocale("zh-CN");
@@ -74,10 +81,21 @@ describe("summarizeTemplate", () => {
         },
         labels,
       ),
-    ).toBe("2 models · 5 retries · 90s");
+    ).toBe("2 models · 0 groups · 0 fallbacks · 5 retries · 90s");
     expect(
       summarizeTemplate({ model_routes: [], retry_policy: { max_attempts: 1, timeout_seconds: 60 } }, labels),
     ).toContain("defaults");
+  });
+
+  /** 前置仅含路由组、显式禁用项及旧数据；验证所有有效规则计数，无外部状态。 */
+  it("includes fallback-only and group-only configuration", () => {
+    const body = {
+      routing_groups: [{ group_name: "g" }],
+      fallbacks: [{ g: [] }],
+      context_window_fallbacks: [{ g: ["backup"] }],
+      content_policy_fallbacks: null,
+    };
+    expect(summarizeTemplate(body, labels)).toBe("0 models · 1 groups · 2 fallbacks · 1 retries · 60s");
   });
 });
 

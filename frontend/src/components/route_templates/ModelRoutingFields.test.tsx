@@ -57,6 +57,19 @@ describe("模型规则表单", () => {
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
   });
 
+  /** 验证切到权重策略时保留模型默认分配，只有显式选自定义才显示实时占比。内存宿主卸载时清理。 */
+  it("从默认继承切换到自定义的七三分流", () => {
+    const changed = vi.fn();
+    render(<Harness initial={[{ model: "shared", strategy: "simple-shuffle" }]} changed={changed} />);
+    fireEvent.change(screen.getByLabelText("shared 路由逻辑"), { target: { value: "traffic-split" } });
+    expect(changed).toHaveBeenLastCalledWith([{ model: "shared", strategy: "traffic-split" }]);
+    fireEvent.change(screen.getByLabelText("shared 权重来源"), { target: { value: "custom" } });
+    fireEvent.change(screen.getByLabelText("模板部署 east 权重"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("模板部署 west 权重"), { target: { value: "3" } });
+    expect(screen.getByText("配置占比 70.0%")).toBeVisible();
+    expect(screen.getByText("配置占比 30.0%")).toBeVisible();
+  });
+
   /** 验证删除一条模板规则只恢复该模型默认分配，其他规则保留。 */
   it("删除规则恢复该模型默认分配", () => {
     const changed = vi.fn();

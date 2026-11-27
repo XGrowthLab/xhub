@@ -237,6 +237,7 @@ const TemplateEditor: React.FC<{
       <RoutePreview
         accessToken={accessToken}
         models={[...new Set(deployments.map((deployment) => deployment.model_name))]}
+        groups={form.routing_groups?.map((group) => group.group_name)}
         body={written.ok && !jsonError ? written.body : null}
         templateId={templateId}
         organizationId={organizationId}

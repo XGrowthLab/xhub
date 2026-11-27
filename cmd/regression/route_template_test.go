@@ -80,6 +80,51 @@ func TestRouteTemplateScopePrecedence(t *testing.T) {
 	}
 }
 
+// TestRouteTemplateBindingConfirmation 用真实管理接口确认条件绑定、冲突后保留当前模板及恢复继承。
+// 前置隔离网关、团队、密钥与平台模板，禁止跨组织绑定，卸载时回收本轮 schema。
+func TestRouteTemplateBindingConfirmation(t *testing.T) {
+	h := newHarness(t)
+	admin := h.adminSession()
+	scope := h.provision(t, admin, "route-confirm")
+	foreign := h.provision(t, admin, "route-confirm-other")
+	_, keyID := h.issueKey(t, scope.session, scope.teamID, scope.projectID, "route-confirm-key")
+	body := routeTemplateBody([]any{}, 1, 60, 3, 0)
+	parent := routeTemplate(t, h, admin, "confirm inherited", body)
+	applied := routeTemplate(t, h, admin, "confirm selected", body)
+	bindTemplate(t, h, admin, "team", scope.teamID, parent)
+	if got := effectiveTemplate(t, h, admin, "key", keyID); got["template_id"] != parent {
+		t.Fatalf("提交前应继承团队模板: %v", got)
+	}
+
+	path := "/route_template/binding"
+	payload := map[string]any{
+		"scope": "key", "scope_id": keyID, "route_template_id": applied, "expected_route_template_id": "",
+	}
+	h.ok(http.MethodPost, path, admin, payload)
+	conflict := h.do(http.MethodPost, path, admin, payload)
+	detail, _ := conflict.json()["error"].(map[string]any)
+	if conflict.status != http.StatusConflict || detail["type"] != "route_template_binding_conflict" {
+		t.Fatalf("过期绑定应该返回明确冲突: %s", conflict.describe())
+	}
+	payload["expected_route_template_id"] = nil
+	if bad := h.do(http.MethodPost, path, admin, payload); bad.status != http.StatusBadRequest {
+		t.Fatalf("非字符串确认值应被拒绝: %s", bad.describe())
+	}
+	payload["expected_route_template_id"] = applied
+	payload["route_template_id"] = ""
+	if denied := h.do(http.MethodPost, path, foreign.session, payload); denied.status != http.StatusForbidden && denied.status != http.StatusNotFound {
+		t.Fatalf("跨组织写入应该被拒绝: %s", denied.describe())
+	}
+	if got := effectiveTemplate(t, h, admin, "key", keyID); got["template_id"] != applied || got["scope_type"] != "key" {
+		t.Fatalf("失败请求不应覆盖现有绑定: %v", got)
+	}
+	restored := h.ok(http.MethodPost, path, admin, payload)
+	effective, _ := restored.json()["effective"].(map[string]any)
+	if effective["template_id"] != parent || effective["scope_type"] != "team" {
+		t.Fatalf("恢复继承应返回实际团队规则: %s", restored.describe())
+	}
+}
+
 // TestRouteTemplateRetryPolicyApplies 验证模板 retry_policy 直接控制真实网关的单部署尝试次数。
 // 本地上游固定返回 500；测试分别观察绑定与清除后的尝试次数，隔离 schema 负责清理数据。
 func TestRouteTemplateRetryPolicyApplies(t *testing.T) {

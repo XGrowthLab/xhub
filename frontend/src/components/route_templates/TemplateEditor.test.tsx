@@ -40,7 +40,7 @@ describe("模板JSON与业务分区同步", () => {
     fireEvent.click(screen.getByRole("tab", { name: "故障转移" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑故障转移 g 通用错误" }));
     const dialog = screen.getByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "清空回退" }));
+    fireEvent.change(within(dialog).getByLabelText("回退方式"), { target: { value: "disabled" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "保存到模板" }));
     fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
     const updated = screen.getByRole("textbox", { name: "JSON" });

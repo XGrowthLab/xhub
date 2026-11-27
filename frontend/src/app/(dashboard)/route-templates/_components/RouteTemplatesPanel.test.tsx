@@ -3,13 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import RouteTemplatesPanel from "./RouteTemplatesPanel";
-import { createRouteTemplateCall, getRouteTemplatesCall, updateRouteTemplateCall } from "@/components/networking";
+import { createRouteTemplateCall, getRouteTemplatesCall, modelInfoCall, updateRouteTemplateCall } from "@/components/networking";
 import { setActiveLocale, translate } from "@/i18n";
 
 const document = (timeout = 60) => ({
   model_routes: [],
   retry_policy: { max_attempts: 2, timeout_seconds: timeout, failure_threshold: 3, cooldown_seconds: 0 },
 });
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ userId: "user", userRole: "Admin" }),
+}));
 
 vi.mock("@/components/networking", () => ({
   apiClient: { get: vi.fn(async () => ({ endpoint_types: [] })), post: vi.fn() },
@@ -19,7 +23,7 @@ vi.mock("@/components/networking", () => ({
   ]),
   modelInfoCall: vi.fn(async () => ({ data: [], total_pages: 1 })),
   userAvailableModelsCall: vi.fn(async () => ({ data: [] })),
-  createRouteTemplateCall: vi.fn(async () => ({})),
+  createRouteTemplateCall: vi.fn(async () => ({ id: "created" })),
   updateRouteTemplateCall: vi.fn(async () => ({})),
   getRouteTemplateUsageCall: vi.fn(async () => ({ data: [] })),
   deleteRouteTemplateCall: vi.fn(async () => ({})),
@@ -79,6 +83,22 @@ describe("route template workflow", () => {
         }),
       ),
     );
+    expect(await screen.findByText("“Custom” was saved. Apply it to a scope to use it.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Apply template", exact: true })).toBeEnabled();
+  });
+
+  /** 前置目录请求失败，验证可重复读取而不丢名称；测试仅模拟接口，卸载回收状态。 */
+  it("reports a deployment catalog error and retries in place", async () => {
+    vi.mocked(modelInfoCall).mockRejectedValueOnce(new Error("offline"));
+    const user = setup();
+    const editor = await openCreate(user);
+    await user.type(within(editor).getByLabelText("Name"), "Retained");
+    const failure = await screen.findByRole("alert");
+    expect(failure).toHaveTextContent("Could not load model deployments.");
+    await user.click(within(failure).getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(within(editor).getByLabelText("Name")).toHaveValue("Retained");
+    expect(modelInfoCall).toHaveBeenCalledTimes(2);
   });
 
   /** 验证页面完全移除平台默认编辑区，只保留命名模板。 */

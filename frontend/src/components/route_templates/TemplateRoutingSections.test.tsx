@@ -51,8 +51,14 @@ describe("模板组与回退表单", () => {
     expect(screen.getByRole("button", { name: "删除路由组 g" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "编辑故障转移 g 通用错误" }));
     dialog = screen.getByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "清空回退" }));
+    fireEvent.change(within(dialog).getByLabelText("回退方式"), { target: { value: "disabled" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "保存到模板" }));
     expect(screen.getByTestId("document")).toHaveTextContent('"fallbacks":[{"g":[]}]');
+    fireEvent.click(screen.getByRole("button", { name: "编辑故障转移 g 通用错误" }));
+    dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("回退方式")).toHaveValue("disabled");
+    fireEvent.change(within(dialog).getByLabelText("回退方式"), { target: { value: "inherit" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存到模板" }));
+    expect(screen.getByTestId("document")).toHaveTextContent('"fallbacks":[]');
   });
 });

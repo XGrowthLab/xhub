@@ -2,24 +2,19 @@
 
 import React, { useEffect, useState } from "react";
 import { HelpDisclosure } from "@/components/console/ConsolePrimitives";
-import { useT, t } from "@/i18n";
+import { useT } from "@/i18n";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   getRouteTemplateBindingCall,
   getRouteTemplatesCall,
   type EffectiveRouteTemplate,
 } from "@/components/networking";
+import { effectiveBindingLabel } from "./routeTemplateBinding";
 
 const INHERIT = "inherit";
 
-const scopeName = (scope: EffectiveRouteTemplate["scope_type"]) => {
-  if (scope === "organization") return t("pages.routeTemplates.scopeOrganization");
-  if (scope === "team") return t("pages.routeTemplates.scopeTeam");
-  if (scope === "key") return t("pages.routeTemplates.scopeKey");
-  return "";
-};
-
-/** 路由模板选择器；接收当前绑定与变更回调，显示实际生效范围。继承规则按需展开，获取失败保持未知，不改变权限或绑定。 */
+/** 路由模板选择器；Props 提供对象范围、表单值与变更回调。
+ * 组织、团队和密钥设置使用，分开显示服务端生效结果和待保存选择。读取错误显示状态不可用，组件不提交写入。 */
 const RouteTemplateSelect: React.FC<{
   accessToken: string | null;
   value: string;
@@ -29,24 +24,27 @@ const RouteTemplateSelect: React.FC<{
   disabled?: boolean;
 }> = ({ accessToken, value, onChange, scope, scopeId, disabled }) => {
   const t = useT();
-  const [options, setOptions] = useState<Array<{ id: string; name: string }>>([]);
-  const [optionsLoaded, setOptionsLoaded] = useState(false);
-  const [effective, setEffective] = useState<EffectiveRouteTemplate | null>(null);
-  const [inherited, setInherited] = useState<EffectiveRouteTemplate | null>(null);
+  const [catalog, setCatalog] = useState<{ token: string; options: Array<{ id: string; name: string }> }>();
+  const [lookup, setLookup] = useState<{
+    key: string;
+    binding: Awaited<ReturnType<typeof getRouteTemplateBindingCall>> | null;
+  }>();
+  const bindingKey = JSON.stringify([accessToken, scope, scopeId, value]);
+  const optionsLoaded = catalog?.token === accessToken;
+  const options = optionsLoaded ? catalog.options : [];
+  const bindingLoaded = lookup?.key === bindingKey;
+  const binding = bindingLoaded ? lookup.binding : null;
 
   useEffect(() => {
-    setOptions([]);
-    setOptionsLoaded(false);
     if (!accessToken) return;
     let cancelled = false;
     void getRouteTemplatesCall(accessToken)
       .then((rows) => {
         if (cancelled) return;
-        setOptions(rows.map((row) => ({ id: row.id, name: row.name })));
-        setOptionsLoaded(true);
+        setCatalog({ token: accessToken, options: rows.map((row) => ({ id: row.id, name: row.name })) });
       })
       .catch(() => {
-        if (!cancelled) setOptionsLoaded(true);
+        if (!cancelled) setCatalog({ token: accessToken, options: [] });
       });
     return () => {
       cancelled = true;
@@ -54,23 +52,23 @@ const RouteTemplateSelect: React.FC<{
   }, [accessToken]);
 
   useEffect(() => {
-    setEffective(null);
-    setInherited(null);
     if (!accessToken || !scope || !scopeId) return;
     let cancelled = false;
     void getRouteTemplateBindingCall(accessToken, scope, scopeId)
       .then((binding) => {
         if (cancelled) return;
-        setEffective(binding.effective);
-        setInherited(binding.inherited ?? (!binding.route_template_id ? binding.effective : null));
+        setLookup({ key: bindingKey, binding });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancelled) setLookup({ key: bindingKey, binding: null });
+      });
     return () => {
       cancelled = true;
     };
-  }, [accessToken, scope, scopeId, value]);
+  }, [accessToken, scope, scopeId, bindingKey]);
 
   const selected = value || INHERIT;
+  const effective = binding?.effective;
   const selectedOption = options.find((option) => option.id === value);
   const selectedLabel =
     selected === INHERIT
@@ -78,18 +76,8 @@ const RouteTemplateSelect: React.FC<{
       : selectedOption?.name ||
         (effective?.template_id === value ? effective.name : undefined) ||
         t(optionsLoaded ? "pages.routeTemplates.unknownTemplate" : "pages.routeTemplates.loadingTemplates");
-  let status = t("pages.routeTemplates.inheritHint");
-  const preview = value
-    ? { template_id: value, name: selectedOption?.name ?? (effective?.template_id === value ? effective.name : undefined), scope_type: scope ?? "key" }
-    : inherited;
-  if (preview) {
-    status =
-      preview.scope_type === "platform"
-        ? t("pages.routeTemplates.effectivePlatform")
-        : preview.name
-          ? t("pages.routeTemplates.effectiveFrom", { name: preview.name, scope: scopeName(preview.scope_type) })
-          : t("pages.routeTemplates.inheritHint");
-  }
+  const preview: EffectiveRouteTemplate | undefined =
+    value && scope ? { template_id: value, name: selectedOption?.name, scope_type: scope } : binding?.inherited;
 
   return (
     <div className="space-y-1">
@@ -105,7 +93,7 @@ const RouteTemplateSelect: React.FC<{
           <SelectValue>{selectedLabel}</SelectValue>
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={INHERIT}>{t("pages.routeTemplates.notApplied")}</SelectItem>
+          <SelectItem value={INHERIT}>{t("pages.routeTemplates.binding.restore")}</SelectItem>
           {options.map((option) => (
             <SelectItem key={option.id} value={option.id}>
               {option.name}
@@ -113,7 +101,21 @@ const RouteTemplateSelect: React.FC<{
           ))}
         </SelectContent>
       </Select>
-      {status === t("pages.routeTemplates.inheritHint") ? <HelpDisclosure title={t("consoleUi.routeHelp")}>{status}</HelpDisclosure> : <p className="text-sm leading-6 text-muted-foreground">{status}</p>}
+      {scope && scopeId ? (
+        <div className="text-sm text-muted-foreground">
+          <p>
+            {t("pages.routeTemplates.binding.current")} ·{" "}
+            {bindingLoaded ? effectiveBindingLabel(effective) : t("pages.routeTemplates.binding.loading")}
+          </p>
+          {binding && binding.route_template_id !== value && (
+            <p>
+              {t("pages.routeTemplates.binding.afterApply")} · {effectiveBindingLabel(preview)}
+            </p>
+          )}
+        </div>
+      ) : (
+        <HelpDisclosure title={t("consoleUi.routeHelp")}>{t("pages.routeTemplates.inheritHint")}</HelpDisclosure>
+      )}
     </div>
   );
 };

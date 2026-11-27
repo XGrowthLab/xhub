@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Loader2, Plus } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { ArrowLeft, Loader2, Plus, Waypoints } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { t, useT } from "@/i18n";
-import { formatTemplateStrategyLabel } from "@/components/route_templates/strategyLabel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConsolePageHeader } from "@/components/console/ConsolePrimitives";
@@ -19,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import RouteTemplateLibrary from "./RouteTemplateLibrary";
+import RouteTemplateBindingDialog from "./RouteTemplateBindingDialog";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { modelInfoCall, type RouteTemplateUsage } from "@/components/networking";
 import {
@@ -37,9 +37,9 @@ import {
   formFromBody,
   nextCopyName,
   prettyDocument,
-  type SplitDeployment,
   type TemplateFormState,
 } from "@/components/route_templates/templateForm";
+import { bindingScopeLabel } from "@/components/route_templates/routeTemplateBinding";
 
 type Draft = {
   id: string;
@@ -70,11 +70,7 @@ const editorDescription = (draft: Draft | null) => {
 
 const documentText = (row: JsonView | null) => (row ? prettyDocument(row.body) : "");
 
-const scopeLabel = (scope: RouteTemplateUsage["scope_type"]) => {
-  if (scope === "organization") return t("pages.routeTemplates.scopeOrganization");
-  if (scope === "team") return t("pages.routeTemplates.scopeTeam");
-  return t("pages.routeTemplates.scopeKey");
-};
+type BindingTemplate = { id: string; name: string };
 
 /**
  * The route template library.
@@ -85,8 +81,6 @@ const scopeLabel = (scope: RouteTemplateUsage["scope_type"]) => {
 const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessToken }) => {
   const t = useT();
   const { userId, userRole } = useAuthorized();
-  const [deployments, setDeployments] = useState<SplitDeployment[]>([]);
-  const [catalogError, setCatalogError] = useState("");
   const [jsonValid, setJsonValid] = useState(true);
   const [jsonView, setJsonView] = useState<JsonView | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -94,6 +88,8 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
   const [search, setSearch] = useState("");
   const [usage, setUsage] = useState<UsageView | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RouteTemplateRow | null>(null);
+  const [freshTemplate, setFreshTemplate] = useState<BindingTemplate | null>(null);
+  const [bindingTemplate, setBindingTemplate] = useState<BindingTemplate | null>(null);
 
   const library = useQuery({
     queryKey: ["route-template-library", accessToken],
@@ -106,34 +102,30 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
   const loading = library.isPending;
   const refresh = () => library.refetch();
   const showLibrary = !draft && !library.isError && !loading;
+  const editedRow = rows.find((row) => row.id === draft?.id);
 
-  useEffect(() => {
-    if (!accessToken || !userId || !userRole) return;
-    let cancelled = false;
-    // 目录按部署分页，必须获取全部页面才能为同名模型编辑完整权重。
-    void (async () => {
-      const rows: unknown[] = [];
-      for (let page = 1; !cancelled; page++) {
-        const data = await modelInfoCall(accessToken, userId, userRole, page, 200);
-        rows.push(...(data?.data ?? []));
-        if (page >= (data?.total_pages ?? 1)) break;
+  const catalog = useQuery({
+    queryKey: ["route-template-deployments", accessToken, userId, userRole],
+    enabled: Boolean(draft && accessToken && userId && userRole),
+    retry: false,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const deployments: unknown[] = [];
+      for (let page = 1; ; page++) {
+        // 按部署分页，取齐同名模型的所有部署才允许在完整目录中选权重。
+        const data = await modelInfoCall(accessToken!, userId!, userRole!, page, 200);
+        deployments.push(...(data?.data ?? []));
+        if (page >= (data?.total_pages ?? 1)) return deploymentsFromInfo(deployments);
       }
-      if (!cancelled) {
-        setDeployments(deploymentsFromInfo(rows));
-        setCatalogError("");
-      }
-    })().catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken, userId, userRole]);
+    },
+  });
 
   const summaryLabels = useMemo(
     () => ({
-      strategy: (value: string) => t(formatTemplateStrategyLabel(value)),
       retries: (value: number) => t("pages.routeTemplates.attemptsSummary", { count: value }),
       timeout: (seconds: number) => t("pages.routeTemplates.timeoutSummary", { seconds }),
-      fallbacks: (value: number) => t("pages.routeTemplates.fallbacksSummary", { count: value }),
+      fallbacks: (value: number) => t("pages.routeTemplates.binding.fallbackCount", { count: value }),
+      groups: (value: number) => t("pages.routeTemplates.binding.groupCount", { count: value }),
       models: (value: number) => t("pages.routeTemplates.modelsSummary", { count: value }),
       none: t("pages.routeTemplates.platformDefault"),
     }),
@@ -146,7 +138,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
     setDraft({ id: "", name: "", form: emptyForm() });
   };
 
-  /** save 提交当前合法草稿；无参数，返回完成 Promise；保存成功关闭编辑器，失败保留输入并显示本地化错误。 */
+  /** save 提交当前合法草稿；无参数，返回完成 Promise。保存成功关闭编辑器，新模板提供独立应用入口，失败保留输入。 */
   const save = async () => {
     if (!accessToken || !draft) return;
     if (!jsonValid || saving || !draft.name.trim()) return;
@@ -157,12 +149,14 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
     }
     setSaving(true);
     try {
-      await saveRouteTemplate(accessToken, {
+      const name = draft.name.trim();
+      const id = await saveRouteTemplate(accessToken, {
         id: draft.id || undefined,
-        name: draft.name.trim(),
+        name,
         body: written.body,
       });
       toast.success(t("pages.routeTemplates.saved"));
+      setFreshTemplate(!draft.id && id ? { id, name } : null);
       setDraft(null);
       await refresh();
     } catch {
@@ -201,6 +195,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
     }
     try {
       await removeRouteTemplate(accessToken, row.id);
+      if (freshTemplate?.id === row.id) setFreshTemplate(null);
       toast.success(t("pages.routeTemplates.deleted"));
       setPendingDelete(null);
       setUsage(null);
@@ -247,10 +242,14 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
         </>}
       />
 
-      {catalogError && (
-        <p role="alert" className="text-destructive">
-          {catalogError}
-        </p>
+      {draft && catalog.isError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm text-destructive">
+          <span>{t("pages.routeTemplates.editor.catalogFailed")}</span>
+          <Button size="sm" variant="outline" onClick={() => void catalog.refetch()}>{t("pages.routeTemplates.reload")}</Button>
+        </div>
+      )}
+      {draft && catalog.isLoading && (
+        <p role="status" className="text-sm text-muted-foreground">{t("pages.routeTemplates.editor.catalogLoading")}</p>
       )}
 
       {library.isError && (
@@ -272,6 +271,19 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
           {t("pages.routeTemplates.loadingTemplates")}
         </div>
       )}
+      {showLibrary && freshTemplate && (
+        <Card>
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <p role="status" className="min-w-0 wrap-anywhere">
+              {t("pages.routeTemplates.binding.savedUnbound", { name: freshTemplate.name })}
+            </p>
+            <Button size="sm" onClick={() => setBindingTemplate(freshTemplate)}>
+              <Waypoints />
+              {t("pages.routeTemplates.binding.open")}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
       {showLibrary && (
         <RouteTemplateLibrary
           rows={rows}
@@ -283,6 +295,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
           onCopy={(row) => copyDocument(row.name, row.body)}
           onDelete={setPendingDelete}
           onEdit={openNamed}
+          onApply={setBindingTemplate}
           onUsage={(row) => void showUsage(row, false)}
         />
       )}
@@ -290,7 +303,14 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
       {draft && (
         <Card role="region" aria-label={editorTitle(draft)} className="gap-0 py-0">
           <div className="sticky top-0 z-sticky flex flex-wrap items-center justify-between gap-3 rounded-t-xl border-b bg-card px-5 py-3">
-            <p className="text-sm text-muted-foreground">{t("pages.routeTemplates.draftHint")}</p>
+            <div className="min-w-0 text-sm text-muted-foreground">
+              <p>{t(draft.id ? "pages.routeTemplates.binding.editIntro" : "pages.routeTemplates.binding.createIntro")}</p>
+              {editedRow && editedRow.usedBy > 0 && (
+                <Button size="sm" variant="link" className="h-auto px-0 py-1" onClick={() => void showUsage(editedRow, false)}>
+                  {t("pages.routeTemplates.binding.boundCount", { count: editedRow.usedBy })}
+                </Button>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <Button variant="ghost" disabled={saving} onClick={() => setDraft(null)}>
                 {t("Cancel")}
@@ -307,7 +327,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
                 key={draft.id || "new"}
                 name={draft.name}
                 form={draft.form}
-                deployments={deployments}
+                deployments={catalog.data ?? []}
                 accessToken={accessToken}
                 templateId={draft.id || undefined}
                 onName={(name) => setDraft({ ...draft, name })}
@@ -317,6 +337,18 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
             </fieldset>
           </CardContent>
         </Card>
+      )}
+
+      {bindingTemplate && (
+        <RouteTemplateBindingDialog
+          accessToken={accessToken}
+          template={bindingTemplate}
+          onClose={() => setBindingTemplate(null)}
+          onApplied={() => {
+            if (freshTemplate?.id === bindingTemplate.id) setFreshTemplate(null);
+            void refresh();
+          }}
+        />
       )}
 
       <Dialog open={jsonView !== null} onOpenChange={(open) => !open && setJsonView(null)}>
@@ -335,9 +367,11 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
         <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="wrap-anywhere">{t("pages.routeTemplates.usageTitle", { name: usage?.name ?? "" })}</DialogTitle>
-            {usage?.refused && (
-              <DialogDescription>{t("pages.routeTemplates.inUseBy", { count: usage.rows.length })}</DialogDescription>
-            )}
+            <DialogDescription>
+              {usage?.refused
+                ? t("pages.routeTemplates.inUseBy", { count: usage.rows.length })
+                : t("pages.routeTemplates.binding.directBindings")}
+            </DialogDescription>
           </DialogHeader>
           {usage && usage.rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("pages.routeTemplates.unused")}</p>
@@ -345,7 +379,7 @@ const RouteTemplatesPanel: React.FC<{ accessToken: string | null }> = ({ accessT
             <ul className="space-y-1 text-sm">
               {usage?.rows.map((entry) => (
                 <li className="wrap-anywhere rounded-md bg-muted/35 px-3 py-2" key={`${entry.scope_type}-${entry.scope_id}`}>
-                  {scopeLabel(entry.scope_type)}
+                  {bindingScopeLabel(entry.scope_type)}
                   {" · "}
                   {entry.name}
                 </li>

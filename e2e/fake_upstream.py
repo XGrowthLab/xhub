@@ -595,6 +595,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         # 仅测试自建型号前缀触发回退错误，不影响其他浏览器用例或已有模型。
         for prefix, status, code in (("e2e-fallback-500-", 500, "api_error"),
+                                     ("e2e-fallback-503-", 503, "service_unavailable"),
                                      ("e2e-fallback-429-", 429, "rate_limit_exceeded"),
                                      ("e2e-fallback-context-", 400, "context_length_exceeded"),
                                      ("e2e-fallback-content-", 400, "content_policy_violation"),

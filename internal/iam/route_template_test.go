@@ -158,6 +158,47 @@ func TestScopeSelectionRoundTrips(t *testing.T) {
 	}
 }
 
+// TestCompareAndSetScopeRouteTemplate 校验两个操作者同时从继承状态修改绑定时，仅一方能提交。
+// 前置独立数据库和具名模板，验证冲突不会覆盖获胜绑定，获胜者可清除绑定；测试库由清理回调回收。
+func TestCompareAndSetScopeRouteTemplate(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	org, err := db.CreateOrg(ctx, actor(), "conditional-binding", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err := db.CreateRouteTemplate(ctx, actor(), TemplateOwner{}, "conditional", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			results <- db.CompareAndSetScopeRouteTemplate(ctx, actor(), "organization", org.ID, tmpl.ID, "")
+		}()
+	}
+	var successes, conflicts int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrRouteTemplateBindingConflict):
+			conflicts++
+		default:
+			t.Fatalf("条件绑定返回未知错误: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("并发绑定应成功一次、冲突一次，实际成功 %d、冲突 %d", successes, conflicts)
+	}
+	if err := db.CompareAndSetScopeRouteTemplate(ctx, actor(), "organization", org.ID, "", tmpl.ID); err != nil {
+		t.Fatalf("恢复继承失败: %v", err)
+	}
+	if got, err := db.ScopeRouteTemplate(ctx, "organization", org.ID); err != nil || got != "" {
+		t.Fatalf("恢复后仍存在直接绑定: %q，错误 %v", got, err)
+	}
+}
+
 // TestBindingRefusesAnUnknownTemplate 证明不能把范围指向一个不存在的模板。
 //
 // 指向空处会让那次调用取不到设置，而"取不到"和"用平台默认"看起来一样，

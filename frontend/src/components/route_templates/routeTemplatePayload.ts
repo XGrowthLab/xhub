@@ -37,26 +37,33 @@ export const toTemplateRows = (templates: RouteTemplate[]): RouteTemplateRow[] =
   }));
 
 /**
- * summarizeTemplate 为模板库生成执行摘要；参数为正文和本地化标签函数，返回一行策略、例外数量及可靠性说明。
- * 显示模型规则数量或模型默认说明，可靠性缺失时仅使用展示默认值。
+ * summarizeTemplate 为模板库生成执行摘要；参数为正文和本地化标签函数，返回规则数量和可靠性说明。
+ * 回退数量包含显式禁用的规则，可靠性缺失时仅使用展示默认值。
  * 仅转换展示数据，不补写配置或调用后台。
  */
 export const summarizeTemplate = (
   body: Record<string, unknown>,
   labels: {
-    strategy: (value: string) => string;
     retries: (value: number) => string;
     timeout: (seconds: number) => string;
     fallbacks: (value: number) => string;
+    groups: (value: number) => string;
     none: string;
     models: (value: number) => string;
   },
 ): string => {
   const count = Array.isArray(body.model_routes) ? body.model_routes.length : 0;
+  const groups = Array.isArray(body.routing_groups) ? body.routing_groups.length : 0;
+  const fallbacks = ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"].reduce((total, field) => {
+    const rules = body[field];
+    return total + (Array.isArray(rules) ? rules.length : 0);
+  }, 0);
   const retry =
     body.retry_policy && typeof body.retry_policy === "object" ? (body.retry_policy as Record<string, unknown>) : {};
   return [
-    count ? labels.models(count) : labels.none,
+    ...(count || groups || fallbacks
+      ? [labels.models(count), labels.groups(groups), labels.fallbacks(fallbacks)]
+      : [labels.none]),
     labels.retries(typeof retry.max_attempts === "number" ? retry.max_attempts : 1),
     labels.timeout(typeof retry.timeout_seconds === "number" ? retry.timeout_seconds : 60),
   ].join(" · ");
@@ -67,7 +74,7 @@ export const SCOPE_KINDS = ["organization", "team", "key"] as const;
 export type ScopeKind = (typeof SCOPE_KINDS)[number];
 
 /**
- * 保存路由模板；参数 accessToken 为鉴权令牌，template 包含可选 id、名称、正文和新建归属，返回无值的 Promise。
+ * 保存路由模板；参数 accessToken 为鉴权令牌，template 包含可选 id、名称、正文和新建归属，返回模板 ID。
  * 模板页提交时调用：有 id 时更新且不转移归属，无 id 时创建；空正文允许保存，空白名称按当前语言在请求前拒绝。
  * 副作用仅为一次后台创建或更新调用，校验失败不会发起请求。
  */
@@ -86,12 +93,12 @@ export const saveRouteTemplate = async (
      */
     owner?: { organizationId?: string; teamId?: string };
   },
-): Promise<void> => {
+): Promise<string> => {
   const name = template.name.trim();
   if (!name) throw new Error(t("name is required"));
   if (template.id) {
     await updateRouteTemplateCall(accessToken, template.id, { name, body: template.body });
-    return;
+    return template.id;
   }
   const created = {
     name,
@@ -99,7 +106,8 @@ export const saveRouteTemplate = async (
     organization_id: template.owner?.organizationId,
     team_id: template.owner?.teamId,
   };
-  await createRouteTemplateCall(accessToken, created);
+  const result = await createRouteTemplateCall(accessToken, created);
+  return typeof result?.id === "string" ? result.id : "";
 };
 
 /**
