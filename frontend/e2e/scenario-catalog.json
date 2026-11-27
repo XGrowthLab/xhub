@@ -3359,6 +3359,13 @@
     "environment": "default offline"
   },
   {
+    "id": "REG-qiniu-dialogue-compat",
+    "file": "e2e/scenarios/regression/qiniu-dialogue-compat.test.ts",
+    "title": "Qiniu dialogue compatibility preserves reasoning, completion and upstream errors",
+    "kind": "implemented",
+    "environment": "default offline"
+  },
+  {
     "id": "REG-model-view-en",
     "file": "e2e/scenarios/regression/model-view-hot-update-en.test.ts",
     "title": "model view hot update en",

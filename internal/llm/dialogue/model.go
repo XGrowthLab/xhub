@@ -45,6 +45,8 @@ type DialogueResult struct {
 	Usage   map[string]any
 	// Reasoning 保存公开推理文本，用于 Chat/Responses 桥接，不承载密文。
 	Reasoning string
+	// ResponsesMessageReasoning 保存独立推理项没有覆盖的公开消息推理，供 Messages 分项输出。
+	ResponsesMessageReasoning string
 	// 原始回复用于同协议输出，防止推理项、扩展用量和供应商字段被重新编码丢失。
 	Source      string
 	Native      map[string]any

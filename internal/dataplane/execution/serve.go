@@ -777,6 +777,15 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 							return
 						}
 						lastErr = conversionErr
+						if execution.Protocol == "gemini" || execution.Protocol == "vertex" || execution.Protocol == "openai-responses" {
+							// 部分兼容渠道用 HTTP 200 承载错误对象。保留供应商 code、status、details 和请求 ID。
+							var document map[string]any
+							if json.Unmarshal(attempt.body, &document) == nil {
+								if upstreamErr := dpdiagnostics.ExtractUpstreamError(document); upstreamErr != nil {
+									diagnostic.Error, lastErr = upstreamErr.Envelope, upstreamErr
+								}
+							}
+						}
 						// HTTP 200 只说明传输成功；无法解析的供应商正文仍是部署失败，
 						// 必须进入与网络错误、5xx 和流式转换错误相同的冷却链。
 						h.NoteFailure(did, routeCfg)

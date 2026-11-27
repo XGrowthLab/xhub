@@ -14,7 +14,7 @@ import (
 // 调用：ParseDialogueResult 的共享解析分支；不参与价格计算，不推断供应商，无外部副作用。
 func parseUnifiedDialogueResult(protocol string, raw []byte) (DialogueResult, error) {
 	if protocol == "gemini" || protocol == "vertex" {
-		return parseGoogleDialogueResult(raw)
+		return parseGoogleDialogueResult(raw, false)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {

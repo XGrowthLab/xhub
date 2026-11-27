@@ -92,6 +92,8 @@ func TestUpstreamFaultFeedback(t *testing.T) {
 		{"传输超时", "upstream_timeout", "before it was complete", &UpstreamDiagnostics{StatusCode: 200, Failure: &Failure{Kind: "timeout", Phase: "response_transfer"}}},
 		{"错误响应被截断", "upstream_stream_interrupted", "HTTP 502", &UpstreamDiagnostics{StatusCode: 502, Failure: &Failure{Phase: "response_transfer", TransportError: "https://private.example"}}},
 		{"协议校验失败", "upstream_invalid_response", "required field", &UpstreamDiagnostics{StatusCode: 200}},
+		{"流协议校验失败", "upstream_invalid_response", "required field", &UpstreamDiagnostics{StatusCode: 200, Failure: ObserveFailure(nil, "response_transfer", ErrInvalidUpstreamResponse, 0)}},
+		{"转换能力不支持", "unsupported_response_bridge", "required field", &UpstreamDiagnostics{StatusCode: 200, Failure: ObserveFailure(nil, "response_transfer", ErrUnsupportedResponseBridge, 0)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reason, message := UpstreamFaultFeedback(tc.diag, "required field")

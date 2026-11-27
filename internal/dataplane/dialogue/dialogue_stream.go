@@ -60,7 +60,7 @@ type dialogueStream struct {
 	// refused/refusal 保存 Messages 的拒绝事实和真实说明；只在完整终态后输出标准 refusal 字段。
 	refused bool
 	refusal string
-	// Messages 拒绝终态复用原生生命周期校验；不能只凭一个 stop_reason 将缺开始、未闭合块或冲突终态发布成成功。
+	// Messages→Responses 和拒绝终态复用原生块生命周期校验；未完整验证前不发布签名归属或成功历史。
 	messagesVerifier nativeMessagesStream
 	messagesVerified llmdialogue.DialogueResult
 	messagesError    error
@@ -191,7 +191,7 @@ func (s *dialogueStream) chat(delta map[string]any, finish any) error {
 }
 
 // reasoningDelta 累积公开推理文本并按目标协议输出，参数为增量字符串，返回协议或写入错误。
-// consume 调用；同协议观察模式只累计，Responses 输出独立 reasoning 项，Messages 输出无签名 thinking 内容块。
+// consume 调用；同协议观察模式只累计，Responses 输出独立 reasoning 项，Messages 输出无签名 thinking，Google 输出 thought 文本。
 // 无外部调用，会修改流状态和写出字节；不得把密文传入本方法。
 func (s *dialogueStream) reasoningDelta(text string) error {
 	if text == "" {
@@ -201,11 +201,14 @@ func (s *dialogueStream) reasoningDelta(text string) error {
 	if s.observeOnly {
 		return nil
 	}
-	if s.protocol != "openai-chat" && s.protocol != "openai-responses" && s.protocol != "anthropic-messages" {
-		return fmt.Errorf("reasoning stream requires OpenAI protocol")
+	if s.protocol != "openai-chat" && s.protocol != "openai-responses" && s.protocol != "anthropic-messages" && s.protocol != "gemini" && s.protocol != "vertex" {
+		return fmt.Errorf("unsupported public reasoning stream protocol %s", s.protocol)
 	}
 	if err := s.start(); err != nil {
 		return err
+	}
+	if s.protocol == "gemini" || s.protocol == "vertex" {
+		return s.googleTextDelta(text, true)
 	}
 	if s.protocol == "openai-chat" {
 		return s.chat(map[string]any{"reasoning_content": text}, nil)
@@ -243,7 +246,7 @@ func (s *dialogueStream) textDelta(text string) error {
 	s.text += text
 	switch s.protocol {
 	case "gemini", "vertex":
-		return s.emit("", map[string]any{"candidates": []any{map[string]any{"index": 0, "content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": text}}}}}})
+		return s.googleTextDelta(text, false)
 	case "openai-chat":
 		return s.chat(map[string]any{"content": text}, nil)
 	case "openai-responses":
@@ -406,9 +409,6 @@ func (s *dialogueStream) finish() error {
 		}
 	}
 	if s.messagesResponses {
-		if s.messagesError != nil {
-			return s.messagesError
-		}
 		if s.messagesVerified.Source != "anthropic-messages" {
 			return fmt.Errorf("invalid Messages stream completion")
 		}
@@ -443,8 +443,8 @@ func (s *dialogueStream) finish() error {
 	}
 	switch s.protocol {
 	case "gemini", "vertex":
-		// 文本已按增量发送；终态仅发送完整函数参数与用量，避免文本重复。
-		r.Text = ""
+		// 正文和公开推理已按增量发送，终态只发送完整工具参数和用量。
+		r.Text, r.Reasoning = "", ""
 		raw, err := llmdialogue.EncodeDialogueResult(r, s.protocol, s.model)
 		if err != nil {
 			return err
@@ -631,6 +631,9 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		if protocol == "gemini" || protocol == "vertex" {
+			return fmt.Errorf("%w: invalid Google SSE JSON: %v", dpdiagnostics.ErrInvalidUpstreamResponse, err)
+		}
 		return err
 	}
 	if upstreamErr := dpdiagnostics.ExtractUpstreamError(m); upstreamErr != nil {
@@ -643,6 +646,10 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 	typ := streamString(m["type"])
 	if protocol == "anthropic-messages" && s.messagesError == nil {
 		result, complete, err := s.messagesVerifier.consume(m)
+		if err != nil && s.messagesResponses {
+			// 先验证上游序号与类型；继续转换可能把具体字段错误覆盖为工具参数不完整，或发出无效内容。
+			return err
+		}
 		s.messagesError = err
 		if complete {
 			s.messagesVerified = result
@@ -650,27 +657,9 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 	}
 	switch protocol {
 	case "gemini", "vertex":
-		if m["candidates"] == nil {
-			// Google 可在单独末帧提供用量；不能把缺少候选的普通空帧视为完成。
-			if streamMap(m["usageMetadata"]) != nil {
-				m["candidates"] = []any{map[string]any{}}
-				raw, _ := json.Marshal(m)
-				result, err := llmdialogue.ParseDialogueResult(protocol, raw)
-				if err != nil {
-					return err
-				}
-				for k, v := range result.Usage {
-					if k != "pricing_blocked" {
-						s.usage[k] = v
-					}
-				}
-				return nil
-			}
-			return fmt.Errorf("Google stream candidate missing")
-		}
-		r, err := llmdialogue.ParseDialogueResult(protocol, []byte(data))
+		r, err := llmdialogue.ParseGoogleDialogueFrame([]byte(data))
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", dpdiagnostics.ErrInvalidUpstreamResponse, err)
 		}
 		if r.ID != "" {
 			s.id = r.ID
@@ -680,6 +669,9 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 				s.usage[k] = v
 			}
 		}
+		if err := s.reasoningDelta(r.Reasoning); err != nil {
+			return err
+		}
 		if err := s.textDelta(r.Text); err != nil {
 			return err
 		}
@@ -688,10 +680,8 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 				return err
 			}
 		}
-		choices, _ := m["candidates"].([]any)
-		if len(choices) == 1 && streamString(streamMap(choices[0])["finishReason"]) != "" {
-			s.completed = true
-			s.stop = r.Stop
+		if r.Stop != "" {
+			s.completed, s.stop = true, r.Stop
 		}
 	case "openai-chat":
 		choices, _ := m["choices"].([]any)
@@ -739,6 +729,18 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 				return s.start()
 			}
 			return s.reasoningDelta(streamString(m["delta"]))
+		case "response.reasoning_text.delta", "response.reasoning_text.done":
+			field := "delta"
+			if typ == "response.reasoning_text.done" {
+				field = "text"
+			}
+			if _, ok := m[field].(string); !ok {
+				return fmt.Errorf("%w: %s.%s must be a string", dpdiagnostics.ErrInvalidUpstreamResponse, typ, field)
+			}
+			// 原生流保留这些事件。跨协议等待完整项确认公开内容和镜像文本，避免提前泄出受密文约束的推理。
+			if s.responsesMessages {
+				s.responseReasoningPending = true
+			}
 		case "response.output_text.delta":
 			if s.responsesMessages && (s.responsePrelude || s.responseReasoningPending) {
 				s.pendingResponseText += streamString(m["delta"])
@@ -776,7 +778,7 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 			// 达到输出上限仍是可观察终态，必须与 completed 使用相同的密文/拒绝校验，不能静默降级为普通推理。
 			response := streamMap(m["response"])
 			if response == nil || streamString(response["id"]) == "" || response["status"] != strings.TrimPrefix(typ, "response.") {
-				return fmt.Errorf("invalid upstream response terminal")
+				return fmt.Errorf("%w: invalid Responses terminal object", dpdiagnostics.ErrInvalidUpstreamResponse)
 			}
 			raw, _ := json.Marshal(response)
 			var result llmdialogue.DialogueResult
@@ -787,7 +789,7 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 				result, err = llmdialogue.ParseDialogueResult(protocol, raw)
 			}
 			if err != nil {
-				return err
+				return fmt.Errorf("%w: %v", dpdiagnostics.ErrInvalidUpstreamResponse, err)
 			}
 			// 即使没有可见增量也必须校验完整终态对象；observeOnly 同样不能放过损坏对象。
 			if !s.observeOnly {
@@ -811,6 +813,9 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 							}
 						}
 					}
+					if err = s.reasoningDelta(result.ResponsesMessageReasoning); err != nil {
+						return err
+					}
 					s.reasoning = result.Reasoning
 					if s.text == "" && s.pendingResponseText == "" {
 						s.pendingResponseText = result.Text
@@ -818,9 +823,17 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 					if err = s.flushResponseText(); err != nil {
 						return err
 					}
-				} else if s.reasoning == "" {
-					if err = s.reasoningDelta(result.Reasoning); err != nil {
-						return err
+				} else {
+					// 已流出的摘要不重发；终态可以补全先前未发送的公开推理与正文。
+					if reasoning, ok := strings.CutPrefix(result.Reasoning, s.reasoning); ok {
+						if err = s.reasoningDelta(reasoning); err != nil {
+							return err
+						}
+					}
+					if s.text == "" {
+						if err = s.textDelta(result.Text); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -855,7 +868,7 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 				}
 				// 原生观察器另行完整校验签名和块生命周期；跨协议不伪造公开推理或厂商签名。
 				if !s.observeOnly {
-					return fmt.Errorf("unsupported upstream content block %v", b["type"])
+					return fmt.Errorf("%w: Messages content_block.type %s requires native Messages on this route", dpdiagnostics.ErrUnsupportedResponseBridge, b["type"])
 				}
 			default:
 				return fmt.Errorf("unsupported upstream content block %v", b["type"])
@@ -914,6 +927,18 @@ func (s *dialogueStream) consume(protocol string, data string) error {
 		return fmt.Errorf("unsupported upstream stream protocol")
 	}
 	return nil
+}
+
+// googleTextDelta 将正文或公开推理文本编码为一帧 Google SSE；参数 thought 标记文本是否属于推理。
+// textDelta 和 reasoningDelta 调用；仅写调用方，不更改文本累计、用量和终态，不附加厂商签名。
+func (s *dialogueStream) googleTextDelta(text string, thought bool) error {
+	part := map[string]any{"text": text}
+	if thought {
+		part["thought"] = true
+	}
+	return s.emit("", map[string]any{"candidates": []any{map[string]any{
+		"index": 0, "content": map[string]any{"role": "model", "parts": []any{part}},
+	}}})
 }
 
 // googleCall 把 Google 一次性函数调用转换成统一工具增量。
@@ -1009,7 +1034,11 @@ func pipeDialogueWithPreparation(w http.ResponseWriter, resp *http.Response, sta
 		err = decoder.Err()
 	}
 	if err == nil && !s.completed {
-		err = fmt.Errorf("upstream stream ended without completion")
+		if upstream == "gemini" || upstream == "vertex" {
+			err = fmt.Errorf("%w: Google SSE ended without candidates[0].finishReason", dpdiagnostics.ErrInvalidUpstreamResponse)
+		} else {
+			err = fmt.Errorf("upstream stream ended without completion")
+		}
 	}
 	if err == nil {
 		err = s.finish()

@@ -22,7 +22,7 @@ func TestOfficialDialogueResultBoundaries(t *testing.T) {
 		{"anthropic-messages", `{"content":[{"type":"tool_use","id":"x","name":"f","input":null}]}`},
 		{"anthropic-messages", `{"content":[{"type":"thinking","thinking":42}]}`},
 		{"gemini", `{"candidates":[null]}`},
-		{"gemini", `{"candidates":[{"content":{"parts":[{"text":"x","thought":true}]}}]}`},
+		{"gemini", `{"candidates":[{"content":{"parts":[{"text":"x","thought":true,"thoughtSignature":"eA=="}]}}]}`},
 	} {
 		if _, err := ParseDialogueResult(tc.protocol, []byte(tc.raw)); err == nil {
 			t.Fatalf("%s 非法响应被接受: %s", tc.protocol, tc.raw)

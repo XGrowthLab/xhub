@@ -18,7 +18,7 @@ func IsResponsesReasoningSignature(value any) bool {
 
 // MessagesReasoningBlock 将一项 Responses 推理转换为 Messages thinking 或 redacted_thinking。
 // 参数为上游原生项，返回独立内容块、无可见内容时的 nil 或字段错误；同步和 SSE 共用，无输入修改。
-// 公开摘要与密文分别保存，不把密文展示为思维文本，也不伪造 Anthropic 的厂商签名。
+// 保留公开摘要及密文，或在没有两者时使用显式 reasoning_text；不展示密文或伪造 Anthropic 的厂商签名。
 func MessagesReasoningBlock(item map[string]any) (map[string]any, error) {
 	var parts []string
 	if value, exists := item["summary"]; exists {
@@ -44,6 +44,23 @@ func MessagesReasoningBlock(item map[string]any) (map[string]any, error) {
 			return nil, fmt.Errorf("invalid encrypted reasoning content")
 		}
 	}
+	if content := item["content"]; content != nil {
+		list, ok := content.([]any)
+		if !ok {
+			return nil, fmt.Errorf("reasoning content must be an array")
+		}
+		var reasoning strings.Builder
+		for i, value := range list {
+			part, err := responsesReasoningText(value)
+			if err != nil {
+				return nil, fmt.Errorf("content[%d]: %w", i, err)
+			}
+			reasoning.WriteString(part)
+		}
+		if text == "" && cipher == "" {
+			text = reasoning.String()
+		}
+	}
 	if cipher != "" {
 		if text == "" {
 			return map[string]any{"type": "redacted_thinking", "data": ResponsesReasoningSignaturePrefix + cipher}, nil
@@ -54,6 +71,42 @@ func MessagesReasoningBlock(item map[string]any) (map[string]any, error) {
 		return nil, nil
 	}
 	return map[string]any{"type": "thinking", "thinking": text, "signature": ""}, nil
+}
+
+// responsesReasoningText 读取 Responses 的显式文本推理片段，供共享消息与独立推理项解析调用。
+// 参数为原始内容块，返回公开文本或字段错误；不接受未知字段、密文或隐式类型转换，不修改内容块。
+func responsesReasoningText(value any) (string, error) {
+	part := dialogueMap(value)
+	if part["type"] != "reasoning_text" {
+		return "", fmt.Errorf("expected reasoning_text content")
+	}
+	if err := dialogueFields(part, "type", "text"); err != nil {
+		return "", fmt.Errorf("invalid reasoning_text: %w", err)
+	}
+	text, ok := part["text"].(string)
+	if !ok {
+		return "", fmt.Errorf("reasoning_text.text must be a string")
+	}
+	return text, nil
+}
+
+// splitResponsesReasoningText 从消息内容提取显式 reasoning_text，保留其他内容供原来的严格解析。
+// 参数为片段数组和字段路径，返回非推理内容、公开推理或带下标的字段错误。请求历史与响应投影调用，不改写原数据。
+func splitResponsesReasoningText(parts []any, path string) ([]any, string, error) {
+	content := make([]any, 0, len(parts))
+	var text strings.Builder
+	for i, part := range parts {
+		if dialogueMap(part)["type"] != "reasoning_text" {
+			content = append(content, part)
+			continue
+		}
+		reason, err := responsesReasoningText(part)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s[%d]: %w", path, i, err)
+		}
+		text.WriteString(reason)
+	}
+	return content, text.String(), nil
 }
 
 // messagesReasoningReplay 还原网关封装的单个 thinking/redacted 块为 Responses 原生历史项。
@@ -108,7 +161,7 @@ func messagesReasoningReplay(block map[string]any, role string) (Turn, error) {
 }
 
 // messagesReasoningContent 为同步 Messages 输出收集保持分项边界的推理块。
-// 参数为已校验上游结果，返回内容数组或错误；Chat 沿用公开推理，Responses 按原项封装，调用方不持有共享引用。
+// 参数为已校验上游结果，返回内容数组或错误；Responses 保留原项封装及独立消息中的公开推理，其他协议沿用公开文本。
 func messagesReasoningContent(result DialogueResult) ([]any, error) {
 	content := []any{}
 	if result.Source == "openai-responses" {
@@ -124,6 +177,9 @@ func messagesReasoningContent(result DialogueResult) ([]any, error) {
 			if block != nil {
 				content = append(content, block)
 			}
+		}
+		if result.ResponsesMessageReasoning != "" {
+			content = append(content, map[string]any{"type": "thinking", "thinking": result.ResponsesMessageReasoning, "signature": ""})
 		}
 	} else if result.Reasoning != "" {
 		content = append(content, map[string]any{"type": "thinking", "thinking": result.Reasoning, "signature": ""})
