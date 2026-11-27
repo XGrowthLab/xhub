@@ -3,13 +3,16 @@ package regression
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,7 +35,7 @@ type groupCrashReceipt struct {
 
 // TestUsageGroupProcessRecovery 通过同一用户的八条并发真实 HTTP 请求检查三次进程硬中断。
 // 父进程保留私有 PG 和模拟上游，在八份终态仅存磁盘、PG 已插入但事务尚未提交、PG 已提交但本机尚未确认处依次杀死进程。
-// 全新网关必须恢复每笔成功用量和五层费用，重复启动不得重扣或重发上游。测试框架回收进程、schema、目录和一次性密钥。
+// 其中一笔同步账单用真实的出站前标记和写出后的终态重建改名窗口。全新网关必须恢复每笔成功用量和五层费用，重复启动不得重扣或重发上游。测试框架回收进程、schema、目录和一次性密钥。
 func TestUsageGroupProcessRecovery(t *testing.T) {
 	const model = "group-crash"
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
@@ -130,6 +133,29 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 	if n, err := h.db.Engine.Table("usage_events").Where("key_id = ?", owner.keyID).Count(); err != nil || n != 0 {
 		t.Fatalf("断库期间账本应为空: n=%d err=%v", n, err)
 	}
+	// 服务子进程已停止。选择一笔同步交付，将其已同步的终态留在暂存名，并恢复出站前保存的同一笔零费用标记。
+	// 其余七笔保留已发布的终态，只有选中的这笔必须通过“标记 + 已同步终态”的崩溃窗口恢复足额费用。
+	syncReceipt := slices.IndexFunc(receipts, func(r groupCrashReceipt) bool { return !r.Stream })
+	if syncReceipt < 0 {
+		t.Fatal("缺少已完成的同步交付，无法验证终态替换零费用标记")
+	}
+	spoolDir := filepath.Join(dir, "spool")
+	digest := sha256.Sum256([]byte(receipts[syncReceipt].ID))
+	finalPath := filepath.Join(spoolDir, fmt.Sprintf("%x.json", digest))
+	pendingPath := filepath.Join(spoolDir, ".pending-crash-group.tmp")
+	if err := os.Rename(finalPath, pendingPath); err != nil {
+		t.Fatalf("无法准备实际交付账单的暂存证据: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "before-delivery", filepath.Base(finalPath)), finalPath); err != nil {
+		t.Fatalf("无法还原同一真实请求交付之前的标记: %v", err)
+	}
+	parent, err := os.Open(spoolDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
+		t.Fatalf("同步进程退出后的账单目录失败: %v", err)
+	}
 	// 在专属表已插入行但事务尚未提交时终止整个重放进程，验证事务回滚且磁盘证据没有被提前确认。
 	if _, err := h.db.Engine.Exec(`CREATE FUNCTION pause_charge_before_commit() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN PERFORM pg_advisory_xact_lock(TG_RELID::bigint); RETURN NEW; END $$;
@@ -194,6 +220,9 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 		if err != nil || checkErr != nil || closeErr != nil || pending {
 			t.Fatalf("重启后仍有未结算证据: pending=%v replay=%v check=%v close=%v", pending, err, checkErr, closeErr)
 		}
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("多次重放后暂存证据仍未核销: %v", err)
 	}
 	seen := make(map[string]bool)
 	for _, receipt := range receipts {
@@ -292,6 +321,20 @@ func TestUsageGroupProcessChild(t *testing.T) {
 		}()
 	}
 	control("/all-at-upstream", nil)
+	// 所有请求都已到达被父进程挂起的上游。保留当时的真实标记，后续原子改名写入账单不会改写这些 inode。
+	markerDir := filepath.Join(dir, "before-delivery")
+	if err := os.Mkdir(markerDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	markers, err := filepath.Glob(filepath.Join(spoolDir, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range markers {
+		if err := os.Link(path, filepath.Join(markerDir, filepath.Base(path))); err != nil {
+			t.Fatalf("留存出站前的真实账单标记失败: %v", err)
+		}
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
