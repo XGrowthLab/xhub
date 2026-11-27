@@ -3,8 +3,10 @@ package regression
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,7 +34,7 @@ type groupCrashReceipt struct {
 
 // TestUsageGroupProcessRecovery 通过同一用户的八条并发真实 HTTP 请求检查三次进程硬中断。
 // 父进程保留私有 PG 和模拟上游，在八份终态仅存磁盘、PG 已插入但事务尚未提交、PG 已提交但本机尚未确认处依次杀死进程。
-// 全新网关必须恢复每笔成功用量和五层费用，重复启动不得重扣或重发上游。测试框架回收进程、schema、目录和一次性密钥。
+// 一笔已确认账单用文件同步后、发布前的临时文件名留存。全新网关必须恢复每笔成功用量和五层费用，重复启动不得重扣或重发上游。测试框架回收进程、schema、目录和一次性密钥。
 func TestUsageGroupProcessRecovery(t *testing.T) {
 	const model = "group-crash"
 	t.Setenv("XHUB_USAGE_SPOOL_DIR", "")
@@ -130,6 +132,21 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 	if n, err := h.db.Engine.Table("usage_events").Where("key_id = ?", owner.keyID).Count(); err != nil || n != 0 {
 		t.Fatalf("断库期间账本应为空: n=%d err=%v", n, err)
 	}
+	// 服务子进程已经停止。用同一个已同步文件重建尚未改名发布时的目录布局，让后续恢复只有这一份正金额证据。
+	spoolDir := filepath.Join(dir, "spool")
+	digest := sha256.Sum256([]byte(receipts[0].ID))
+	finalPath := filepath.Join(spoolDir, fmt.Sprintf("%x.json", digest))
+	pendingPath := filepath.Join(spoolDir, ".pending-crash-group.tmp")
+	if err := os.Rename(finalPath, pendingPath); err != nil {
+		t.Fatalf("无法准备实际交付账单的暂存证据: %v", err)
+	}
+	parent, err := os.Open(spoolDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
+		t.Fatalf("同步进程退出后的账单目录失败: %v", err)
+	}
 	// 在专属表已插入行但事务尚未提交时终止整个重放进程，验证事务回滚且磁盘证据没有被提前确认。
 	if _, err := h.db.Engine.Exec(`CREATE FUNCTION pause_charge_before_commit() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN PERFORM pg_advisory_xact_lock(TG_RELID::bigint); RETURN NEW; END $$;
@@ -194,6 +211,9 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 		if err != nil || checkErr != nil || closeErr != nil || pending {
 			t.Fatalf("重启后仍有未结算证据: pending=%v replay=%v check=%v close=%v", pending, err, checkErr, closeErr)
 		}
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("多次重放后暂存证据仍未核销: %v", err)
 	}
 	seen := make(map[string]bool)
 	for _, receipt := range receipts {
