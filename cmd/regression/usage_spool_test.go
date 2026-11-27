@@ -280,23 +280,21 @@ func TestUsageSpoolUnavailableAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
-	for _, key := range []string{scope.key, scope.session} {
-		// 对已鉴权的普通请求和大正文流式请求，账单目录故障都必须在付费出站前明确拒绝。
+	// 依次覆盖两种凭证和两种交付方式；每组都独立核对拒绝响应与真实上游计数。
+	for _, credential := range []struct{ name, value string }{{"key", scope.key}, {"session", scope.session}} {
 		for _, stream := range []bool{false, true} {
-			prompt := "Verify durable admission."
-			if stream {
-				prompt = strings.Repeat("A", 512<<10)
-			}
-			body := chatRequest("spool-admission", prompt)
-			body["stream"] = stream
-			r := h.do(http.MethodPost, "/v1/chat/completions", key, body)
-			if r.status != 503 || !strings.Contains(string(r.body), "billing_storage_unavailable") {
-				t.Fatalf("存储故障未明确拒绝 stream=%v: %s", stream, r.describe())
-			}
+			t.Run(fmt.Sprintf("%s/stream=%t", credential.name, stream), func(t *testing.T) {
+				body := chatRequest("spool-admission", "Verify durable admission.")
+				body["stream"] = stream
+				r := h.do(http.MethodPost, "/v1/chat/completions", credential.value, body)
+				if r.status != 503 || !strings.Contains(string(r.body), "billing_storage_unavailable") {
+					t.Fatalf("不可写账单目录未得到明确的 503 拒绝: %s", r.describe())
+				}
+				if got := len(h.upstreamCalls()); got != 0 {
+					t.Fatalf("账单目录不可写时，上游仍收到 %d 次调用", got)
+				}
+			})
 		}
-	}
-	if len(h.upstreamCalls()) != 0 {
-		t.Fatal("存储不可用仍调用付费上游")
 	}
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
