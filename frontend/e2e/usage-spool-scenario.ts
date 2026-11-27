@@ -1,14 +1,14 @@
 import { selectMonitorOption } from "./monitor-select-helper";
 import { expect, test } from "@playwright/test";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { translate } from "../src/i18n/translate";
 import { GATEWAY, MASTER, UPSTREAM, login, loginAdmin, selectFailureSeverity, sessionBearer, stableGoto } from "./helpers";
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
  * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从日志详情和监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
- * 恢复前在独占目录构造同一账单的已同步暂存副本和探针残留，确认真实账单和监控消费均只增加一次。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
+ * 恢复前放入同一账单的完整暂存副本，首次结算后再次放入同一证据，核对每次的个人扣费、账单与队列。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -23,6 +23,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
     const model = "spool-browser-recovery-" + Date.now();
     const orphanProbe = join(process.env.E2E_RUN_DIR!, "usage-spool", ".probe-live-" + model);
     const pendingCopy = join(process.env.E2E_RUN_DIR!, "usage-spool", ".pending-" + model + ".tmp");
+    const copySource = join(process.env.E2E_RUN_DIR!, model + ".snapshot");
     let modelID = "";
     let guardID = "";
     let injected = false;
@@ -46,6 +47,9 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       });
       expect(created.status(), await created.text()).toBe(200);
       modelID = (await created.json()).model_info.id;
+      const initialInfo = await page.request.get(GATEWAY + "/user/info", { headers });
+      expect(initialInfo.status()).toBe(200);
+      const initialSpend = Number((await initialInfo.json()).user_info.spend);
       const failed = await page.request.post(control + "/usage-spool/fail", { data: { model } });
       expect(failed.status(), "本场景必须使用 E2E_REDIS=0 的私有数据库夹具: " + (await failed.text())).toBe(200);
       injected = true;
@@ -113,19 +117,24 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect(callID).toBeTruthy();
       const state = await page.request.post(control + "/usage-spool/state", { data: { model } });
       expect(await state.json()).toEqual({ pending: 1, quarantined: 0 });
-      // 从本次真实 HTTP 账单创建同内容的已同步暂存副本，验证恢复扫描不会把两个文件扣成两笔。
+      // 使用本次 HTTP 调用生成的完整终态，在独占目录之外写入并同步，再原子移入队列。
       const digest = createHash("sha256").update(callID).digest("hex");
       const snapshot = readFileSync(join(process.env.E2E_RUN_DIR!, "usage-spool", digest + ".json"));
-      writeFileSync(pendingCopy, snapshot, { flag: "wx", mode: 0o600, flush: true });
       // 模拟断电后仍在目录中的探针，与已确认账单一起交给真实网关恢复。
       writeFileSync(orphanProbe, "usage-spool-probe\n", { flag: "wx", mode: 0o600 });
       for (let i = 0; i < 2; i++) {
+        // 首轮同时存在已发布文件和同内容暂存文件；次轮向已经结清的请求再次提供完整证据。
+        writeFileSync(copySource, snapshot, { flag: "wx", mode: 0o600, flush: true });
+        renameSync(copySource, pendingCopy);
         const recovered = await page.request.post(control + "/usage-spool/recover", { data: { model } });
         expect(recovered.status(), await recovered.text()).toBe(200);
         expect(await recovered.json()).toEqual({ pending: 0, quarantined: 0 });
+        expect(existsSync(pendingCopy)).toBe(false);
+        const info = await page.request.get(GATEWAY + "/user/info", { headers });
+        expect(info.status()).toBe(200);
+        expect(Number((await info.json()).user_info.spend) - initialSpend).toBeCloseTo(0.12, 8);
       }
       expect(existsSync(orphanProbe)).toBe(false);
-      expect(existsSync(pendingCopy)).toBe(false);
       injected = false;
       const billResponse = await page.request.get(GATEWAY + "/spend/logs/ui/" + callID, { headers });
       expect(billResponse.status()).toBe(200);
@@ -219,7 +228,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       const deferred = await page.request.post(control + "/usage-spool/defer", { data: { model } });
       expect(deferred.status(), await deferred.text()).toBe(200);
       expect(await deferred.json()).toEqual({ pending: 1, quarantined: 0 });
-      // 普通请求和大正文流式请求遇到同一份未结清账单时，都应在付费出站前收到存储拒绝。
+      // 未结清的证据同时阻止普通请求和大正文流式请求，监控中的供应商请求数必须保持原值。
       await Promise.all([false, true].map(async (stream) => {
         const refused = await page.request.post(GATEWAY + "/v1/chat/completions", {
           headers,
@@ -228,6 +237,9 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         expect(refused.status(), await refused.text()).toBe(503);
         expect((await refused.json()).error.type).toBe("billing_storage_pending");
       }));
+      const refusedMonitor = await page.request.get(GATEWAY + "/models/monitor?model=" + model, { headers });
+      expect(refusedMonitor.status()).toBe(200);
+      expect((await refusedMonitor.json()).summary.requests).toBe(expectedCalls);
       const cleared = await page.request.post(control + "/usage-spool/recover", { data: { model } });
       expect(cleared.status(), await cleared.text()).toBe(200);
       expect(await cleared.json()).toEqual({ pending: 0, quarantined: 0 });
@@ -263,6 +275,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       // 最终账单和个人费用已经可见，浏览器压力结束后，独占夹具目录中的实写探针也应收尽。
       await expect.poll(() => readdirSync(join(process.env.E2E_RUN_DIR!, "usage-spool")).filter(name => name.startsWith(".probe-"))).toEqual([]);
     } finally {
+      rmSync(copySource, { force: true });
       rmSync(pendingCopy, { force: true });
       rmSync(orphanProbe, { force: true });
       if (injected)
