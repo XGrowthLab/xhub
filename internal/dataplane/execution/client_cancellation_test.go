@@ -62,7 +62,7 @@ func (b *cancellationBody) Read(p []byte) (int, error) {
 }
 
 // TestClientCancellationClassification 验证出站前、流读取和普通正文读取的取消只记499、不重试或冷却。
-// 参数t为测试上下文；同位置真实上游超时必须仍记502和供应商失败；内存传输隔离，context由Cleanup释放。
+// 参数t为测试上下文；真实上游超时仍记 502，测试里的唯一部署不触发冷却；内存传输隔离，context 由 Cleanup 释放。
 func TestClientCancellationClassification(t *testing.T) {
 	for _, phase := range []string{"dial", "stream", "body"} {
 		for _, caller := range []bool{true, false} {
@@ -99,14 +99,14 @@ func TestClientCancellationClassification(t *testing.T) {
 				settings.Settings["retry_policy"] = map[string]any{"max_attempts": 3, "timeout_seconds": 60, "failure_threshold": 3}
 				h := &cancellationHost{streamAuditHost: &streamAuditHost{logHost: newLogHost(cfg, client), settings: settings}}
 				Serve(h, httptest.NewRecorder(), chatRequest(t, "cancel", stream).WithContext(ctx), "chat")
-				wantAttempts, wantStatus, wantFailures := 3, 502, 3
+				wantAttempts, wantStatus := 3, 502
 				if stream {
-					wantAttempts, wantFailures = 1, 1
+					wantAttempts = 1
 				}
 				if caller {
-					wantAttempts, wantStatus, wantFailures = 1, 499, 0
+					wantAttempts, wantStatus = 1, 499
 				}
-				if attempts != wantAttempts || h.status != wantStatus || h.failures != wantFailures || h.bills != 1 || h.commits != 0 {
+				if attempts != wantAttempts || h.status != wantStatus || h.failures != 0 || h.bills != 1 || h.commits != 0 {
 					t.Fatalf("取消/故障分类错误 attempts=%d status=%d failures=%d bills=%d commits=%d", attempts, h.status, h.failures, h.bills, h.commits)
 				}
 			})
@@ -133,7 +133,7 @@ func (h *canceledNativeHost) RecordSpend(_ http.ResponseWriter, _ *auth.Principa
 }
 
 // TestNativeClientCancellationClassification 验证原生 Chat 区分取消与上游超时，并保留最后一次尝试的阶段和出站路径。
-// 参数t为测试上下文；使用内存传输且无供应商调用，cleanup释放独立上下文。
+// 参数t为测试上下文；单部署不累积冷却，使用内存传输且无供应商调用，cleanup 释放独立上下文。
 func TestNativeClientCancellationClassification(t *testing.T) {
 	for _, caller := range []bool{true, false} {
 		t.Run(map[bool]string{true: "caller", false: "upstream"}[caller], func(t *testing.T) {
@@ -159,11 +159,11 @@ func TestNativeClientCancellationClassification(t *testing.T) {
 				t.Fatal("missing native route")
 			}
 			ServeBypass(h, httptest.NewRecorder(), req, hit)
-			count, status, failures := 3, 502, 3
+			count, status := 3, 502
 			if caller {
-				count, status, failures = 1, 499, 0
+				count, status = 1, 499
 			}
-			if attempts != count || h.status != status || h.bills != 1 || len(h.failures) != failures {
+			if attempts != count || h.status != status || h.bills != 1 || len(h.failures) != 0 {
 				t.Fatalf("native classification attempts=%d status=%d bills=%d failures=%d", attempts, h.status, h.bills, len(h.failures))
 			}
 			if len(h.notes) == 0 {

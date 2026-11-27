@@ -57,6 +57,7 @@ func DiagnosticDeployment(name, id, transport string, disabled bool) config.Mode
 // 参数 t 为 Go 测试上下文；返回值无，断言失败时终止当前测试。
 func TestRouteDiagnosisStages(t *testing.T) {
 	good := DiagnosticDeployment("gpt-5.6-sol", "live", "bypass_openai_chat", false)
+	sibling := DiagnosticDeployment("gpt-5.6-sol", "sibling", "bypass_openai_chat", false)
 	bad := DiagnosticDeployment("gpt-5.6-sol", "bad", "missing-transport", false)
 	paused := DiagnosticDeployment("gpt-5.6-sol", "paused", "bypass_openai_chat", true)
 	other := DiagnosticDeployment("other", "other", "bypass_openai_chat", true)
@@ -75,7 +76,8 @@ func TestRouteDiagnosisStages(t *testing.T) {
 		{name: "unrelated disabled", list: []config.ModelEntry{other}, status: 400, kind: "invalid_request", message: "model not found"},
 		{name: "matching disabled", list: []config.ModelEntry{paused}, status: 400, kind: "model_disabled", message: "model is disabled"},
 		{name: "invalid transport", list: []config.ModelEntry{bad}, matched: 1, status: 400, kind: "model_unavailable", message: "exists"},
-		{name: "cooldown", list: []config.ModelEntry{good}, state: router.State{Cooldown: map[string]bool{router.CooldownID(good): true}}, matched: 1, compatible: 1},
+		{name: "single stale cooldown", list: []config.ModelEntry{good}, state: router.State{Cooldown: map[string]bool{router.CooldownID(good): true}}, matched: 1, compatible: 1, available: 1},
+		{name: "cooldown", list: []config.ModelEntry{good, sibling}, state: router.State{Cooldown: map[string]bool{router.CooldownID(good): true}}, matched: 2, compatible: 2, available: 1},
 		{name: "zero weight stale positive", list: []config.ModelEntry{good}, state: router.State{Allocations: map[string]float64{"live": 0, "deleted": 100}}, matched: 1, compatible: 1, status: 503, kind: "model_unavailable", message: "no allocated traffic"},
 		{name: "wildcard", list: []config.ModelEntry{wildcard}, matched: 1, compatible: 1, available: 1},
 		{name: "group", list: []config.ModelEntry{good}, group: true, matched: 1, compatible: 1, available: 1},
@@ -100,6 +102,9 @@ func TestRouteDiagnosisStages(t *testing.T) {
 			}
 			if tc.name == "cooldown" && (d.cooling != 1 || snapshot["required_deployment_reason"] != "deployment is cooling down") {
 				t.Fatalf("冷却状态应留在诊断快照: %v", snapshot)
+			}
+			if tc.name == "single stale cooldown" && d.cooling != 0 {
+				t.Fatalf("单部署诊断不应应用历史冷却: %v", snapshot)
 			}
 			if d.matched != tc.matched || d.compatible != tc.compatible || d.available != tc.available {
 				t.Fatalf("阶段计数错误: %+v", d)

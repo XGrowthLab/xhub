@@ -37,6 +37,10 @@ type routeDiagnosis struct {
 // 执行器没有候选时调用；复制必要目录元数据以匹配停用模型，不能改变真实目录或让诊断本身推进随机/轮询调度。
 // 只观察配置与状态，不发送探测、不扣费、不修复旧权重；管理员应根据诊断修正模板或部署。
 func DiagnoseRoute(directory, eligible []config.ModelEntry, alias, endpoint string, settings router.RouteSettings, state router.State, dialogue *llmdialogue.Dialogue, adapted bool, nativeBody ...map[string]any) routeDiagnosis {
+	// 单部署的历史冷却键不参与本轮选路，诊断展示同样的有效状态。
+	if len(state.Cooldown) > 0 && !settings.HasCooldownAlternatives(eligible, alias) {
+		state.Cooldown = nil
+	}
 	d := routeDiagnosis{loaded: len(directory), endpoint: endpoint, state: state}
 	active, _ := DropDisabled(directory)
 	matched := settings.Candidates(active, alias)
