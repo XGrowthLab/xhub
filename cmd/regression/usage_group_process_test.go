@@ -132,7 +132,7 @@ func TestUsageGroupProcessRecovery(t *testing.T) {
 	if n, err := h.db.Engine.Table("usage_events").Where("key_id = ?", owner.keyID).Count(); err != nil || n != 0 {
 		t.Fatalf("断库期间账本应为空: n=%d err=%v", n, err)
 	}
-	// 服务子进程已经停止。用同一个已同步文件重建锁外暂存后的真实目录布局，让后续恢复只有这一份正金额证据。
+	// 服务子进程已经停止。用同一个已同步文件重建尚未改名发布时的目录布局，让后续恢复只有这一份正金额证据。
 	spoolDir := filepath.Join(dir, "spool")
 	digest := sha256.Sum256([]byte(receipts[0].ID))
 	finalPath := filepath.Join(spoolDir, fmt.Sprintf("%x.json", digest))

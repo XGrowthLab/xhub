@@ -483,11 +483,8 @@ func (s *Spool) statusLocked() (Status, error) {
 	if err != nil {
 		return result, err
 	}
+	result.Quarantined = len(quarantine)
 	for _, entry := range quarantine {
-		if s.staging["quarantine/"+entry.Name()] != nil {
-			continue
-		}
-		result.Quarantined++
 		info, err := entry.Info()
 		if err != nil {
 			return result, err
@@ -711,6 +708,63 @@ func (s *Spool) Put(record iam.UsageRecord) (err error) {
 	return s.submitMutation(putSnapshot, record, raw)
 }
 
+// putLocked 写入已编码快照；调用方持有队列锁，返回完整持久化、容量或快照冲突错误。
+// 正常账单和同步响应的未确认标记共用容量检查，不能覆盖不同内容。
+func (s *Spool) putLocked(record iam.UsageRecord, raw []byte) error {
+	var err error
+	defer delete(s.reserved, record.RequestID)
+	if s.closed {
+		return ErrUnavailable
+	}
+	if int64(len(raw)) > s.config.MaxRecordBytes {
+		s.lastErr = ErrFull
+		return ErrFull
+	}
+	name := basename(record.RequestID)
+	if old, readErr := s.readLocked(name); readErr == nil {
+		if string(old) == string(raw) {
+			return nil
+		}
+		status, statusErr := s.statusLocked()
+		if statusErr != nil {
+			return statusErr
+		}
+		if status.Bytes+int64(len(raw)) > s.config.MaxBytes {
+			return ErrFull
+		}
+		sum := sha256.Sum256(raw)
+		conflictName := "quarantine/conflict-" + hex.EncodeToString(sum[:]) + ".evidence"
+		if _, existsErr := s.root.Lstat(conflictName); os.IsNotExist(existsErr) {
+			if err = s.writeLocked(raw, conflictName); err != nil {
+				return err
+			}
+		} else if existsErr != nil {
+			return existsErr
+		}
+		s.lastErr = ErrConflict
+		return ErrConflict
+	} else if !os.IsNotExist(readErr) {
+		s.lastErr = readErr
+		return readErr
+	}
+	status, err := s.statusLocked()
+	if err != nil {
+		return err
+	}
+	reserved := status.ReservedBytes
+	if s.reserved[record.RequestID] {
+		reserved -= s.config.MaxRecordBytes
+	}
+	if status.Pending+status.Reserved-boolInt(s.reserved[record.RequestID]) >= s.config.MaxEntries || status.Bytes+reserved+int64(len(raw)) > s.config.MaxBytes {
+		s.lastErr = ErrFull
+		return ErrFull
+	}
+	err = s.writeLocked(raw, name)
+	// 即使写入失败，临时文件也可能需要恢复；已开始的旧批次不能替新证据作确认。
+	s.generation++
+	return err
+}
+
 // BeginDelivery 持久化零费用未确认标记并将其标记为当前实例在途；参数只包含脱敏账单元数据。
 // 返回错误时不允许把标记视为持久化；在途标记不由后台重放，进程退出后才允许作为未知结果恢复。
 func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
@@ -722,6 +776,23 @@ func (s *Spool) BeginDelivery(record iam.UsageRecord) (err error) {
 		return err
 	}
 	return s.submitMutation(beginMarker, record, raw)
+}
+
+// beginLocked 持锁保存已校验输入的未确认标记。仅成功持久化后设置在途所有权，并继续持有原预留。
+func (s *Spool) beginLocked(record iam.UsageRecord, raw []byte) error {
+	name := basename(record.RequestID)
+	if s.activeDelivery[name] {
+		return ErrConflict
+	}
+	reserved := s.reserved[record.RequestID]
+	if err := s.putLocked(record, raw); err != nil {
+		return err
+	}
+	if reserved {
+		s.reserved[record.RequestID] = true
+	}
+	s.activeDelivery[name] = true
+	return nil
 }
 
 // CompleteDelivery 原子替换当前实例持有的未确认标记为写出终态；参数为同一次调用的完整最终快照。
@@ -758,6 +829,33 @@ func (s *Spool) markerSizeLocked(record iam.UsageRecord) (int64, error) {
 		return 0, ErrConflict
 	}
 	return int64(len(oldRaw)), nil
+}
+
+// completeLocked 持锁逐笔发布已确认终态；文件或目录同步失败时保留在途归属及预留。
+func (s *Spool) completeLocked(record iam.UsageRecord, raw []byte) error {
+	name := basename(record.RequestID)
+	oldSize, err := s.markerSizeLocked(record)
+	if err != nil {
+		return err
+	}
+	status, err := s.statusLocked()
+	if err != nil {
+		return err
+	}
+	reservedBytes := status.ReservedBytes
+	if s.reserved[record.RequestID] {
+		reservedBytes -= s.config.MaxRecordBytes
+	}
+	if int64(len(raw)) > s.config.MaxRecordBytes || status.Bytes-oldSize+int64(len(raw))+reservedBytes > s.config.MaxBytes {
+		return ErrFull
+	}
+	s.generation++
+	if err := s.writeLocked(raw, name); err != nil {
+		return err
+	}
+	delete(s.activeDelivery, name)
+	delete(s.reserved, record.RequestID)
+	return nil
 }
 
 // DiscardUnconfirmedDelivery 清理已由数据库严格结算的磁盘标记或相同终态。
@@ -817,8 +915,8 @@ func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	return s.syncSettledRemovalLocked(name)
 }
 
-// stageFile 供批处理写入预先登记的私有文件；name 由队列生成，raw 是已编码账单。
-// 在目录锁外独占创建、写完整文件并同步。错误不删除证据，重启后仍按 v1 规则恢复完整文件或隔离残片。
+// stageFile 按队列指定的临时文件名独占创建、写入并同步已编码的 raw。逐笔调用持有目录锁，多文件批次可并行调用。
+// 返回文件系统错误并保留原始证据，重启扫描据此恢复完整账单或隔离残片。
 func (s *Spool) stageFile(name string, raw []byte) error {
 	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -826,6 +924,37 @@ func (s *Spool) stageFile(name string, raw []byte) error {
 	}
 	_, writeErr := file.Write(raw)
 	return errors.Join(writeErr, file.Sync(), file.Close())
+}
+
+// writeLocked 在本笔临时文件同步成功后才改名，再同步所有变更目录；持锁返回持久化或文件系统错误。
+func (s *Spool) writeLocked(raw []byte, name string) error {
+	suffix, err := token()
+	if err != nil {
+		s.lastErr = err
+		return err
+	}
+	temporary := ".pending-" + suffix + ".tmp"
+	err = s.stageFile(temporary, raw)
+	if err != nil {
+		s.lastErr = err
+		return err
+	}
+	if err = s.root.Rename(temporary, name); err != nil {
+		s.lastErr = err
+		return err
+	}
+	if err = s.syncDirectoryLocked("."); err != nil {
+		s.lastErr = err
+		return err
+	}
+	if filepath.Dir(name) != "." {
+		if err = s.syncDirectoryLocked(filepath.Dir(name)); err != nil {
+			s.lastErr = err
+			return err
+		}
+	}
+	s.lastErr = nil
+	return nil
 }
 
 // boolInt 将预留存在性转换成容量计数；只用于本包数值计算，无副作用。

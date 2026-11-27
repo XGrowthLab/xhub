@@ -289,9 +289,7 @@ func TestGroupSaturatedOwnReservations(t *testing.T) {
 	if barriers != 1 || len(s.reserved) != slots-len(batch) {
 		t.Fatalf("满负载写入未共享屏障或借用了其他预留: 屏障=%d 剩余预留=%d", barriers, len(s.reserved))
 	}
-	excess := commandFor(t, putSnapshot, spoolRecord("excess"))
-	s.applySingleLocked(excess, s.stageFile, s.syncDirectoryLocked)
-	if err := excess.err; !errors.Is(err, ErrFull) {
+	if err := s.applyOneLocked(commandFor(t, putSnapshot, spoolRecord("excess"))); !errors.Is(err, ErrFull) {
 		t.Fatalf("饱和条数下未预留记录越过上限: %v", err)
 	}
 }

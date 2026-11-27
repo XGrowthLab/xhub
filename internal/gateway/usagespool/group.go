@@ -24,15 +24,14 @@ const (
 
 // mutation 只持有本次请求已编码的 v1 快照，直到目录同步后才通知该调用者。不同组不会并行修改目录。
 type mutation struct {
-	kind           mutationKind
-	record         iam.UsageRecord
-	raw            []byte
-	name           string
-	temporary      string
-	conflictTarget string // 首次核验已判定的冲突只进隔离目录，即使旧账在锁外阶段被核销。
-	noop           bool   // 目标已确认相同或已不存在，按原有幂等规则完成。
-	err            error
-	done           chan struct{}
+	kind      mutationKind
+	record    iam.UsageRecord
+	raw       []byte
+	name      string
+	temporary string
+	noop      bool // 目标已确认相同或已不存在，按原有幂等规则完成。
+	err       error
+	done      chan struct{}
 }
 
 // mutationQueue 只在处理磁盘时收集已经到达的调用，切批不等待定时器；mu 独立于完整目录锁。
@@ -43,9 +42,15 @@ type mutationQueue struct {
 }
 
 // submitMutation 由已校验并编码的账单操作调用。空闲时立刻开始写盘；同一时间等待的操作可共用目录同步。
-// 配置为 1 时每批只发布一笔；所有模式均在成功返回之前完成各自的持久化边界。
+// 配置为 1 时直接使用逐笔持锁路径；成功返回前已完成该笔的持久化边界。
 func (s *Spool) submitMutation(kind mutationKind, record iam.UsageRecord, raw []byte) error {
 	m := &mutation{kind: kind, record: record, raw: raw, name: basename(record.RequestID)}
+	if s.config.GroupSize == 1 {
+		s.mu.Lock()
+		m.err = s.applyOneLocked(m)
+		s.finishLocked(&m.err)
+		return m.err
+	}
 	m.done = make(chan struct{})
 	q := &s.writes
 	q.mu.Lock()
@@ -92,10 +97,27 @@ func (s *Spool) drainMutations(stage func(string, []byte) error, syncDir func(st
 	}
 }
 
+// applyOneLocked 执行原逐笔路径；容量临界、重复 ID、内容冲突、关闭或不安全文件仍按各笔原有规则处理。
+func (s *Spool) applyOneLocked(m *mutation) error {
+	switch m.kind {
+	case putSnapshot:
+		return s.putLocked(m.record, m.raw)
+	case beginMarker:
+		return s.beginLocked(m.record, m.raw)
+	case completeMarker:
+		return s.completeLocked(m.record, m.raw)
+	default:
+		if s.closed {
+			return ErrUnavailable
+		}
+		return s.acknowledgeLocked(m.name, m.raw)
+	}
+}
+
 // applyBatchLocked 按队首顺序发布能够独立执行的连续操作。stage 与 syncDir 完成文件及目录同步。
 // 同名依赖、容量临界或冲突只让该条回退；执行可能改变容量的回退后，再扫描并处理余下部分。
 func (s *Spool) applyBatchLocked(batch []*mutation, stage func(string, []byte) error, syncDir func(string) error) {
-	for len(batch) > 0 && !s.closed {
+	for len(batch) > 1 && !s.closed {
 		state, err := s.statusLocked()
 		if err != nil || state.Quarantined != 0 {
 			break
@@ -115,12 +137,12 @@ func (s *Spool) applyBatchLocked(batch []*mutation, stage func(string, []byte) e
 			batch = batch[n:]
 		}
 		if len(batch) > 0 {
-			s.applySingleLocked(batch[0], stage, syncDir)
+			batch[0].err = s.applyOneLocked(batch[0])
 			batch = batch[1:]
 		}
 	}
 	for _, m := range batch {
-		s.applySingleLocked(m, stage, syncDir)
+		m.err = s.applyOneLocked(m)
 	}
 }
 
@@ -181,7 +203,7 @@ func (s *Spool) planMutationLocked(m *mutation, space *groupSpace) bool {
 	return true
 }
 
-// applyGroupLocked 发布已在锁内规划的不同目标。stage 写私有文件时放开目录锁，回锁后复查同名、容量及交付所有权。
+// applyGroupLocked 发布已在锁内规划的不同目标。实际需写至少两份文件时才释放目录锁，回锁后复查内容、容量及交付所有权。
 // syncDir 确认最终目录项后才答复；检查变化时交给逐笔规则处理，复用已同步的文件。调用方持有 mu，返回时仍持有。
 func (s *Spool) applyGroupLocked(batch []*mutation, stage func(string, []byte) error, syncDir func(string) error) {
 	if s.stageLocked(batch, stage) {
@@ -202,7 +224,7 @@ func (s *Spool) applyGroupLocked(batch []*mutation, stage func(string, []byte) e
 			if !valid || m.noop != wasNoop {
 				// 先按顺序核对各条已写证据，再决定目标；失败或冲突不能用陈旧计划覆盖真实账单。
 				for _, single := range batch {
-					s.applySingleLocked(single, stage, syncDir)
+					s.finishStagedLocked(single, syncDir)
 				}
 				return
 			}

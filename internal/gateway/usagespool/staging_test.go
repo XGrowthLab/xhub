@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -15,15 +17,16 @@ import (
 	"github.com/sunqirui1987/xhub/internal/iam"
 )
 
-// TestLiveStagingReservationAndReplay 暂停真实临时文件的半次写入。在两槽队列中验证其他请求可准入、
+// TestLiveStagingReservationAndReplay 暂停真实临时文件的半次写入。在三槽队列中验证其他请求可准入、
 // 当前文件的预留不能被抢用、后台恢复不会读取半成品。同步后核对精确金额和重复重放，测试回收私有目录。
 func TestLiveStagingReservationAndReplay(t *testing.T) {
-	s := openSpool(t, Config{MaxEntries: 2})
+	s := openSpool(t, Config{MaxEntries: 3})
 	record := spoolRecord("live-stage")
 	if err := s.Reserve(record.RequestID); err != nil {
 		t.Fatal(err)
 	}
 	m := commandFor(t, putSnapshot, record)
+	peer := commandFor(t, putSnapshot, spoolRecord("live-peer"))
 	opened := make(chan error, 1)
 	release := make(chan struct{})
 	resume := sync.OnceFunc(func() { close(release) })
@@ -31,7 +34,10 @@ func TestLiveStagingReservationAndReplay(t *testing.T) {
 	finished := make(chan error, 1)
 	go func() {
 		s.mu.Lock()
-		s.applyBatchLocked([]*mutation{m}, func(name string, raw []byte) error {
+		s.applyBatchLocked([]*mutation{m, peer}, func(name string, raw []byte) error {
+			if bytes.Equal(raw, peer.raw) {
+				return s.stageFile(name, raw)
+			}
 			f, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 			if err != nil {
 				opened <- err
@@ -46,7 +52,7 @@ func TestLiveStagingReservationAndReplay(t *testing.T) {
 			return errors.Join(err, f.Sync(), f.Close())
 		}, s.syncDirectoryLocked)
 		s.mu.Unlock()
-		finished <- m.err
+		finished <- errors.Join(m.err, peer.err)
 	}()
 	select {
 	case err := <-opened:
@@ -68,7 +74,7 @@ func TestLiveStagingReservationAndReplay(t *testing.T) {
 		t.Fatalf("在途账单的容量被抢用: %v", err)
 	}
 	st, err := s.Status()
-	if err != nil || st.Replayable != 0 || st.Pending != 0 || st.Reserved != 2 || st.Quarantined != 0 {
+	if err != nil || st.Replayable != 0 || st.Pending != 0 || st.Reserved != 3 || st.Quarantined != 0 {
 		t.Fatalf("半成品进入可重放记录或未预留容量: %+v / %v", st, err)
 	}
 	count, err := s.ReplayForAdmission(t.Context(), 5, func(context.Context, iam.UsageRecord) error { return errors.New("读到尚未写完的账单") })
@@ -80,11 +86,13 @@ func TestLiveStagingReservationAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Release("other")
-	for i, want := range []int{1, 0} {
+	seen := map[string]bool{}
+	for i, want := range []int{2, 0} {
 		n, err := s.Replay(t.Context(), 5, func(_ context.Context, got iam.UsageRecord) error {
-			if got.RequestID != record.RequestID || got.Cost != record.Cost {
+			if (got.RequestID != record.RequestID && got.RequestID != peer.record.RequestID) || seen[got.RequestID] || got.Cost != record.Cost {
 				return errors.New("暂存后请求号或金额变化")
 			}
+			seen[got.RequestID] = true
 			return nil
 		})
 		if err != nil || n != want {
@@ -96,58 +104,51 @@ func TestLiveStagingReservationAndReplay(t *testing.T) {
 // TestStagingRechecksChangedDirectory 在第一次规划后注入真实目录变化，验证回锁检查会保留同名冲突、
 // 消除完全相同的副本并拒绝超额发布。所有原文件、暂存和隔离证据都位于会自动销毁的目录。
 func TestStagingRechecksChangedDirectory(t *testing.T) {
-	for _, mode := range []string{"conflict", "identical", "capacity", "known-conflict"} {
+	for _, mode := range []string{"conflict", "identical", "capacity"} {
 		t.Run(mode, func(t *testing.T) {
-			s := openSpool(t, Config{MaxEntries: 1})
+			s := openSpool(t, Config{MaxEntries: 2})
 			m := commandFor(t, putSnapshot, spoolRecord("revalidate"))
 			other := m.record
 			if mode == "capacity" {
 				other.RequestID = "another"
 			}
-			if mode == "conflict" || mode == "known-conflict" {
+			if mode == "conflict" {
 				other.Cost++
 			}
 			raw, err := encode(other)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "known-conflict" {
-				if err = s.Put(other); err != nil {
-					t.Fatal(err)
-				}
-			}
+			peer := commandFor(t, putSnapshot, spoolRecord("revalidate-peer"))
 			s.mu.Lock()
-			s.applyBatchLocked([]*mutation{m}, func(name string, data []byte) error {
+			s.applyBatchLocked([]*mutation{peer, m}, func(name string, data []byte) error {
 				if err := s.stageFile(name, data); err != nil {
 					return err
 				}
-				if mode == "known-conflict" {
-					return s.root.Remove(basename(other.RequestID))
+				if bytes.Equal(data, peer.raw) {
+					return nil
 				}
 				return os.WriteFile(filepath.Join(s.config.Dir, basename(other.RequestID)), raw, 0600)
 			}, s.syncDirectoryLocked)
 			s.mu.Unlock()
+			if peer.err != nil {
+				t.Fatalf("同批独立账单发布失败: %v", peer.err)
+			}
 			st, e := s.Status()
 			if e != nil {
 				t.Fatal(e)
 			}
 			switch mode {
 			case "identical":
-				if m.err != nil || st.Pending != 1 || st.Quarantined != 0 {
+				if m.err != nil || st.Pending != 2 || st.Quarantined != 0 {
 					t.Fatalf("相同快照未去重: %v %+v", m.err, st)
 				}
-			case "conflict", "known-conflict":
+			case "conflict":
 				if !errors.Is(m.err, ErrConflict) || st.Quarantined != 1 {
 					t.Fatalf("冲突被覆盖或证据缺失: %v %+v", m.err, st)
 				}
-				if mode == "known-conflict" {
-					if st.Pending != 0 {
-						t.Fatal("已核销旧账后把已知冲突提升为正常入账")
-					}
-					return
-				}
 			case "capacity":
-				if !errors.Is(m.err, ErrFull) || st.Pending != 1 || st.Quarantined != 1 {
+				if !errors.Is(m.err, ErrFull) || st.Pending != 2 || st.Quarantined != 1 {
 					t.Fatalf("回锁后容量或证据错误: %v %+v", m.err, st)
 				}
 			}
@@ -160,7 +161,7 @@ func TestStagingRechecksChangedDirectory(t *testing.T) {
 }
 
 // TestCrashDuringStagedFinal 在子进程把有费用终态文件实际 fsync、尚未发布时硬退出。父进程验证旧零费
-// 标记仍在，重启恢复须优先采用完整终态，二次重放不再扣款。测试只使用临时目录并检查子进程退出码。
+// 标记仍在，重启恢复须优先采用完整终态及同批另一笔，二次重放不再扣款。测试只使用临时目录并检查子进程退出码。
 func TestCrashDuringStagedFinal(t *testing.T) {
 	const key = "XHUB_UNIT_STAGED_CRASH_DIR"
 	dir := os.Getenv(key)
@@ -174,11 +175,18 @@ func TestCrashDuringStagedFinal(t *testing.T) {
 			t.Fatal(err)
 		}
 		m := commandFor(t, completeMarker, final)
+		peer := commandFor(t, putSnapshot, spoolRecord("crash-peer"))
+		peerSynced := make(chan struct{})
 		s.mu.Lock()
-		s.applyBatchLocked([]*mutation{m}, func(name string, raw []byte) error {
+		s.applyBatchLocked([]*mutation{m, peer}, func(name string, raw []byte) error {
 			if err := s.stageFile(name, raw); err != nil {
 				return err
 			}
+			if bytes.Equal(raw, peer.raw) {
+				close(peerSynced)
+				return nil
+			}
+			<-peerSynced
 			os.Exit(42)
 			return nil
 		}, s.syncDirectoryLocked)
@@ -203,15 +211,18 @@ func TestCrashDuringStagedFinal(t *testing.T) {
 		t.Fatalf("旧标记被提前改写: %+v %v", old, e)
 	}
 	files, e := filepath.Glob(filepath.Join(dir, ".pending-*.tmp"))
-	if e != nil || len(files) != 1 {
+	if e != nil || len(files) != 2 {
 		t.Fatalf("恢复前完整临时终态数=%d: %v", len(files), e)
 	}
 	recovered := openSpool(t, Config{Dir: dir})
-	for _, want := range []int{1, 0} {
+	expected := map[string]float64{final.RequestID: final.Cost, "crash-peer": spoolRecord("crash-peer").Cost}
+	for _, want := range []int{2, 0} {
 		n, err := recovered.Replay(t.Context(), 16, func(_ context.Context, r iam.UsageRecord) error {
-			if r.RequestID != final.RequestID || r.DeliveryUnconfirmed || r.Cost != final.Cost {
+			cost, ok := expected[r.RequestID]
+			if !ok || r.DeliveryUnconfirmed || r.Cost != cost {
 				return errors.New("完整有费终态被旧标记覆盖")
 			}
+			delete(expected, r.RequestID)
 			return nil
 		})
 		if err != nil || n != want {
@@ -287,24 +298,28 @@ func TestStageFileFailureRecovery(t *testing.T) {
 	}
 }
 
-// TestCloseProtectsLiveStaging 验证单笔模式在锁外写盘时仍持有进程级目录锁。
+// TestCloseProtectsLiveStaging 验证多笔账单在锁外写盘时仍持有进程级目录锁。
 // 并行关闭必须等已接受的账单发布后才允许新实例接管；等待结束后从私有目录重放并由框架清理。
 func TestCloseProtectsLiveStaging(t *testing.T) {
-	s := openSpool(t, Config{GroupSize: 1})
+	s := openSpool(t, Config{GroupSize: 2})
 	m := commandFor(t, putSnapshot, spoolRecord("closing-stage"))
+	peer := commandFor(t, putSnapshot, spoolRecord("close-peer"))
 	started, release := make(chan struct{}), make(chan struct{})
 	resume := sync.OnceFunc(func() { close(release) })
 	defer resume()
 	written := make(chan error, 1)
 	go func() {
 		s.mu.Lock()
-		s.applyBatchLocked([]*mutation{m}, func(name string, raw []byte) error {
+		s.applyBatchLocked([]*mutation{m, peer}, func(name string, raw []byte) error {
+			if bytes.Equal(raw, peer.raw) {
+				return s.stageFile(name, raw)
+			}
 			close(started)
 			<-release
 			return s.stageFile(name, raw)
 		}, s.syncDirectoryLocked)
 		s.mu.Unlock()
-		written <- m.err
+		written <- errors.Join(m.err, peer.err)
 	}()
 	<-started
 	closing := make(chan error, 1)
@@ -326,14 +341,16 @@ func TestCloseProtectsLiveStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := openSpool(t, Config{Dir: s.config.Dir})
-	n, err := second.Replay(t.Context(), 1, func(_ context.Context, r iam.UsageRecord) error {
-		if r.RequestID != m.record.RequestID || r.Cost != m.record.Cost {
+	seen := map[string]bool{}
+	n, err := second.Replay(t.Context(), 2, func(_ context.Context, r iam.UsageRecord) error {
+		if (r.RequestID != m.record.RequestID && r.RequestID != peer.record.RequestID) || seen[r.RequestID] || r.Cost != m.record.Cost {
 			return errors.New("关闭后恢复了错误的账单")
 		}
+		seen[r.RequestID] = true
 		return nil
 	})
-	if n != 1 || err != nil {
-		t.Fatalf("接管后应收到已确认的一笔账单: n=%d %v", n, err)
+	if n != 2 || err != nil {
+		t.Fatalf("接管后应收到两笔已确认账单: n=%d %v", n, err)
 	}
 }
 
@@ -349,20 +366,24 @@ func TestDiscardDuringDeliveryStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := commandFor(t, completeMarker, final)
+	peer := commandFor(t, putSnapshot, spoolRecord("discard-peer"))
 	started, release := make(chan struct{}), make(chan struct{})
 	resume := sync.OnceFunc(func() { close(release) })
 	defer resume()
 	written, discarded := make(chan error, 1), make(chan error, 1)
 	go func() {
 		s.mu.Lock()
-		s.applyBatchLocked([]*mutation{m}, func(name string, raw []byte) error {
+		s.applyBatchLocked([]*mutation{m, peer}, func(name string, raw []byte) error {
+			if bytes.Equal(raw, peer.raw) {
+				return s.stageFile(name, raw)
+			}
 			err := s.stageFile(name, raw)
 			close(started)
 			<-release
 			return err
 		}, s.syncDirectoryLocked)
 		s.mu.Unlock()
-		written <- m.err
+		written <- errors.Join(m.err, peer.err)
 	}()
 	<-started
 	other := final
@@ -385,8 +406,101 @@ func TestDiscardDuringDeliveryStaging(t *testing.T) {
 	if err := errors.Join(<-written, <-discarded); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Acknowledge(peer.record); err != nil {
+		t.Fatalf("同批账单未发布: %v", err)
+	}
 	status, err := s.Status()
 	if err != nil || status.Pending != 0 || status.Reserved != 0 || !status.Healthy {
 		t.Fatalf("同步完成后仍有需要重扣的账单或占用的预留: %+v %v", status, err)
+	}
+}
+
+// TestUnlockOnlyForMultipleNewFiles 预置一笔已入账待核销文件和一笔可幂等重交的账单，混入零、一或两笔新写入。
+// 文件写入钩子检查目录锁边界，发布屏障始终持锁，最终逐笔核对幂等、正常结果与待处理数量。私有目录由 t 清理。
+func TestUnlockOnlyForMultipleNewFiles(t *testing.T) {
+	for _, fresh := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("new=%d", fresh), func(t *testing.T) {
+			s := openSpool(t, Config{})
+			acked, existing := spoolRecord("already-charged"), spoolRecord("already-stored")
+			if err := errors.Join(s.Put(acked), s.Put(existing)); err != nil {
+				t.Fatal(err)
+			}
+			batch := []*mutation{commandFor(t, acknowledgeSnapshot, acked), commandFor(t, putSnapshot, existing)}
+			for i := 0; i < fresh; i++ {
+				batch = append(batch, commandFor(t, putSnapshot, spoolRecord(fmt.Sprintf("new-%d", i))))
+			}
+			var staged atomic.Int32
+			var firstUnlocked, barrierUnlocked bool
+			s.mu.Lock()
+			s.applyBatchLocked(batch, func(name string, raw []byte) error {
+				staged.Add(1)
+				if fresh > 0 && bytes.Equal(raw, batch[2].raw) && s.mu.TryLock() {
+					firstUnlocked = true
+					s.mu.Unlock()
+				}
+				return s.stageFile(name, raw)
+			}, func(dir string) error {
+				if s.mu.TryLock() {
+					barrierUnlocked = true
+					s.mu.Unlock()
+				}
+				return s.syncDirectoryLocked(dir)
+			})
+			s.mu.Unlock()
+			for _, m := range batch {
+				if m.err != nil {
+					t.Fatalf("操作 %s 未正确完成: %v", m.record.RequestID, m.err)
+				}
+			}
+			state, err := s.Status()
+			if int(staged.Load()) != fresh || firstUnlocked != (fresh >= 2) || barrierUnlocked || err != nil || state.Pending != 1+fresh || state.Quarantined != 0 {
+				t.Fatalf("实际文件数或锁边界不符: 新文件=%d 写入=%d 写入解锁=%v 目录同步解锁=%v 队列=%+v/%v", fresh, staged.Load(), firstUnlocked, barrierUnlocked, state, err)
+			}
+		})
+	}
+}
+
+// TestStagedBatchRechecksDeliveryOwner 在独立目录预置一条交付标记，让同批的有费终态与普通账单完成文件同步。
+// 发布前替换标记归属，验证原件保留、冲突终态带原金额隔离、同批另一笔能正常发布。测试目录由 t 回收。
+func TestStagedBatchRechecksDeliveryOwner(t *testing.T) {
+	s := openSpool(t, Config{})
+	marker, final := deliveryPair(t, "reassigned-marker")
+	if err := s.BeginDelivery(marker); err != nil {
+		t.Fatal(err)
+	}
+	changed := marker
+	changed.UserID = "other-test-owner"
+	replacement, err := encode(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed := commandFor(t, completeMarker, final)
+	peer := commandFor(t, putSnapshot, spoolRecord("independent-bill"))
+	s.mu.Lock()
+	s.applyBatchLocked([]*mutation{confirmed, peer}, func(name string, raw []byte) error {
+		if err := s.stageFile(name, raw); err != nil {
+			return err
+		}
+		if bytes.Equal(raw, confirmed.raw) {
+			return os.WriteFile(filepath.Join(s.config.Dir, confirmed.name), replacement, 0600)
+		}
+		return nil
+	}, s.syncDirectoryLocked)
+	s.mu.Unlock()
+	actualMarker, err := os.ReadFile(filepath.Join(s.config.Dir, confirmed.name))
+	if !errors.Is(confirmed.err, ErrConflict) || err != nil || !bytes.Equal(actualMarker, replacement) {
+		t.Fatalf("发生归属冲突后覆盖了已有交付凭据: 发布=%v 读取=%v", confirmed.err, err)
+	}
+	evidence, err := filepath.Glob(filepath.Join(s.config.Dir, "quarantine", "*.evidence"))
+	if err != nil || len(evidence) != 1 {
+		t.Fatalf("有费终态的隔离证据数=%d: %v", len(evidence), err)
+	}
+	raw, err := os.ReadFile(evidence[0])
+	if err != nil || !bytes.Equal(raw, confirmed.raw) {
+		t.Fatalf("隔离的终态内容或金额改变: %v", err)
+	}
+	actualPeer, err := os.ReadFile(filepath.Join(s.config.Dir, peer.name))
+	if peer.err != nil || err != nil || !bytes.Equal(actualPeer, peer.raw) {
+		t.Fatalf("同批独立账单发布失败或内容错误: 发布=%v 读取=%v", peer.err, err)
 	}
 }
