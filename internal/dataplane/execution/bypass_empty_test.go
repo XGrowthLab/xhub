@@ -78,8 +78,8 @@ func TestNativeBypassEmptyDialogueNeverReplays(t *testing.T) {
 			if len(h.spend) != 1 || h.spend[0].status != 502 || h.spend[0].usage["pricing_blocked"] != "upstream_usage_missing" {
 				t.Fatalf("空响应缺少未计价事实: %+v", h.spend)
 			}
-			if len(h.failures) != 1 {
-				t.Fatalf("空响应应计入上游健康状态: failures=%v", h.failures)
+			if len(h.failures) != 0 {
+				t.Fatalf("唯一兼容部署的空响应不应计入冷却: failures=%v", h.failures)
 			}
 			found := false
 			for _, note := range h.notes {

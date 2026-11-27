@@ -367,6 +367,12 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 
 	for len(pool) > 0 {
 		kind := "general"
+		// 参数 id 是本次失败部署。仅在当前池有替代部署时累积冷却，固定会话续接始终使用原部署。
+		noteFailure := func(id string) {
+			if !plan.Required && routeCfg.HasCooldownAlternatives(models, fallbacks.PoolAlias) {
+				h.NoteFailure(id, routeCfg)
+			}
+		}
 		for _, rawDep := range pool {
 			cancelPhase = "before_upstream"
 			if stopCanceled(nil, nil, "", 0) {
@@ -530,7 +536,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					if stopCanceled(nil, nil, did, 0) {
 						return
 					}
-					h.NoteFailure(router.CooldownID(rawDep), routeCfg)
+					noteFailure(did)
 					util.Error("upstream dial path=%s provider=%s model=%s base_host=%s err=%s", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), dpdiagnostics.SafeErr(err))
 					if dialogue.NativeResponses || repairingHistory {
 						// 提交后网络错误不能证明供应商未执行，原生灰度不自动重放生成。
@@ -570,7 +576,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 							return
 						}
 					}
-					h.NoteFailure(router.CooldownID(rawDep), routeCfg)
+					noteFailure(did)
 					lastHTTPError = dptransport.ForwardResponse{StatusCode: resp.StatusCode, Header: resp.Header, Body: errorBody}
 					lastErr = errUpstreamStatus
 					util.Error("upstream status path=%s provider=%s model=%s base_host=%s status=%d", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), resp.StatusCode)
@@ -691,7 +697,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						} else {
 							// 本地历史写入失败属于存储故障，不能触发供应商冷却。
 							if !preparationFailed {
-								h.NoteFailure(did, routeCfg)
+								noteFailure(did)
 							}
 							util.Error("upstream stream path=%s provider=%s model=%s base_host=%s err=%s", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), dpdiagnostics.SafeErr(attempt.err))
 						}
@@ -748,7 +754,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					if stopCanceled(attempt.body, nil, did, 0) {
 						return
 					}
-					h.NoteFailure(did, routeCfg)
+					noteFailure(did)
 					if dialogue.NativeResponses || repairingHistory {
 						writeResponseFailure(did, "upstream_error", dpdiagnostics.SafeErr(attempt.readErr), nil)
 						return
@@ -766,7 +772,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					if conversionErr != nil {
 						if dialogue.NativeResponses || repairingHistory {
 							// 上游已返回成功HTTP，原生终态损坏不能再次生成；保留失败和已有用量供对账。
-							h.NoteFailure(did, routeCfg)
+							noteFailure(did)
 							var observed map[string]any
 							_ = json.Unmarshal(attempt.body, &observed)
 							usage, _ := observed["usage"].(map[string]any)
@@ -774,9 +780,8 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 							return
 						}
 						lastErr = conversionErr
-						// HTTP 200 只说明传输成功；无法解析的供应商正文仍是部署失败，
-						// 必须进入与网络错误、5xx 和流式转换错误相同的冷却链。
-						h.NoteFailure(did, routeCfg)
+						// 无法解析的上游 HTTP 200 正文与网络错误、5xx 使用相同的失败记录条件。
+						noteFailure(did)
 						continue
 					}
 					result.ToolBindings = dialogue.ToolBindings
@@ -807,7 +812,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 					if conversionErr != nil {
 						lastErr = conversionErr
 						// 编码失败同样不能提交路由归属；记录部署失败后再尝试候选项。
-						h.NoteFailure(did, routeCfg)
+						noteFailure(did)
 						continue
 					}
 					if op == "responses" {

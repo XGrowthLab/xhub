@@ -223,6 +223,12 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	originalHit := hit
 	for len(pool) > 0 {
 		kind := "general"
+		// 参数 id 是本次失败部署。只对可以切换的部署池记冷却，原生单部署和固定会话续接仍按原规则发出请求。
+		noteFailure := func(id string) {
+			if !plan.Required && settings.HasCooldownAlternatives(list, fallbacks.PoolAlias) {
+				h.NoteFailure(id, settings)
+			}
+		}
 		for _, rawDep := range pool {
 			// 组内尝试仍保留成员身份，错误分类及后续回退使用最后尝试成员。
 			fallbacks.UseDeployment(rawDep.ModelName)
@@ -334,7 +340,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 						return
 					}
 					util.Error("bypass forward call_id=%s path=%s err=%s", callID, r.URL.Path, dpdiagnostics.SafeErr(err))
-					h.NoteFailure(router.CooldownID(rawDep), settings)
+					noteFailure(router.CooldownID(rawDep))
 					if failure == bypassRetry {
 						continue
 					}
@@ -352,8 +358,8 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				if emptyBypassDialogue(candidateHit, countOnly, response) {
 					// 上游已受理请求但没有正文，也没有可核实的用量；不能把它记成成功，
 					// 更不能自动重放这次可能已计费的请求，避免同一调用产生重复上游费用。
-					// 连续无效响应仍需计入部署健康状态，以便后续独立请求遵循已有冷却策略。
-					h.NoteFailure(router.CooldownID(rawDep), settings)
+					// 多部署时仍按模板记录无效响应，以便下一次请求优先选择健康替代部署。
+					noteFailure(router.CooldownID(rawDep))
 					const message = "upstream returned an empty dialogue response"
 					if response.Diagnostics == nil {
 						response.Diagnostics = &dpdiagnostics.UpstreamDiagnostics{}
@@ -371,7 +377,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 					return
 				}
 				if status >= 500 || status == http.StatusTooManyRequests {
-					h.NoteFailure(router.CooldownID(rawDep), settings)
+					noteFailure(router.CooldownID(rawDep))
 					// 服务端可能在受理付费任务后才返回错误，不能因此创建第二个任务。
 					if repairingHistory || (status >= 500 && !replayDialogue) {
 						goto forwarded

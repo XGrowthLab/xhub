@@ -42,7 +42,7 @@ async function showFailure(page: Page, locale: Locale, id: string) {
 }
 
 /** 用真实隔离网关、数据库、用户密钥与本地上游验证日志分级、分页、身份归属及中英文原因。
- * Redis 模式在 502 触发冷却后再出站，核对 HTTP 原始错误与供应商查单 ID；finally 清理测试资源，运行器回收 Redis 及专属 schema。 */
+ * Redis 模式验证唯一兼容部署连续失败后仍出站，核对 HTTP 原始错误与供应商查单 ID；finally 清理测试资源，运行器回收 Redis 及专属 schema。 */
 test("request logs distinguish actionable errors and warnings", async ({ page }) => {
   test.setTimeout(120_000);
   await loginAdmin(page);
@@ -123,33 +123,33 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     const upstream = await storedFailure(page, admin, badGateway, { severity: "error", code: "upstream_http_error" });
     expect(upstream.diagnosis.upstream_status).toBe(502);
 
-    let cooledId = "";
+    let repeatedId = "";
     let supplierId = "";
     if (process.env.E2E_REDIS === "1") {
       // 上游用它实际收到的网关调用 ID 生成查单头，每次都不同，避免把第一次错误误当成第二次出站。
-      const cooled = await call(name, "Check that a cooling deployment still forwards to the upstream.");
-      expect(cooled.status(), await cooled.text()).toBe(502);
-      expect(await cooled.body()).toEqual(await badGateway.body());
-      const cooling = await storedFailure(page, admin, cooled, { severity: "error", code: "upstream_http_error" });
-      expect(cooling.diagnosis.upstream_status).toBe(502);
-      expect(cooling.outbound_endpoint).toContain("/chat/completions");
-      cooledId = cooling.request_id;
-      supplierId = "e2e-supplier-" + cooledId;
-      expect(cooled.headers()["x-oneapi-request-id"]).toBe(supplierId);
-      expect(cooled.headers()["x-oneapi-request-id"]).not.toBe(badGateway.headers()["x-oneapi-request-id"]);
+      const repeated = await call(name, "Check that the only compatible deployment still forwards after failure.");
+      expect(repeated.status(), await repeated.text()).toBe(502);
+      expect(await repeated.body()).toEqual(await badGateway.body());
+      const repeatedFailure = await storedFailure(page, admin, repeated, { severity: "error", code: "upstream_http_error" });
+      expect(repeatedFailure.diagnosis.upstream_status).toBe(502);
+      expect(repeatedFailure.outbound_endpoint).toContain("/chat/completions");
+      repeatedId = repeatedFailure.request_id;
+      supplierId = "e2e-supplier-" + repeatedId;
+      expect(repeated.headers()["x-oneapi-request-id"]).toBe(supplierId);
+      expect(repeated.headers()["x-oneapi-request-id"]).not.toBe(badGateway.headers()["x-oneapi-request-id"]);
     }
 
     // 同一 Key 的新故障比警告更新。页大小 1 证明必须先筛选再分页，旧失败筛选仍可拿到两种严重程度。
     const list = GATEWAY + "/spend/logs/ui?" + new URLSearchParams({ status_filter: "error", key_alias: name, page_size: "1" }).toString();
     const legacy = await page.request.get(list, { headers: admin });
     expect(legacy.status()).toBe(200);
-    expect(await legacy.json()).toMatchObject({ total: cooledId ? 3 : 2 });
+    expect(await legacy.json()).toMatchObject({ total: repeatedId ? 3 : 2 });
     const warnings = await page.request.get(list + "&severity=warning", { headers: admin });
     expect(warnings.status()).toBe(200);
     expect(await warnings.json()).toMatchObject({ total: 1, data: [{ request_id: warning.request_id }] });
     const faults = await page.request.get(list + "&severity=error", { headers: admin });
     expect(faults.status()).toBe(200);
-    expect(await faults.json()).toMatchObject({ total: cooledId ? 2 : 1, data: [{ severity: "error" }] });
+    expect(await faults.json()).toMatchObject({ total: repeatedId ? 2 : 1, data: [{ severity: "error" }] });
 
     await stableGoto(page, "/logs");
     await page.getByRole("tab", { name: translate("zh-CN", "Error Logs"), exact: true }).click();
@@ -159,8 +159,8 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     await search.fill(warning.request_id);
     expect(await (await absent).json()).toMatchObject({ total: 0, data: [] });
     await expect(panel.getByRole("row").filter({ hasText: warning.request_id })).toHaveCount(0);
-    if (cooledId) {
-      const details = await showFailure(page, "zh-CN", cooledId);
+    if (repeatedId) {
+      const details = await showFailure(page, "zh-CN", repeatedId);
       const upstreamResponse = details.getByRole("region", { name: translate("zh-CN", "Upstream Response") });
       await upstreamResponse.getByRole("button", { name: translate("zh-CN", "Upstream Response"), exact: true }).click();
       await expect(upstreamResponse).toContainText(translate("zh-CN", "logsUX.upstreamRequestId") + ": " + supplierId);
@@ -199,8 +199,8 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     await expect(upstreamDetails).toContainText("Received HTTP 502 from upstream");
     await expect(upstreamDetails).toContainText(userName);
     await page.keyboard.press("Escape");
-    if (cooledId) {
-      const details = await showFailure(page, "en", cooledId);
+    if (repeatedId) {
+      const details = await showFailure(page, "en", repeatedId);
       await expect(details).toContainText("Received HTTP 502 from upstream");
       const upstreamResponse = details.getByRole("region", { name: "Upstream Response" });
       await upstreamResponse.getByRole("button", { name: "Upstream Response", exact: true }).click();

@@ -74,7 +74,9 @@ func TestFallbackQueueBoundAndCooldown(t *testing.T) {
 		models = append(models, config.ModelEntry{ModelName: name, LiteLLMParams: map[string]any{"model": name, "deployment_id": name}})
 	}
 	q := NewFallbackQueue(settings, "0", false)
-	state := router.State{Cooldown: map[string]bool{router.CooldownID(models[1]): true}}
+	backup := config.ModelEntry{ModelName: "1", LiteLLMParams: map[string]any{"model": "alternate-1", "deployment_id": "alternate-1"}}
+	models = append(models, backup)
+	state := router.State{Cooldown: map[string]bool{router.CooldownID(models[1]): true, router.CooldownID(backup): true}}
 	count := 0
 	for {
 		pool, _ := q.Next("general", models, state)
@@ -133,7 +135,8 @@ func TestInitialRoutesThroughCooling(t *testing.T) {
 		{name: "single", models: []config.ModelEntry{primary}, cooled: []config.ModelEntry{primary}, want: []string{"primary-a"}, pool: "primary"},
 		{name: "all-cooled", models: []config.ModelEntry{primary, second}, cooled: []config.ModelEntry{primary, second}, want: []string{"primary-a", "primary-b"}, pool: "primary"},
 		{name: "healthy-sibling", models: []config.ModelEntry{primary, second, backup}, cooled: []config.ModelEntry{primary}, want: []string{"primary-b"}, pool: "primary"},
-		{name: "healthy-configured-fallback", models: []config.ModelEntry{primary, backup}, cooled: []config.ModelEntry{primary}, want: []string{"backup-a"}, pool: "backup"},
+		{name: "single-primary-with-configured-fallback", models: []config.ModelEntry{primary, backup}, cooled: []config.ModelEntry{primary}, want: []string{"primary-a"}, pool: "primary"},
+		{name: "healthy-configured-fallback", models: []config.ModelEntry{primary, second, backup}, cooled: []config.ModelEntry{primary, second}, want: []string{"backup-a"}, pool: "backup"},
 		{name: "cooled-configured-fallback", models: []config.ModelEntry{backup}, cooled: []config.ModelEntry{backup}, want: []string{"backup-a"}, pool: "backup"},
 		{name: "zero-weight", models: []config.ModelEntry{primary, second}, cooled: []config.ModelEntry{primary, second},
 			zero: map[string]any{"allocations": []any{map[string]any{"deployment_id": "primary-a", "weight": 0}, map[string]any{"deployment_id": "primary-b", "weight": 0}}}},

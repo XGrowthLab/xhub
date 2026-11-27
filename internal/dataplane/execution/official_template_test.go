@@ -85,7 +85,7 @@ func TestOfficialTemplateTrafficSplitUsesLiveModelWeights(t *testing.T) {
 	}
 }
 
-// TestOfficialTemplateRetriesHTTPFailure 验证异步创建遇到明确 429 时按模板重试，成功后记录一次失败且上游只调用两次。
+// TestOfficialTemplateRetriesHTTPFailure 验证异步创建遇到明确 429 时按模板重试，单部署不记录冷却，上游只调用两次。
 // 参数 t 为 Go 测试上下文；返回值无，断言失败定位具体协议、路由或日志行为。
 // 前置使用独立测试配置及本地 HTTP 假上游，不依赖外部供应商凭据。
 // 服务器通过 defer/Cleanup 关闭，测试状态只存在本例内存，不产生持久化数据。
@@ -105,7 +105,7 @@ func TestOfficialTemplateRetriesHTTPFailure(t *testing.T) {
 		"retry_policy": map[string]any{"max_attempts": 2, "timeout_seconds": 60, "failure_threshold": 3, "cooldown_seconds": 0},
 	}
 	rec := h.call(t, http.MethodPost, "/api/v3/contents/generations/tasks", `{"model":"video"}`)
-	if rec.Code != 200 || calls.Load() != 2 || len(h.failures) != 1 {
+	if rec.Code != 200 || calls.Load() != 2 || len(h.failures) != 0 {
 		t.Fatalf("status=%d calls=%d failures=%v", rec.Code, calls.Load(), h.failures)
 	}
 }

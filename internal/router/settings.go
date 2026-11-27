@@ -135,6 +135,13 @@ func (r RouteSettings) Candidates(list []config.ModelEntry, name string) []confi
 	return All(list, name)
 }
 
+// HasCooldownAlternatives 判断当前兼容目录能否为指定模型或路由组提供至少两个可接流量的独立部署。
+// 参数 list 为请求协议和能力筛选后的部署，name 为模型或组名；返回布尔值供失败计数和路由诊断使用。
+// 尊重停用状态、模型匹配与分配份额，忽略 Redis 现有冷却；仅检查替代候选，不执行鉴权、调度或存储。
+func (r RouteSettings) HasCooldownAlternatives(list []config.ModelEntry, name string) bool {
+	return hasCooldownAlternatives(r.Candidates(list, name), r.Strategy(), State{Allocations: r.Policy.Shares()})
+}
+
 // Schedule 为数据面统一展开显式组并使用解析后的策略与权重；成员名请求只匹配该成员。
 // 参数为兼容候选、请求名、运行状态及会话部署；返回尝试顺序，保留权限和计费身份。
 func (r RouteSettings) Schedule(list []config.ModelEntry, name string, state State, pinned string) []config.ModelEntry {

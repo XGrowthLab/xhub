@@ -18,20 +18,21 @@ import (
 	"github.com/sunqirui1987/xhub/internal/router"
 )
 
-// TestCoolingRoutesPreserveUpstreamErrors 验证单部署及多个兼容部署都处于冷却时，下一次请求仍真正到达上游。
-// 参数 t 为测试上下文。隔离 HTTP、PostgreSQL 和 Redis，校验原始 529、两侧查单 ID、持久化错误及零扣费；
-// 各子例用实际请求触发冷却，结束后回收本地上游、数据库 schema 与专用 Redis 进程。
+// TestCoolingRoutesPreserveUpstreamErrors 验证单部署不进入冷却，多部署全部冷却时仍向上游发出下一次请求。
+// 参数 t 为测试上下文。真实 HTTP、隔离 PostgreSQL 与 Redis 校验冷却键、原始 529、查单 ID 和零费用。
+// 单部署也覆盖旧冷却键；多部署以实际请求触发冷却。结束后回收上游、schema 及专用 Redis。
 func TestCoolingRoutesPreserveUpstreamErrors(t *testing.T) {
 	for _, tc := range []struct {
-		name, path string
-		count      int
+		name, path      string
+		count, eligible int
 	}{
-		{"single-compatible", "/v1/messages", 1},
-		{"all-compatible", "/v1/messages", 2},
-		{"single-native", "/bypass/anthropic/v1/messages", 1},
+		{"single-compatible", "/v1/messages", 1, 1},
+		{"zero-weight-alternative", "/v1/messages", 2, 1},
+		{"all-compatible", "/v1/messages", 2, 2},
+		{"single-native", "/bypass/anthropic/v1/messages", 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			isolatedSpendRedis(t)
+			redis := isolatedSpendRedis(t)
 			const model = "cooldown-anthropic"
 			const raw = " { \"type\":\"error\", \"error\": {\"message\":\"Overloaded\",\"type\":\"overloaded_error\"} }\n"
 			var calls atomic.Int32
@@ -67,7 +68,12 @@ func TestCoolingRoutesPreserveUpstreamErrors(t *testing.T) {
 			}
 			admin := h.adminSession()
 			owner := h.openScope(t, admin, tc.name)
-			template := routeTemplate(t, h, admin, tc.name, routeTemplateBody([]any{}, 1, 10, 1, 60))
+			routes := []any{}
+			if tc.count != tc.eligible {
+				routes = []any{map[string]any{"model": model, "strategy": "traffic-split",
+					"allocations": routeAllocations(map[string]float64{"anthropic-0": 1, "anthropic-1": 0})}}
+			}
+			template := routeTemplate(t, h, admin, tc.name, routeTemplateBody(routes, 1, 10, 1, 60))
 			bindTemplate(t, h, admin, "team", owner.teamID, template)
 			before := h.moneyOf(t, owner)
 
@@ -85,16 +91,36 @@ func TestCoolingRoutesPreserveUpstreamErrors(t *testing.T) {
 				}
 				return response
 			}
-			for n := 0; n < tc.count && len(h.gw.Live.Cooled(ids)) < tc.count; n++ {
-				send(n)
-			}
-			if cooled := h.gw.Live.Cooled(ids); len(cooled) != tc.count {
-				t.Fatalf("出站失败没有使全部预期部署进入 Redis 冷却: %v", cooled)
+			if tc.eligible == 1 {
+				for n := range 3 {
+					send(n)
+				}
+				for _, id := range ids {
+					if exists, err := redis.Exists(t.Context(), "xhub:fails:"+id, "xhub:cooldown:"+id).Result(); err != nil || exists != 0 {
+						t.Fatalf("只有一个可接流量的部署时不得写冷却计数或状态: count=%d err=%v", exists, err)
+					}
+				}
+				// 模拟升级前或配置调整前留下的键，后续新请求仍需实际出站。
+				if err := redis.Set(t.Context(), "xhub:cooldown:"+ids[0], "1", 45*time.Second).Err(); err != nil {
+					t.Fatalf("写入测试用历史冷却键失败: %v", err)
+				}
+			} else {
+				for n := 0; n < tc.eligible && len(h.gw.Live.Cooled(ids)) < tc.eligible; n++ {
+					send(n)
+				}
+				if cooled := h.gw.Live.Cooled(ids); len(cooled) != tc.eligible {
+					t.Fatalf("出站失败没有使全部预期部署进入 Redis 冷却: %v", cooled)
+				}
 			}
 			outboundBefore := calls.Load()
-			response := send(tc.count)
-			if calls.Load() <= outboundBefore || (tc.count == 1 && calls.Load() != outboundBefore+1) {
+			response := send(3)
+			if calls.Load() <= outboundBefore || (tc.eligible == 1 && calls.Load() != outboundBefore+1) {
 				t.Fatalf("冷却后的出站次数不符: before=%d after=%d", outboundBefore, calls.Load())
+			}
+			if tc.eligible == 1 {
+				if ttl, err := redis.PTTL(t.Context(), "xhub:cooldown:"+ids[0]).Result(); err != nil || ttl <= 0 || ttl > 45*time.Second {
+					t.Fatalf("单部署请求应忽略旧键且不延长或清除它: ttl=%s err=%v", ttl, err)
+				}
 			}
 			detail := logDetail(t, h, admin, response.header("X-Litellm-Call-Id"))
 			metadata, _ := detail["metadata"].(map[string]any)

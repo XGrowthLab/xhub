@@ -42,7 +42,7 @@ A required parent-response target cannot use ordinary cross-target fallback. Do 
 
 ## Responsibility
 
-Candidate filtering, model fallbacks, and routing diagnostics. Initial routing prefers a healthy deployment or a healthy configured fallback. When neither is available, it can still select an eligible deployment in cooldown. Diagnostics retain the cooldown state.
+Candidate filtering, model fallbacks, and routing diagnostics. A sole eligible deployment skips cooldown accounting and ignores existing cooldown records. With multiple eligible deployments, initial routing prefers healthy deployments or healthy configured fallbacks, then considers eligible deployments in cooldown.
 
 ## Review order
 
