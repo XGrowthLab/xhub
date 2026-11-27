@@ -2,10 +2,14 @@ package regression
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +17,97 @@ import (
 	"github.com/sunqirui1987/xhub/internal/config"
 	"github.com/sunqirui1987/xhub/internal/router"
 )
+
+// TestCoolingRoutesPreserveUpstreamErrors 验证单部署及多个兼容部署都处于冷却时，下一次请求仍真正到达上游。
+// 参数 t 为测试上下文。隔离 HTTP、PostgreSQL 和 Redis，校验原始 529、两侧查单 ID、持久化错误及零扣费；
+// 各子例用实际请求触发冷却，结束后回收本地上游、数据库 schema 与专用 Redis 进程。
+func TestCoolingRoutesPreserveUpstreamErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		count      int
+	}{
+		{"single-compatible", "/v1/messages", 1},
+		{"all-compatible", "/v1/messages", 2},
+		{"single-native", "/bypass/anthropic/v1/messages", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolatedSpendRedis(t)
+			const model = "cooldown-anthropic"
+			const raw = " { \"type\":\"error\", \"error\": {\"message\":\"Overloaded\",\"type\":\"overloaded_error\"} }\n"
+			var calls atomic.Int32
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				calls.Add(1)
+				callID := r.Header.Get("X-Litellm-Call-Id")
+				if r.URL.Path != "/v1/messages" || callID == "" || r.Header.Get("X-Request-Id") != callID {
+					t.Errorf("实际出站端点或关联 ID 不符: path=%s call=%q request=%q", r.URL.Path, callID, r.Header.Get("X-Request-Id"))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Oneapi-Request-Id", "supplier-"+callID)
+				w.Header().Set("Retry-After", "8")
+				w.WriteHeader(529)
+				_, _ = io.WriteString(w, raw)
+			}))
+			t.Cleanup(up.Close)
+
+			var deployments []config.ModelEntry
+			for i := 0; i < tc.count; i++ {
+				dep := deployment(model, fmt.Sprintf("anthropic-%d", i), map[string]any{"api_base": up.URL, "custom_llm_provider": "anthropic"})
+				dep.ModelInfo["transport"] = "bypass_anthropic_messages"
+				dep.ModelInfo["endpoint_types"] = []string{"messages", "bypass:anthropic-messages"}
+				deployments = append(deployments, dep)
+			}
+			h := openHarness(t, false, deployments...)
+			if h.gw.Live == nil {
+				t.Fatal("网关未连接专用 Redis")
+			}
+			var ids []string
+			for _, dep := range h.gw.Cfg.ModelList {
+				ids = append(ids, router.CooldownID(dep))
+			}
+			admin := h.adminSession()
+			owner := h.openScope(t, admin, tc.name)
+			template := routeTemplate(t, h, admin, tc.name, routeTemplateBody([]any{}, 1, 10, 1, 60))
+			bindTemplate(t, h, admin, "team", owner.teamID, template)
+			before := h.moneyOf(t, owner)
+
+			// 参数 n 让每次请求独立，返回后校验供应商 ID 来自本次出站。这个闭包只在当前子例使用。
+			send := func(n int) reply {
+				body := chatRequest(model, fmt.Sprintf("Check upstream failure %d.", n))
+				body["max_tokens"] = 64
+				response := h.do(http.MethodPost, tc.path, owner.key, body)
+				if response.status != 529 || response.text() != raw || response.header("Retry-After") != "8" {
+					t.Fatalf("供应商 HTTP 错误被改写: %s", response.describe())
+				}
+				callID := response.header("X-Litellm-Call-Id")
+				if callID == "" || response.header("X-Oneapi-Request-Id") != "supplier-"+callID {
+					t.Fatalf("供应商查单 ID 未关联到网关调用 %q: %s", callID, response.describe())
+				}
+				return response
+			}
+			for n := 0; n < tc.count && len(h.gw.Live.Cooled(ids)) < tc.count; n++ {
+				send(n)
+			}
+			if cooled := h.gw.Live.Cooled(ids); len(cooled) != tc.count {
+				t.Fatalf("出站失败没有使全部预期部署进入 Redis 冷却: %v", cooled)
+			}
+			outboundBefore := calls.Load()
+			response := send(tc.count)
+			if calls.Load() <= outboundBefore || (tc.count == 1 && calls.Load() != outboundBefore+1) {
+				t.Fatalf("冷却后的出站次数不符: before=%d after=%d", outboundBefore, calls.Load())
+			}
+			detail := logDetail(t, h, admin, response.header("X-Litellm-Call-Id"))
+			metadata, _ := detail["metadata"].(map[string]any)
+			diagnostic, _ := metadata["upstream_response"].(map[string]any)
+			if detail["status"] != "error" || firstFloat(metadata, "http_status") != 529 || firstFloat(diagnostic, "status_code") != 529 ||
+				diagnostic["endpoint"] != "/v1/messages" || !strings.Contains(fmt.Sprint(detail["error"]), "Overloaded") ||
+				!strings.Contains(fmt.Sprint(diagnostic["headers"]), response.header("X-Oneapi-Request-Id")) ||
+				firstFloat(detail, "spend") != 0 || h.moneyOf(t, owner) != before {
+				t.Fatalf("日志缺少实际供应商失败、查单 ID 或零费用: %v", detail)
+			}
+		})
+	}
+}
 
 // TestMalformedSuccessTripsCooldown 验证 HTTP 200 的损坏协议会回退并触发部署冷却，下一请求直接跳过故障部署。
 // 前置独立 Redis、隔离 schema 和本地假上游；部署身份每次唯一，测试前后只删除本用例的失败、冷却、延迟和路由用量键。

@@ -75,7 +75,7 @@ func TestRouteDiagnosisStages(t *testing.T) {
 		{name: "unrelated disabled", list: []config.ModelEntry{other}, status: 400, kind: "invalid_request", message: "model not found"},
 		{name: "matching disabled", list: []config.ModelEntry{paused}, status: 400, kind: "model_disabled", message: "model is disabled"},
 		{name: "invalid transport", list: []config.ModelEntry{bad}, matched: 1, status: 400, kind: "model_unavailable", message: "exists"},
-		{name: "cooldown", list: []config.ModelEntry{good}, state: router.State{Cooldown: map[string]bool{router.CooldownID(good): true}}, matched: 1, compatible: 1, status: 503, kind: "model_unavailable", message: "cooling down"},
+		{name: "cooldown", list: []config.ModelEntry{good}, state: router.State{Cooldown: map[string]bool{router.CooldownID(good): true}}, matched: 1, compatible: 1},
 		{name: "zero weight stale positive", list: []config.ModelEntry{good}, state: router.State{Allocations: map[string]float64{"live": 0, "deleted": 100}}, matched: 1, compatible: 1, status: 503, kind: "model_unavailable", message: "no allocated traffic"},
 		{name: "wildcard", list: []config.ModelEntry{wildcard}, matched: 1, compatible: 1, available: 1},
 		{name: "group", list: []config.ModelEntry{good}, group: true, matched: 1, compatible: 1, available: 1},
@@ -98,8 +98,8 @@ func TestRouteDiagnosisStages(t *testing.T) {
 			if err != nil || snapshot["compatible"] != tc.compatible || snapshot["available"] != tc.available || strings.Contains(string(raw), "private") {
 				t.Fatalf("路由持久化诊断错误或泄漏: %s %v", raw, err)
 			}
-			if tc.name == "cooldown" && snapshot["required_deployment_reason"] != "deployment is cooling down" {
-				t.Fatalf("续接冷却原因不明确: %v", snapshot)
+			if tc.name == "cooldown" && (d.cooling != 1 || snapshot["required_deployment_reason"] != "deployment is cooling down") {
+				t.Fatalf("冷却状态应留在诊断快照: %v", snapshot)
 			}
 			if d.matched != tc.matched || d.compatible != tc.compatible || d.available != tc.available {
 				t.Fatalf("阶段计数错误: %+v", d)
@@ -108,9 +108,6 @@ func TestRouteDiagnosisStages(t *testing.T) {
 				status, kind, message, reason := d.Failure(alias)
 				if status != tc.status || kind != tc.kind || !strings.Contains(message, tc.message) || reason == "" {
 					t.Fatalf("空路由分类错误: %d %s %s %s", status, kind, message, reason)
-				}
-				if tc.name == "cooldown" && (reason != "all_deployments_cooling_down" || !strings.Contains(message, "(1 of 1)")) {
-					t.Fatalf("冷却原因或候选计数丢失: %s %s", reason, message)
 				}
 			}
 			if tc.name == "zero weight stale positive" && len(d.stale) != 1 {

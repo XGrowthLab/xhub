@@ -180,7 +180,7 @@ func TestOfficialForwardDoesNotLeakGatewayCredentials(t *testing.T) {
 		r.Header.Set(name, "gateway-secret")
 	}
 	r.Header.Set("Connection", "X-Private")
-	response, err := dptransport.ForwardOfficial(officialHost(up).HTTPClient(), r, http.MethodGet, up.URL, "provider-key", nil, r.Header, providercontract.Transport{Auth: providercontract.AuthConfig{Header: "Authorization", Prefix: "Bearer"}}, nil)
+	response, err := dptransport.ForwardOfficial(officialHost(up).HTTPClient(), r, http.MethodGet, up.URL, "provider-key", "fixture-call", nil, r.Header, providercontract.Transport{Auth: providercontract.AuthConfig{Header: "Authorization", Prefix: "Bearer"}}, nil)
 	status := response.StatusCode
 	if err != nil || status != 200 {
 		t.Fatal(status, err)

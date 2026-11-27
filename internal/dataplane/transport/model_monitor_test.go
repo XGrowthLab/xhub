@@ -30,7 +30,7 @@ func TestForwardMonitorTiming(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			start := time.Now()
-			result, err := ForwardOfficial(server.Client(), httptest.NewRequest("POST", "/", nil), "POST", server.URL, "fake", []byte("{}"), http.Header{}, providercontract.Transport{Protocol: "openai-chat", Auth: providercontract.AuthConfig{Header: "Authorization"}}, httptest.NewRecorder())
+			result, err := ForwardOfficial(server.Client(), httptest.NewRequest("POST", "/", nil), "POST", server.URL, "fake", "fixture-call", []byte("{}"), http.Header{}, providercontract.Transport{Protocol: "openai-chat", Auth: providercontract.AuthConfig{Header: "Authorization"}}, httptest.NewRecorder())
 			if (err != nil) != tc.failed || result.Streamed != tc.stream {
 				t.Fatalf("转发结果错误: %+v, %v", result, err)
 			}

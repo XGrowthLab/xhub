@@ -136,7 +136,7 @@ func TestFalAuthorizationDoesNotFollowRedirects(t *testing.T) {
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, 307) }))
 	defer source.Close()
 	request := httptest.NewRequest("GET", "/queue/", nil)
-	response, err := dptransport.ForwardOfficial(officialHost(source).HTTPClient(), request, "GET", source.URL, "secret", nil, request.Header, providercontract.Transport{Auth: providercontract.AuthConfig{Header: "Authorization", Prefix: "Key"}}, nil)
+	response, err := dptransport.ForwardOfficial(officialHost(source).HTTPClient(), request, "GET", source.URL, "secret", "fixture-call", nil, request.Header, providercontract.Transport{Auth: providercontract.AuthConfig{Header: "Authorization", Prefix: "Key"}}, nil)
 	status := response.StatusCode
 	if err != nil || status != 307 || reached {
 		t.Fatal("followed Fal redirect", status, err, reached)

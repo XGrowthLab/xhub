@@ -165,15 +165,12 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	state := h.RouteState()
 	state.Allocations = settings.Policy.Shares()
 	runtimePin := dprouting.RuntimePin(list, plan.Pinned)
-	pool := settings.Schedule(list, alias, state, runtimePin)
 	disableFallbacks, _ := body["disable_fallbacks"].(bool)
 	// 原生异步任务的创建结果可能不明确，保持禁止重放；对话创建可以按模型回退。
 	background, _ := body["background"].(bool)
 	dialogueFallback := !background && (hit.Transport.Protocol == "openai-responses" || hit.Transport.Protocol == "openai-chat" || hit.Transport.Protocol == "anthropic-messages" || hit.Transport.Protocol == "gemini" || hit.Transport.Protocol == "vertex")
 	fallbacks := dprouting.NewFallbackQueue(baseSettings, alias, plan.Required || disableFallbacks || !dialogueFallback)
-	if len(pool) == 0 {
-		pool, settings = fallbacks.Next("general", list, state)
-	}
+	pool, settings := fallbacks.Initial(list, alias, settings, state, runtimePin)
 	pool, settings = fallbacks.SelectAffinity(&plan, pool, alias, list, state, settings)
 	if plan.Required && len(pool) == 0 {
 		diagnosis := dprouting.DiagnoseRoute(h.Models(), list, alias, hit.Transport.EndpointID, settings, state, nil, false, policyBody)
@@ -298,7 +295,7 @@ func serveBypassCreate(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 				// 诊断必须对应真实尝试的部署，后续因缺少凭据跳过的候选不能覆盖它。
 				hit = candidateHit
 				ctx, cancel := context.WithTimeout(r.Context(), time.Duration(settings.TimeoutSeconds()*float64(time.Second)))
-				response, err = dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), candidateHit.Action.Method, url, key, payload, r.Header, candidateHit.Transport, w)
+				response, err = dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), candidateHit.Action.Method, url, key, callID, payload, r.Header, candidateHit.Transport, w)
 				respBody, status = response.Body, response.StatusCode
 				cancel()
 				dep = candidate
@@ -596,7 +593,7 @@ func serveBypassFollow(h dpcontract.Bypass, w http.ResponseWriter, r *http.Reque
 	url := dptransport.WithQuery(dptransport.BypassDeploymentURL(base, hit), r)
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(settings.TimeoutSeconds()*float64(time.Second)))
 	defer cancel()
-	response, err := dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), r.Method, url, key, nil, r.Header, hit.Transport, nil)
+	response, err := dptransport.ForwardOfficial(h.HTTPClient(), r.WithContext(ctx), r.Method, url, key, callID, nil, r.Header, hit.Transport, nil)
 	respBody, status := response.Body, response.StatusCode
 	if err != nil {
 		h.RememberExchange(callID, r, nil, []byte(dpdiagnostics.SafeErr(err)))

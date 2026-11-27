@@ -500,14 +500,18 @@ class ArkUpstreamTest(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
 
     def test_error_log_diagnostics(self):
-        """前置本地 HTTP 上游；验证长 JSON、纯文本无截断，普通模型仍成功，断网可恢复；tearDown 关闭服务并清理任务。"""
+        """前置本地 HTTP 上游；验证完整错误正文、出站 ID 回显和断网恢复；tearDown 关闭服务并清理任务。"""
         for kind in ("json", "text"):
             with self.subTest(kind=kind), self.assertRaises(HTTPError) as error:
-                self.request("/v1/chat/completions", {"model": "e2e-error-log-" + kind + "-unit", "messages": []})
+                body = json.dumps({"model": "e2e-error-log-" + kind + "-unit", "messages": []}).encode()
+                req = Request(self.base + "/v1/chat/completions", data=body, headers={"X-Litellm-Call-Id": "unit-call"})
+                with urlopen(req, timeout=2):
+                    pass
             with error.exception as response:
                 self.assertEqual(response.code, 502)
                 body = response.read().decode()
                 if kind == "json":
+                    self.assertEqual(response.headers["X-Oneapi-Request-Id"], "e2e-supplier-unit-call")
                     details = json.loads(body)["error"]
                     self.assertEqual(details["message"], ERROR_LOG_JSON_DIAGNOSTIC)
                     self.assertEqual(details["details"]["terminal_cause"], "e2e-json-terminal-cause")

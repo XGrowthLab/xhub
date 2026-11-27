@@ -47,7 +47,7 @@ func TestForwardOfficialClientWriteFailure(t *testing.T) {
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
 			})}
 			w := &bypassWriteProbe{header: make(http.Header), short: short}
-			result, err := ForwardOfficial(client, httptest.NewRequest("POST", "/", nil), "POST", "http://fixture.invalid", "fake", []byte(`{}`), http.Header{}, providercontract.Transport{Protocol: "openai-chat", Auth: providercontract.AuthConfig{Header: "Authorization"}}, w)
+			result, err := ForwardOfficial(client, httptest.NewRequest("POST", "/", nil), "POST", "http://fixture.invalid", "fake", "fixture-call", []byte(`{}`), http.Header{}, providercontract.Transport{Protocol: "openai-chat", Auth: providercontract.AuthConfig{Header: "Authorization"}}, w)
 			if !errors.Is(err, dpstream.ErrClientWrite) || !result.Streamed || !body.closed || w.calls != 1 {
 				t.Fatalf("透传写失败处理不符: err=%v streamed=%v closed=%v writes=%d", err, result.Streamed, body.closed, w.calls)
 			}
@@ -78,11 +78,27 @@ func TestForwardOfficialReadInterruptedError(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			tr := providercontract.Transport{Protocol: "anthropic-messages", Auth: providercontract.AuthConfig{Header: "x-api-key"}}
-			got, err := ForwardOfficial(server.Client(), httptest.NewRequest("POST", "/", nil), "POST", server.URL, "test-key", []byte("{}"), nil, tr, nil)
+			got, err := ForwardOfficial(server.Client(), httptest.NewRequest("POST", "/", nil), "POST", server.URL, "test-key", "fixture-call", []byte("{}"), nil, tr, nil)
 			if (err == nil) != tc.complete || (!tc.complete && !errors.Is(err, io.ErrUnexpectedEOF)) || got.StatusCode != 503 ||
 				string(got.Body) != tc.body || got.Diagnostics.ReadError == "" || (got.Diagnostics.Error != nil) != tc.complete {
 				t.Fatalf("完整错误与截断正文未正确区分: result=%+v diagnostics=%+v err=%v", got, got.Diagnostics, err)
 			}
 		})
+	}
+}
+
+// TestSetUpstreamCallID 验证实际出站沿用本地可信 ID，保留独立的标准请求 ID。
+// 参数 t 管理内存 HTTP 头；覆盖首次写入、同名伪造、已有标准 ID 和无 ID，没有网络或清理副作用。
+func TestSetUpstreamCallID(t *testing.T) {
+	header := http.Header{"X-Litellm-Call-Id": {"untrusted"}}
+	SetUpstreamCallID(header, "gateway-id")
+	if header.Get("X-Litellm-Call-Id") != "gateway-id" || header.Get("X-Request-Id") != "gateway-id" {
+		t.Fatalf("可信 ID 未关联到出站请求: %v", header)
+	}
+	header.Set("X-Request-Id", "caller-id")
+	SetUpstreamCallID(header, "next-gateway-id")
+	SetUpstreamCallID(header, "")
+	if header.Get("X-Litellm-Call-Id") != "next-gateway-id" || header.Get("X-Request-Id") != "caller-id" {
+		t.Fatalf("已有标准请求 ID 被覆盖: %v", header)
 	}
 }

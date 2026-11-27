@@ -335,11 +335,12 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, isDetails
 // Helper Components
 // ============================================================================
 
-/** 从上游响应头读取常见请求 ID；参数为可能缺失的响应头，返回已记录的第一个字符串或空值，不修改日志。 */
+/** 日志详情从原始响应头取供应商查单 ID；返回第一个有效值或空值，避免通用追踪头遮住 New API 的请求号。 */
 function upstreamRequestId(headers: unknown): string | undefined {
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) return undefined;
-  for (const [key, value] of Object.entries(headers)) {
-    if (!["x-request-id", "request-id"].includes(key.toLowerCase())) continue;
+  const entries = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+  for (const key of ["x-oneapi-request-id", "request-id", "x-amzn-requestid", "x-request-id"]) {
+    const value = entries.get(key);
     const id = Array.isArray(value) ? value[0] : value;
     if (typeof id === "string" && id) return id;
   }

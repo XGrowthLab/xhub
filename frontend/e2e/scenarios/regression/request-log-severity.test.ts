@@ -42,7 +42,7 @@ async function showFailure(page: Page, locale: Locale, id: string) {
 }
 
 /** 用真实隔离网关、数据库、用户密钥与本地上游验证日志分级、分页、身份归属及中英文原因。
- * Redis 模式额外验证 502 后的真实 503 冷却；finally 清理测试资源，运行器回收日志、Redis 及专属 schema。 */
+ * Redis 模式在 502 触发冷却后再出站，核对 HTTP 原始错误与供应商查单 ID；finally 清理测试资源，运行器回收 Redis 及专属 schema。 */
 test("request logs distinguish actionable errors and warnings", async ({ page }) => {
   test.setTimeout(120_000);
   await loginAdmin(page);
@@ -124,17 +124,19 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     expect(upstream.diagnosis.upstream_status).toBe(502);
 
     let cooledId = "";
+    let supplierId = "";
     if (process.env.E2E_REDIS === "1") {
-      // Redis 冷却只能由真实上游失败触发。离线无 Redis 套件仍覆盖其余真实请求，发布 Redis 套件执行本分支。
-      const cooled = await call(name, "Check that a cooling deployment explains its unavailability.");
-      expect(cooled.status(), await cooled.text()).toBe(503);
-      expect(await cooled.json()).toMatchObject({
-        error: { reason: "all_deployments_cooling_down", message: expect.stringContaining("not sent upstream") },
-      });
-      const cooling = await storedFailure(page, admin, cooled, { severity: "error", code: "all_deployments_cooling_down" });
-      expect(cooling.diagnosis).toMatchObject({ cooling_deployments: 1, compatible_deployments: 1 });
-      expect(cooling.outbound_endpoint, "冷却请求应在上游呼叫前终止").toBe("");
+      // 上游用它实际收到的网关调用 ID 生成查单头，每次都不同，避免把第一次错误误当成第二次出站。
+      const cooled = await call(name, "Check that a cooling deployment still forwards to the upstream.");
+      expect(cooled.status(), await cooled.text()).toBe(502);
+      expect(await cooled.body()).toEqual(await badGateway.body());
+      const cooling = await storedFailure(page, admin, cooled, { severity: "error", code: "upstream_http_error" });
+      expect(cooling.diagnosis.upstream_status).toBe(502);
+      expect(cooling.outbound_endpoint).toContain("/chat/completions");
       cooledId = cooling.request_id;
+      supplierId = "e2e-supplier-" + cooledId;
+      expect(cooled.headers()["x-oneapi-request-id"]).toBe(supplierId);
+      expect(cooled.headers()["x-oneapi-request-id"]).not.toBe(badGateway.headers()["x-oneapi-request-id"]);
     }
 
     // 同一 Key 的新故障比警告更新。页大小 1 证明必须先筛选再分页，旧失败筛选仍可拿到两种严重程度。
@@ -157,6 +159,14 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     await search.fill(warning.request_id);
     expect(await (await absent).json()).toMatchObject({ total: 0, data: [] });
     await expect(panel.getByRole("row").filter({ hasText: warning.request_id })).toHaveCount(0);
+    if (cooledId) {
+      const details = await showFailure(page, "zh-CN", cooledId);
+      const upstreamResponse = details.getByRole("region", { name: translate("zh-CN", "Upstream Response") });
+      await upstreamResponse.getByRole("button", { name: translate("zh-CN", "Upstream Response"), exact: true }).click();
+      await expect(upstreamResponse).toContainText(translate("zh-CN", "logsUX.upstreamRequestId") + ": " + supplierId);
+      await page.keyboard.press("Escape");
+      await search.fill(warning.request_id);
+    }
     const found = waitForLogSearch(page, warning.request_id, "warning");
     await selectFailureSeverity(page, "warning");
     expect(await (await found).json()).toMatchObject({ total: 1, data: [{ request_id: warning.request_id }] });
@@ -190,9 +200,11 @@ test("request logs distinguish actionable errors and warnings", async ({ page })
     await expect(upstreamDetails).toContainText(userName);
     await page.keyboard.press("Escape");
     if (cooledId) {
-      const coolingDetails = await showFailure(page, "en", cooledId);
-      await expect(coolingDetails).toContainText("All compatible deployments are cooling down");
-      await expect(coolingDetails).toContainText("1 of 1 compatible deployments are cooling down");
+      const details = await showFailure(page, "en", cooledId);
+      await expect(details).toContainText("Received HTTP 502 from upstream");
+      const upstreamResponse = details.getByRole("region", { name: "Upstream Response" });
+      await upstreamResponse.getByRole("button", { name: "Upstream Response", exact: true }).click();
+      await expect(upstreamResponse).toContainText(translate("en", "logsUX.upstreamRequestId") + ": " + supplierId);
       await page.keyboard.press("Escape");
     }
   } finally {

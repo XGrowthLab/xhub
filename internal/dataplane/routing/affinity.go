@@ -125,13 +125,14 @@ func (q *fallbackQueue) preferredPool(target dpcontract.RouteTarget, alias strin
 // SelectAffinity 将可验证会话偏好应用到本轮候选，并协调同会话首次并发请求的选择。
 // 参数 plan 为请求私有计划；pool 为正常调度结果；alias、models、state 为原模型与当前候选/快照；settings 为本轮设置。
 // 返回最终候选池及其生效设置；两类创建执行器在发送前调用，权限和凭据检查仍留在执行链。
-// Required 父响应只允许经过校验的唯一原部署，失效返回空池；普通偏好失效则保留正常调度结果。
+// Required 父响应只允许经过校验的唯一原部署，冷却不阻止尝试；其他资格失效仍返回空池。普通偏好失效则保留正常调度结果。
 // Claim 只协调缓存赢家，不持有上游执行锁；赢家也必须重新验证，不能让过期缓存覆盖当前能力或回退开关。
 // 合法偏好会恢复队列 PoolAlias、Current、Path 并补充 Seen，防止随后回退再次访问旧路径；普通动态路径复制后持有。
 func (q *fallbackQueue) SelectAffinity(plan *dpcontract.RoutePlan, pool []config.ModelEntry, alias string, models []config.ModelEntry, state router.State, settings router.RouteSettings) ([]config.ModelEntry, router.RouteSettings) {
 	if plan.Required {
 		// 父响应上下文属于特定部署。即使同一池还有健康候选，也不能把续接
-		// 请求交给其他部署，因此仅保留原归属目标，失效时让执行器明确失败。
+		// 请求交给其他部署。允许在同一合法连接上尝试，防止仅因冷却丢弃续接。
+		state.Cooldown = nil
 		owned, cfg := q.preferredPool(plan.Target, alias, models, state, true)
 		if len(owned) > 0 {
 			q.PoolAlias, q.Current, q.Path = plan.Target.Pool, plan.Target.Pool, plan.Target.Path
