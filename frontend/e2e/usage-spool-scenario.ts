@@ -8,7 +8,7 @@ import { GATEWAY, MASTER, UPSTREAM, login, loginAdmin, selectFailureSeverity, se
 
 /** 注册中英文磁盘账单恢复闭环；前置无 Redis 的真实网关、私有数据库和本地供应商，从 Playground 发起唯一推理后关闭整个IAM连接池。
  * 验证页面成功、磁盘账单恢复及正文存储失败提示，再并发发送 16 个普通与流式对话并从日志详情和监控核对费用与用量；两次准入被拒后，核对首笔恢复请求的唯一账单和个人扣费。
- * 恢复前放入同一账单的完整暂存副本，首次结算后再次放入同一证据，核对每次的个人扣费、账单与队列。finally 关闭个人记录、移除故障并删除模型，运行器回收账单/schema。 */
+ * 首次恢复后重投同一证据，再验证一批并发和随后单独到达的请求各自只扣一次。finally 移除故障和模型，运行器回收账单及 schema。 */
 export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
   test("durable disk billing recovers after database disconnect " + locale, async ({ page }) => {
     test.setTimeout(120000);
@@ -197,8 +197,17 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         expect(snapshot.status(), await snapshot.text()).toBe(200);
         return await snapshot.json();
       }).toEqual({ pending: 0, quarantined: 0 });
-      const expectedCalls = 1 + concurrentIDs.length;
-      expect(new Set([callID, ...concurrentIDs]).size).toBe(expectedCalls);
+      // 一批请求的磁盘证据排空后再单独发一笔，逐项核对两种写入条件下的用户账单和总金额。
+      const single = await page.request.post(GATEWAY + "/v1/chat/completions", {
+        headers,
+        data: { model, messages: [{ role: "user", content: "Verify one independent bill after the batch." }] },
+      });
+      expect(single.status(), await single.text()).toBe(200);
+      const singleID = single.headers()["x-litellm-call-id"];
+      expect(singleID).toBeTruthy();
+      const paidIDs = [...concurrentIDs, singleID];
+      const expectedCalls = 1 + paidIDs.length;
+      expect(new Set([callID, ...paidIDs]).size).toBe(expectedCalls);
       await expect
         .poll(async () => {
           const result = await page.request.get(GATEWAY + "/models/monitor?model=" + model, { headers });
@@ -213,8 +222,8 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       // 监控到账后再读取准入使用的个人消费，核对用户可见余额与本批次的真实账单。
       const afterBatch = await page.request.get(GATEWAY + "/user/info", { headers });
       expect(afterBatch.status()).toBe(200);
-      expect(Number((await afterBatch.json()).user_info.spend) - startingSpend).toBeCloseTo(concurrentIDs.length * 0.12, 8);
-      for (const id of concurrentIDs) {
+      expect(Number((await afterBatch.json()).user_info.spend) - startingSpend).toBeCloseTo(paidIDs.length * 0.12, 8);
+      for (const id of paidIDs) {
         const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + id, { headers });
         expect(log.status()).toBe(200);
         expect(await log.json()).toMatchObject({ request_id: id, status: "success", spend: expect.closeTo(0.12, 8) });
@@ -252,7 +261,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
       expect((await resumed.json()).choices[0].message.content).toBe("e2e-ok");
       const resumedID = resumed.headers()["x-litellm-call-id"];
       expect(resumedID).toBeTruthy();
-      expect([callID, ...concurrentIDs]).not.toContain(resumedID);
+      expect([callID, ...paidIDs]).not.toContain(resumedID);
       await expect.poll(async () => {
         const log = await page.request.get(GATEWAY + "/spend/logs/ui/" + resumedID, { headers });
         return log.ok() ? await log.json() : null;
@@ -261,7 +270,7 @@ export function registerUsageSpoolScenario(locale: "en" | "zh-CN") {
         const info = await page.request.get(GATEWAY + "/user/info", { headers });
         expect(info.status()).toBe(200);
         return Number((await info.json()).user_info.spend) - startingSpend;
-      }).toBeCloseTo((concurrentIDs.length + 1) * 0.12, 8);
+      }).toBeCloseTo((paidIDs.length + 1) * 0.12, 8);
       // 从真实日志页面定位整批交错调用中的最后一个流式请求，验证用户看到的是它自己的模型账单。
       const lastStreamID = concurrentIDs[concurrentIDs.length - 1];
       await stableGoto(page, "/logs");

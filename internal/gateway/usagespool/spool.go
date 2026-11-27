@@ -93,6 +93,9 @@ type replayFailure struct {
 type Spool struct {
 	mu     sync.Mutex
 	writes mutationQueue
+	// staging 只含当前批次尚未发布的精确临时文件名。stageDone 保护根目录和进程锁的生命周期。
+	staging   map[string]*mutation
+	stageDone chan struct{}
 	// settling 只跟踪从发布最终账单到持久确认结束的前台写入；重启后由磁盘证据恢复。
 	settling sync.Map // basename -> chan struct{}
 	// probeMu 保护锁外探针的生命周期。Close 先取得它，再关闭根目录和进程锁。
@@ -244,6 +247,12 @@ func (s *Spool) Close() error {
 	defer s.probeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for s.stageDone != nil {
+		done := s.stageDone
+		s.mu.Unlock()
+		<-done
+		s.mu.Lock()
+	}
 	if s.closed {
 		return nil
 	}
@@ -362,7 +371,7 @@ func (s *Spool) scanLocked(recover bool) error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == s.probePath || name == ".lock" || name == ".spool-format" || name == "quarantine" {
+		if s.staging[name] != nil || name == s.probePath || name == ".lock" || name == ".spool-format" || name == "quarantine" {
 			continue
 		}
 		temporary := strings.HasPrefix(name, ".pending-") && strings.HasSuffix(name, ".tmp")
@@ -433,6 +442,15 @@ func sameDeliveryOwner(a, b iam.UsageRecord) bool {
 // 返回统计或读取错误，不读取正文或对外暴露身份；Status 和准入调用共用。
 func (s *Spool) statusLocked() (Status, error) {
 	result := Status{Reserved: len(s.reserved), ReservedBytes: int64(len(s.reserved)) * s.config.MaxRecordBytes}
+	// 锁外写盘期间，私有文件不是可重放账单。按完整写入上界计数，不能让新准入抢走已经承诺的空间。
+	if s.stageDone != nil {
+		for _, m := range s.staging {
+			if m.kind == beginMarker || !s.reserved[m.record.RequestID] {
+				result.Reserved++
+				result.ReservedBytes += int64(len(m.raw))
+			}
+		}
+	}
 	dir, err := s.root.Open(".")
 	if err != nil {
 		return result, err
@@ -443,7 +461,7 @@ func (s *Spool) statusLocked() (Status, error) {
 		return result, err
 	}
 	for _, entry := range entries {
-		if entry.Name() == s.probePath || entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
+		if s.staging[entry.Name()] != nil || entry.Name() == s.probePath || entry.Name() == ".lock" || entry.Name() == ".spool-format" || entry.Name() == "quarantine" {
 			continue
 		}
 		info, err := entry.Info()
@@ -845,6 +863,22 @@ func (s *Spool) completeLocked(record iam.UsageRecord, raw []byte) error {
 // 调用方必须先完成严格结算；删除或目录同步失败返回错误，保留后续恢复机会。
 func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	s.mu.Lock()
+	// 同一请求的数据库核销不能在终态写盘途中删除旧标记，否则崩溃恢复可能失去交付归属依据。
+	for s.stageDone != nil {
+		var wait chan struct{}
+		for _, m := range s.staging {
+			if m.record.RequestID == record.RequestID {
+				wait = s.stageDone
+				break
+			}
+		}
+		if wait == nil {
+			break
+		}
+		s.mu.Unlock()
+		<-wait
+		s.mu.Lock()
+	}
 	defer s.finishLocked(&err)
 	if s.closed {
 		return ErrUnavailable
@@ -881,30 +915,26 @@ func (s *Spool) DiscardUnconfirmedDelivery(record iam.UsageRecord) (err error) {
 	return s.syncSettledRemovalLocked(name)
 }
 
-// stageFile 在专用目录创建独立 v1 临时文件，写入完整快照并同步内容，返回文件名及错误。
-// 单笔和合并写入使用同样的恢复格式；失败留下的完整或部分文件由启动扫描恢复或隔离。
-func (s *Spool) stageFile(raw []byte) (string, error) {
-	suffix, err := token()
+// stageFile 按队列指定的临时文件名独占创建、写入并同步已编码的 raw。逐笔调用持有目录锁，多文件批次可并行调用。
+// 返回文件系统错误并保留原始证据，重启扫描据此恢复完整账单或隔离残片。
+func (s *Spool) stageFile(name string, raw []byte) error {
+	file, err := s.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		return "", err
-	}
-	temporary := ".pending-" + suffix + ".tmp"
-	file, err := s.root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return "", err
+		return err
 	}
 	_, writeErr := file.Write(raw)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err = errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return "", err
-	}
-	return temporary, nil
+	return errors.Join(writeErr, file.Sync(), file.Close())
 }
 
 // writeLocked 在本笔临时文件同步成功后才改名，再同步所有变更目录；持锁返回持久化或文件系统错误。
 func (s *Spool) writeLocked(raw []byte, name string) error {
-	temporary, err := s.stageFile(raw)
+	suffix, err := token()
+	if err != nil {
+		s.lastErr = err
+		return err
+	}
+	temporary := ".pending-" + suffix + ".tmp"
+	err = s.stageFile(temporary, raw)
 	if err != nil {
 		s.lastErr = err
 		return err

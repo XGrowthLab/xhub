@@ -18,10 +18,10 @@ import (
 )
 
 // TestUsageSpoolConcurrentChatBilling 使用工单中的压测客户端，验证启用磁盘队列时普通 Chat 与 SSE 均能并发完成。
-// 前置私有 PostgreSQL schema、Redis、测试密钥和本机上游；容量仅留 18 个预留槽，核对并发后的新会话、每笔用量、五层费用及重放幂等。
+// 在私有 PostgreSQL、Redis 和本机上游分别设批大小 1、2、16，核对逐笔、恰好两笔及常规批处理的请求、五层费用和重放。
 // t 托管服务、数据库、进程和目录，成功或失败均回收；测试不使用外部供应商凭据。
 func TestUsageSpoolConcurrentChatBilling(t *testing.T) {
-	for _, size := range []string{"1", "16"} {
+	for _, size := range []string{"1", "2", "16"} {
 		t.Run("group="+size, func(t *testing.T) {
 			t.Setenv("XHUB_USAGE_SPOOL_GROUP_SIZE", size)
 			// 对比使用完全相同的容量和数据，16 个并发在途预留旁仍给已持久化的标记留出空间。
