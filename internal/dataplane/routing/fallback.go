@@ -76,6 +76,27 @@ func NewFallbackQueue(settings router.RouteSettings, alias string, disabled bool
 	return &fallbackQueue{settings: settings, Current: alias, PoolAlias: alias, Seen: map[string]bool{alias: true}, Disabled: disabled, paths: map[string][]dpcontract.RouteStep{}}
 }
 
+// Initial 先选原模型或已配置回退链上的健康部署，再考虑处于冷却的合法候选。
+// 参数 models 为已经兼容的目录，alias 为请求模型，settings 为当前模型配置，state 为路由快照，pin 为普通会话偏好。
+// 返回候选和生效配置。适配与原生执行器在尚未出站时调用；只因冷却耗尽时重走一次既有选路，不改权重、授权或共享 Redis。
+// 向上游送出一次请求后仍走普通回退，避免为同一次失败额外尝试冷却目标。
+func (q *fallbackQueue) Initial(models []config.ModelEntry, alias string, settings router.RouteSettings, state router.State, pin string) ([]config.ModelEntry, router.RouteSettings) {
+	if pool := settings.Schedule(models, alias, state, pin); len(pool) > 0 {
+		return pool, settings
+	}
+	pool, selected := q.Next("general", models, state)
+	if len(pool) > 0 || selected.Err != nil || len(state.Cooldown) == 0 {
+		return pool, selected
+	}
+	// 冷却是出站排序信号。所有健康路由都不可用时，仍应按原权重和回退范围让上游处理请求。
+	*q = *NewFallbackQueue(q.settings, alias, q.Disabled)
+	state.Cooldown = nil
+	if pool := settings.Schedule(models, alias, state, pin); len(pool) > 0 {
+		return pool, settings
+	}
+	return q.Next("general", models, state)
+}
+
 // Next 在当前失败源的对应回退列表中寻找下一个可调度模型池。
 // 参数 kind 为错误类别，models 为兼容部署目录，state 为本轮运行快照；返回候选池与目标模型设置。
 // 执行器耗尽当前池后调用；禁用、队列耗尽或达到最多 32 个不同公开目标时返回空池，模型配置错误通过 settings.Err 返回。

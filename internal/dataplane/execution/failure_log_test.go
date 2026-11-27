@@ -167,11 +167,16 @@ func (h *logHost) PlanRoute(*http.Request, string, map[string]any, *auth.Princip
 func (h *logHost) CommitRoute(dpcontract.RoutePlan, string, string) {}
 
 // AnnotateCall 是 logHost 的测试接口实现。
-// 参数为调用 ID 和附注；仅捕获已选择部署的公开快照，无返回、不模拟业务附注合并或外部写入。
+// 参数为调用 ID 和附注；保留已选部署与上游响应诊断，不合并其他字段，无返回和外部写入。
 // 调用方为本文件或同包的执行测试；仅模拟所述边界，不能据此推断生产宿主的行为。
 func (h *logHost) AnnotateCall(id string, note dpcontract.CallNote) {
 	if note.UpstreamSelected {
 		h.upstreamNotes[id] = note
+	}
+	if note.Upstream != nil {
+		snapshot := h.upstreamNotes[id]
+		snapshot.Upstream = note.Upstream
+		h.upstreamNotes[id] = snapshot
 	}
 }
 
@@ -610,21 +615,49 @@ func (h *logHost) AdmitRequest(w http.ResponseWriter, path string, p *auth.Princ
 	return h.EnforceIdentityLimits(w, path, p, alias, est)
 }
 
-// TestServePreservesRetryableHTTPStatus 验证重试耗尽后客户端和账单保留上游状态及错误；本地上游和内存host结束清理。
-// 参数t为上下文；覆盖限流、服务不可用、网关失败，避免把HTTP错误与流内错误混淆。
-func TestServePreservesRetryableHTTPStatus(t *testing.T) {
-	for _, code := range []int{429, 500, 502, 503, 504} {
+// TestServePreservesUpstreamHTTPError 验证普通 4xx 与重试耗尽的 429/5xx 保留上游状态、原始字节和查单头。
+// 参数 t 为测试上下文；覆盖 SSE 客户端收到完整 JSON 或上游只送出错误头的情况，每个子用例关闭本地上游，无持久化数据。
+func TestServePreservesUpstreamHTTPError(t *testing.T) {
+	const interruptedStatus = http.StatusUnprocessableEntity
+	for _, code := range []int{400, interruptedStatus, 429, 500, 502, 503, 504, 529} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			body := " { \"error\": {\"type\":\"api_error\",\"message\":\"Service temporarily unavailable\"} }\n"
+			if code == interruptedStatus {
+				body = ""
+			}
+			received := make(chan string, 1)
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case received <- r.Header.Get("X-Litellm-Call-Id"):
+				default:
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Oneapi-Request-Id", "supplier-fixture")
+				w.Header().Set("X-Amzn-RequestId", "aws-fixture")
+				w.Header().Set("Retry-After", "4")
+				if code == interruptedStatus {
+					w.Header().Set("Content-Length", "128")
+				}
 				w.WriteHeader(code)
-				io.WriteString(w, `{"error":{"type":"api_error","message":"Service temporarily unavailable"},"request_id":"fixture"}`)
+				_, _ = io.WriteString(w, body)
 			}))
 			defer up.Close()
 			h := newLogHost(chatConfig(config.ModelEntry{ModelName: "gpt-4o-mini", LiteLLMParams: map[string]any{"model": "openai/gpt-4o-mini", "api_key": "sk-local-master", "api_base": up.URL + "/v1"}}), up.Client())
 			rec := httptest.NewRecorder()
-			Serve(h, rec, chatRequest(t, "gpt-4o-mini", false), "chat")
-			if rec.Code != code || len(h.spends) != 1 || h.spends[0].status != code || !strings.Contains(rec.Body.String(), "Service temporarily unavailable") || !strings.Contains(rec.Body.String(), "fixture") {
-				t.Fatalf("上游状态/错误丢失: %d %s %+v", rec.Code, rec.Body.String(), h.spends)
+			Serve(h, rec, chatRequest(t, "gpt-4o-mini", code == 400 || code == interruptedStatus), "chat")
+			if rec.Code != code || len(h.spends) != 1 || h.spends[0].status != code || rec.Body.String() != body {
+				t.Fatalf("上游状态或原始错误正文改变: %d %q %+v", rec.Code, rec.Body.String(), h.spends)
+			}
+			callID := rec.Header().Get("X-Litellm-Call-Id")
+			if callID == "" || <-received != callID || callID != h.spends[0].callID {
+				t.Fatalf("出站、响应和账单的网关调用 ID 不一致: %q %+v", callID, h.spends)
+			}
+			if rec.Header().Get("Content-Type") != "application/json" || rec.Header().Get("Retry-After") != "4" ||
+				rec.Header().Get("X-Oneapi-Request-Id") != "supplier-fixture" || rec.Header().Get("X-Amzn-RequestId") != "aws-fixture" {
+				t.Fatalf("上游响应类型、重试提示或查单头丢失: %v", rec.Header())
+			}
+			if note := h.upstreamNotes[callID]; code == interruptedStatus && (note.Upstream == nil || note.Upstream.ReadError == "") {
+				t.Fatalf("上游正文中断应独立留在诊断中: %+v", note.Upstream)
 			}
 		})
 	}

@@ -983,7 +983,9 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 }
             }
-            self._response(502, json.dumps(payload).encode(), "application/json")
+            call_id = self.headers.get("X-Litellm-Call-Id")
+            self._response(502, json.dumps(payload).encode(), "application/json",
+                           headers={"X-Oneapi-Request-Id": f"e2e-supplier-{call_id}"} if call_id else None)
             return True
         if model.startswith("e2e-error-log-text-"):
             self._response(502, ERROR_LOG_TEXT_DIAGNOSTIC.encode(), "text/plain; charset=utf-8")
@@ -1028,8 +1030,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         return True
 
-    def _response(self, status: int, body: bytes, content_type: str) -> None:
-        """写出指定 HTTP 响应；参数为状态码、完整正文和类型，无返回值。
+    def _response(self, status: int, body: bytes, content_type: str, *, headers: dict[str, str] | None = None) -> None:
+        """写出指定 HTTP 响应；参数为状态码、完整正文、类型及额外响应头，无返回值。
 
         调用场景：错误日志测试需要保留非 200 上游的原始正文和 Content-Type。
         异常与副作用：直接写当前连接；调用方必须在写出后结束请求处理。
@@ -1037,6 +1039,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 

@@ -113,3 +113,55 @@ func TestFallbackGroupSource(t *testing.T) {
 		t.Fatal("专用错误缓冲判定错误")
 	}
 }
+
+// TestInitialRoutesThroughCooling 验证尚未发出请求时优先健康部署，所有可用候选冷却时继续发送。
+// 参数 t 为内存测试上下文；覆盖单部署、组/回退优先、零权重与回退禁用，快照不写 Redis，无资源清理。
+func TestInitialRoutesThroughCooling(t *testing.T) {
+	makeDeployment := func(name, id string) config.ModelEntry {
+		return config.ModelEntry{ModelName: name, LiteLLMParams: map[string]any{"deployment_id": id}}
+	}
+	primary, second, backup := makeDeployment("primary", "primary-a"), makeDeployment("primary", "primary-b"), makeDeployment("backup", "backup-a")
+	for _, tc := range []struct {
+		name     string
+		models   []config.ModelEntry
+		cooled   []config.ModelEntry
+		zero     map[string]any
+		disabled bool
+		want     []string
+		pool     string
+	}{
+		{name: "single", models: []config.ModelEntry{primary}, cooled: []config.ModelEntry{primary}, want: []string{"primary-a"}, pool: "primary"},
+		{name: "all-cooled", models: []config.ModelEntry{primary, second}, cooled: []config.ModelEntry{primary, second}, want: []string{"primary-a", "primary-b"}, pool: "primary"},
+		{name: "healthy-sibling", models: []config.ModelEntry{primary, second, backup}, cooled: []config.ModelEntry{primary}, want: []string{"primary-b"}, pool: "primary"},
+		{name: "healthy-configured-fallback", models: []config.ModelEntry{primary, backup}, cooled: []config.ModelEntry{primary}, want: []string{"backup-a"}, pool: "backup"},
+		{name: "cooled-configured-fallback", models: []config.ModelEntry{backup}, cooled: []config.ModelEntry{backup}, want: []string{"backup-a"}, pool: "backup"},
+		{name: "zero-weight", models: []config.ModelEntry{primary, second}, cooled: []config.ModelEntry{primary, second},
+			zero: map[string]any{"allocations": []any{map[string]any{"deployment_id": "primary-a", "weight": 0}, map[string]any{"deployment_id": "primary-b", "weight": 0}}}},
+		{name: "explicit-no-fallback", models: []config.ModelEntry{primary, backup}, cooled: []config.ModelEntry{primary}, disabled: true, want: []string{"primary-a"}, pool: "primary"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := router.BuiltinSettings()
+			settings.ModelFallbacks = map[string]router.FallbackPolicy{"primary": {Fallbacks: []string{"backup"}}}
+			if tc.zero != nil {
+				settings.ModelDefaults = map[string]any{"primary": tc.zero}
+			}
+			queue := NewFallbackQueue(settings, "primary", tc.disabled)
+			state := router.State{Cooldown: map[string]bool{}, Draw: func() float64 { return 0 }}
+			for _, deployment := range tc.cooled {
+				state.Cooldown[router.CooldownID(deployment)] = true
+			}
+			got, selected := queue.Initial(tc.models, "primary", settings.ForModel("primary"), state, "")
+			if selected.Err != nil || len(got) != len(tc.want) || len(got) > 0 && queue.PoolAlias != tc.pool {
+				t.Fatalf("候选池不符合回退和健康规则: pool=%s candidates=%v error=%v", queue.PoolAlias, got, selected.Err)
+			}
+			for i, dep := range got {
+				if id := router.DeploymentID(dep); id != tc.want[i] {
+					t.Fatalf("候选优先顺序错误: %s, want %s", id, tc.want[i])
+				}
+			}
+			if len(state.Cooldown) != len(tc.cooled) {
+				t.Fatal("请求内降级不应修改共享健康状态")
+			}
+		})
+	}
+}

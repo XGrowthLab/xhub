@@ -42,7 +42,7 @@ type ForwardResponse struct {
 }
 
 // ForwardOfficial 只向登记的供应商地址发送一次原生请求，并保留协议响应及实测事实。
-// 参数 upstreamClient 为共享 HTTP 客户端；r 提供请求 context；method/address/key 为登记操作与服务端凭据；body/in 为载荷与入站头；transport 为显式注册传输；w 可为 nil 以禁用即时流式写出。
+// 参数 upstreamClient 为共享 HTTP 客户端；r 提供请求 context；method/address/key 为登记操作与服务端凭据，callID 为可信的网关调用 ID；body/in 为载荷与入站头；transport 为显式注册传输；w 可为 nil 以禁用即时流式写出。
 // 返回 ForwardResponse 与网络、读取、写出、超限或缺少成功终态错误；写出错误及短写含 ErrClientWrite，原生创建和查询调用。
 // 过滤客户端鉴权与逐跳头后设置登记的供应商认证，复制 client 禁止重定向；若 context 有截止时间则由它独占超时控制。
 // 安装原始诊断后读取；2xx SSE 且有 w 时逐行保留换行转发并 Flush，事件/行上限 8 MiB，必须观测正常终态。
@@ -50,7 +50,7 @@ type ForwardResponse struct {
 // 多个图像事件保留事实并阻止当前单规格自动定价；同步正文最多 64 MiB。底层读取报错但已读到完整供应商错误包络时，保留已观测的 HTTP 状态和字节。
 // 本函数关闭上游 Body；流式开始后可能已写状态或部分正文，调用方必须检查 Streamed 并禁止重复写出/危险重试。
 // 不负责路由重试、任务归属或结算去重，副作用为单次出站 HTTP 及可选客户端输出。
-func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, address, key string, body []byte, in http.Header, transport providercontract.Transport, w http.ResponseWriter) (ForwardResponse, error) {
+func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, address, key, callID string, body []byte, in http.Header, transport providercontract.Transport, w http.ResponseWriter) (ForwardResponse, error) {
 	var result ForwardResponse
 	req, err := http.NewRequestWithContext(r.Context(), method, address, bytes.NewReader(body))
 	if err != nil {
@@ -83,6 +83,7 @@ func ForwardOfficial(upstreamClient *http.Client, r *http.Request, method, addre
 	if body != nil && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	SetUpstreamCallID(req.Header, callID)
 	client := *upstreamClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if _, deadline := r.Context().Deadline(); deadline {
@@ -196,6 +197,19 @@ func sseLines(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
+// SetUpstreamCallID 在实际出站请求上附加 XHub 日志 ID，供原生与适配执行链和供应商对照。
+// 参数 header 为本次出站请求的专属头集合，callID 为网关生成的可信调用 ID；无返回值。
+// 保留已有标准 X-Request-Id，用网关 ID 覆盖同名 X-Litellm-Call-Id；无 ID 的内部测试调用保持原头。
+func SetUpstreamCallID(header http.Header, callID string) {
+	if callID == "" {
+		return
+	}
+	header.Set("X-Litellm-Call-Id", callID)
+	if header.Get("X-Request-Id") == "" {
+		header.Set("X-Request-Id", callID)
+	}
+}
+
 // bypassHeader 判断某个入站头能否安全透传到供应商。
 // 参数 k 为头名，headers 为整份入站头；返回允许时 true；ForwardOfficial 复制头时调用。
 // 剔除调用方凭据、Cookie 和逐跳传输头，并检查 Connection 声明的额外逐跳字段；名称按 HTTP 规则处理。
@@ -218,9 +232,9 @@ func bypassHeader(k string, headers http.Header) bool {
 // 按白名单保留协议需要的多值头，避免转发上游 Cookie/逐跳字段；完整诊断头仍单独保存在 ForwardResponse。
 // 副作用为响应头修改，必须在 WriteHeader/正文写出前调用，不负责正文或状态码。
 func copyBypassResponseHeaders(w http.ResponseWriter, header http.Header) {
-	for _, k := range []string{"Content-Type", "Content-Encoding", "Cache-Control", "X-Accel-Buffering", "Retry-After", "Request-Id", "X-Request-Id"} {
+	for _, k := range []string{"Content-Type", "Content-Encoding", "Cache-Control", "X-Accel-Buffering", "Retry-After", "Request-Id", "X-Request-Id", "X-Oneapi-Request-Id", "X-Amzn-RequestId"} {
 		if values := header.Values(k); len(values) > 0 {
-			w.Header()[k] = append([]string(nil), values...)
+			w.Header()[http.CanonicalHeaderKey(k)] = append([]string(nil), values...)
 		}
 	}
 	// 非2xx的原生SSE也可能携带错误事件；全部SSE在发送状态前禁止压缩缓冲，JSON不受影响。

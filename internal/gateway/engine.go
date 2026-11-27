@@ -63,11 +63,9 @@ func newEngine() *gin.Engine {
 	return e
 }
 
-// setCORS copies the request Origin into the CORS headers. A request without Origin gets no allow headers.
-// 参数 w（http.ResponseWriter）：调用方的 HTTP 响应，状态码和正文写在这里；r（*http.Request）：入站 HTTP 请求，用来读路径、头和正文。
-// 调用：仅在 engine.go 内使用
-// 测试：无直接单测
-// 返回：无。状态码和正文写进调用方的响应。
+// setCORS 为浏览器请求设置跨域响应头，包括脚本可读取的网关及供应商请求 ID。
+// 参数 w 提供可写响应头，r 提供 Origin 和预检请求头；无返回值，由网关入口调用，不写状态或正文。
+// 无 Origin 时不添加跨域头；预检声明的请求头优先，实际供应商响应头仍由执行器选择。
 func setCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -84,7 +82,7 @@ func setCORS(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Set("Access-Control-Allow-Headers", allow)
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-	h.Set("Access-Control-Expose-Headers", "X-XHub-Max-Output-Tokens, X-XHub-Budget-Input-Bound, X-XHub-Budget-Reserved, X-XHub-Budget-Reservation-Id, X-XHub-Budget-State, X-XHub-Dropped-Capabilities, X-Session-Id, x-litellm-call-id, x-litellm-response-cost, x-litellm-model-name, Retry-After, x-litellm-cache-key, cache_hit, x-litellm-cache-hit, x-litellm-version, x-litellm-response-duration-ms")
+	h.Set("Access-Control-Expose-Headers", "X-XHub-Max-Output-Tokens, X-XHub-Budget-Input-Bound, X-XHub-Budget-Reserved, X-XHub-Budget-Reservation-Id, X-XHub-Budget-State, X-XHub-Dropped-Capabilities, X-Session-Id, x-litellm-call-id, x-litellm-response-cost, x-litellm-model-name, Retry-After, x-litellm-cache-key, cache_hit, x-litellm-cache-hit, x-litellm-version, x-litellm-response-duration-ms, Request-Id, X-Request-Id, X-Oneapi-Request-Id, X-Amzn-RequestId")
 	h.Set("Access-Control-Max-Age", "600")
 	// 127.0.0.1:3000 calling localhost:4000 is a private-network request in Chrome.
 	h.Set("Access-Control-Allow-Private-Network", "true")

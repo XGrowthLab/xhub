@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -266,21 +265,18 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	diagnosis := dprouting.DiagnoseRoute(directory, models, alias, providercapability.EndpointForOp(op), routeCfg, state, &dialogue, dpdialogue.CallerProtocol(op) != "")
 	diagnosis.Log(r.URL.Path, callID, alias, routeCfg)
 	runtimePin := dprouting.RuntimePin(models, plan.Pinned)
-	pool := routeCfg.Schedule(models, alias, state, runtimePin)
 	disableFallbacks, _ := body["disable_fallbacks"].(bool)
 	fallbacks := dprouting.NewFallbackQueue(baseRouteCfg, alias, plan.Required || disableFallbacks)
-	if len(pool) == 0 {
-		pool, routeCfg = fallbacks.Next("general", models, state)
-		for target := range fallbacks.Seen {
-			if target == alias {
-				continue
-			}
-			settings := baseRouteCfg.ForModel(target)
-			if settings.Err == nil {
-				targetState := state
-				targetState.Allocations = settings.Policy.Shares()
-				dprouting.DiagnoseRoute(directory, models, target, providercapability.EndpointForOp(op), settings, targetState, &dialogue, dpdialogue.CallerProtocol(op) != "").Log(r.URL.Path, callID, target, settings)
-			}
+	pool, routeCfg := fallbacks.Initial(models, alias, routeCfg, state, runtimePin)
+	for target := range fallbacks.Seen {
+		if target == alias {
+			continue
+		}
+		settings := baseRouteCfg.ForModel(target)
+		if settings.Err == nil {
+			targetState := state
+			targetState.Allocations = settings.Policy.Shares()
+			dprouting.DiagnoseRoute(directory, models, target, providercapability.EndpointForOp(op), settings, targetState, &dialogue, dpdialogue.CallerProtocol(op) != "").Log(r.URL.Path, callID, target, settings)
 		}
 	}
 	pool, routeCfg = fallbacks.SelectAffinity(&plan, pool, alias, models, state, routeCfg)
@@ -322,8 +318,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 	// Retries 至少返回 1，省略重试字段也会执行首次尝试；这不是额外重试次数。
 
 	var lastErr error
-	var lastStatus int
-	var lastResponse []byte
+	var lastHTTPError dptransport.ForwardResponse
 	var lastProvider string
 	var lastDiagnostic *dpdiagnostics.UpstreamDiagnostics
 	cancelPhase := "before_upstream"
@@ -512,6 +507,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				for key, values := range built.Header {
 					req.Header[key] = values
 				}
+				dptransport.SetUpstreamCallID(req.Header, callID)
 				client := *h.HTTPClient()
 				client.Timeout = 0
 				// 明确地址不跟随重定向，防止凭据被转发到未配置的连接。
@@ -555,15 +551,15 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				h.AnnotateCall(callID, dpcontract.CallNote{Upstream: diagnostic})
 				if !repairingHistory && (resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests) {
 					// 重试前保存完整错误正文；若所有候选都失败，最终日志必须能还原最后一次上游响应。
-					var readErr error
-					lastResponse, readErr = io.ReadAll(resp.Body)
+					errorBody, readErr := io.ReadAll(resp.Body)
 					resp.Body.Close()
 					cancelAttempt()
 					h.DecBusy(did)
+					completeError := readErr == nil || diagnostic.ObserveCompleteErrorBody(errorBody)
 					if cause := r.Context().Err(); cause != nil {
 						// 上游响应头和入站取消是不同事实；即使只允许一次尝试，也必须在返回前记录 499。
-						receivedError := lastResponse
-						if readErr != nil && !diagnostic.ObserveCompleteErrorBody(receivedError) {
+						receivedError := errorBody
+						if !completeError {
 							receivedError = nil
 						}
 						lastErr = readErr
@@ -575,7 +571,7 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						}
 					}
 					h.NoteFailure(router.CooldownID(rawDep), routeCfg)
-					lastStatus = resp.StatusCode
+					lastHTTPError = dptransport.ForwardResponse{StatusCode: resp.StatusCode, Header: resp.Header, Body: errorBody}
 					lastErr = errUpstreamStatus
 					util.Error("upstream status path=%s provider=%s model=%s base_host=%s status=%d", r.URL.Path, supplier, realModel, dpdiagnostics.BaseHost(apiBase), resp.StatusCode)
 					continue
@@ -585,10 +581,11 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 				if resp.StatusCode >= 400 {
 					// 回退判断基于原始预读事实：传输截断时不能仅凭错误片段切换模型。
 					errorAttempt := readBufferedAttempt(resp)
+					completeError := errorAttempt.readErr == nil || diagnostic.ObserveCompleteErrorBody(errorAttempt.body)
 					// 正文预读时请求上下文可能结束；不能把不完整响应当作完整上游 4xx，也不能重试。
 					if errorAttempt.readErr != nil && r.Context().Err() != nil {
 						receivedError := errorAttempt.body
-						if !diagnostic.ObserveCompleteErrorBody(receivedError) {
+						if !completeError {
 							receivedError = nil
 						}
 						cancelAttempt()
@@ -597,15 +594,6 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 						if stopCanceled(receivedError, nil, did, 0) {
 							return
 						}
-					}
-					if errorAttempt.readErr != nil && stream && len(errorAttempt.body) == 0 {
-						// 已收到上游错误状态，空截断正文不是空成功流；保持状态、零费用和不重试。
-						cancelAttempt()
-						h.DecBusy(did)
-						h.RememberExchange(callID, r, raw, nil)
-						h.RecordSpend(w, p, callID, alias, op, nil, start, false, resp.StatusCode, did)
-						util.WriteTypedError(w, r.URL.Path, resp.StatusCode, "upstream_error", "upstream error response body was interrupted")
-						return
 					}
 					if !repairingHistory && !plan.Required && errorAttempt.readErr == nil && r.Context().Err() == nil {
 						if recovered, ok := dptransport.RecoverDialogueHistory(execution.Protocol, built.Body, errorAttempt.status, errorAttempt.body); ok {
@@ -618,17 +606,26 @@ func Serve(h dpcontract.Adapted, w http.ResponseWriter, r *http.Request, op stri
 							continue
 						}
 					}
-					resp.Body = io.NopCloser(bytes.NewReader(errorAttempt.body))
+					upstreamError := dptransport.ForwardResponse{StatusCode: errorAttempt.status, Header: resp.Header, Body: errorAttempt.body}
 					errorKind := dprouting.FallbackKind(errorAttempt.status, errorAttempt.body)
 					if !repairingHistory && errorAttempt.readErr == nil && errorKind != "" && !fallbacks.Disabled && len(baseRouteCfg.ModelFallbacks[fallbacks.Current].Targets(errorKind)) > 0 {
 						cancelAttempt()
 						h.DecBusy(did)
-						lastStatus = resp.StatusCode
-						lastResponse = errorAttempt.body
+						lastHTTPError = upstreamError
 						lastErr = errUpstreamStatus
 						kind = errorKind
 						goto nextFallbackModel
 					}
+					// HTTP 错误正文已经读取并完成回退判断，保留字节和供应商请求 ID，不走成功结构或 SSE 编码。
+					cancelAttempt()
+					h.DecBusy(did)
+					h.NoteLatency(did, float64(time.Since(start).Milliseconds()))
+					h.SetChatHeaders(w, p, alias, apiBase)
+					h.RememberExchange(callID, r, raw, errorAttempt.body)
+					h.AnnotateCall(callID, dpcontract.CallNote{Provider: supplier, CacheKey: ck, SessionID: plan.SessionID})
+					h.RecordSpend(w, p, callID, alias, op, nil, start, false, errorAttempt.status, did)
+					dptransport.WriteThrough(w, upstreamError)
+					return
 				}
 				h.NoteLatency(did, float64(time.Since(start).Milliseconds()))
 				h.SetChatHeaders(w, p, alias, apiBase)
@@ -900,23 +897,12 @@ completedAttempts:
 		return
 	}
 
-	if lastStatus >= 400 && errors.Is(lastErr, errUpstreamStatus) {
-		// HTTP 失败重试耗尽后保留真实状态与结构化错误；不能把限流或上游不可用统一改成 502。
-		// 后续尝试若改为网络/流内失败，不复用更早一次 HTTP 状态。
-		rawError := lastResponse
-		contentType := "application/json"
-		if len(rawError) == 0 {
-			rawError = util.TypedReasonErrorBody(r.URL.Path, lastStatus, "upstream_error",
-				"The upstream returned HTTP "+strconv.Itoa(lastStatus)+" without error details.", "", "upstream_http_error")
-		} else if !json.Valid(rawError) {
-			contentType = "text/plain; charset=utf-8"
-		}
-		util.Error("dataplane path=%s status=%d code=upstream_error detail=upstream %d", r.URL.Path, lastStatus, lastStatus)
-		h.RememberExchange(callID, r, raw, rawError)
-		h.RecordSpend(w, p, callID, alias, op, nil, start, false, lastStatus, "")
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(lastStatus)
-		_, _ = w.Write(rawError)
+	if lastHTTPError.StatusCode >= 400 && errors.Is(lastErr, errUpstreamStatus) {
+		// 只返回最后一次真实 HTTP 错误。诊断独立记录空正文和传输异常，原始响应保持状态、字节及查单头。
+		util.Error("dataplane path=%s status=%d code=upstream_error detail=upstream %d", r.URL.Path, lastHTTPError.StatusCode, lastHTTPError.StatusCode)
+		h.RememberExchange(callID, r, raw, lastHTTPError.Body)
+		h.RecordSpend(w, p, callID, alias, op, nil, start, false, lastHTTPError.StatusCode, "")
+		dptransport.WriteThrough(w, lastHTTPError)
 		return
 	}
 

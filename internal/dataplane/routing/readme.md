@@ -42,7 +42,7 @@ A required parent-response target cannot use ordinary cross-target fallback. Do 
 
 ## Responsibility
 
-Candidate filtering, model fallbacks and routing diagnostics. No upstream calls or settlement; distinguish missing, disabled, cooling, unallocated and incompatible candidates.
+Candidate filtering, model fallbacks, and routing diagnostics. Initial routing prefers a healthy deployment or a healthy configured fallback. When neither is available, it can still select an eligible deployment in cooldown. Diagnostics retain the cooldown state.
 
 ## Review order
 

@@ -19,7 +19,7 @@ func TestAffinityRevalidatesFallback(t *testing.T) {
 		{ModelName: "b", LiteLLMParams: map[string]any{"deployment_id": "b-alt", "model": "b-alt"}},
 	}
 	target := contract.RouteTarget{DeploymentID: "b-id", Model: "b", Pool: "b", Path: []contract.RouteStep{{From: "a", To: "b", Kind: "general"}}}
-	for _, mode := range []string{"valid", "revoked", "zero", "cooldown", "disabled", "parent", "parent-revoked", "wrong-model"} {
+	for _, mode := range []string{"valid", "revoked", "zero", "cooldown", "disabled", "parent", "parent-cooled", "parent-revoked", "wrong-model"} {
 		t.Run(mode, func(t *testing.T) {
 			settings := router.BuiltinSettings()
 			settings.ModelFallbacks = map[string]router.FallbackPolicy{"a": {Fallbacks: []string{"b"}}}
@@ -30,10 +30,10 @@ func TestAffinityRevalidatesFallback(t *testing.T) {
 			if mode == "zero" {
 				settings.ModelDefaults = map[string]any{"b": map[string]any{"allocations": []any{map[string]any{"deployment_id": "b-id", "weight": 0}, map[string]any{"deployment_id": "b-alt", "weight": 1}}}}
 			}
-			if mode == "cooldown" {
+			if mode == "cooldown" || mode == "parent-cooled" {
 				state.Cooldown = map[string]bool{router.CooldownID(models[1]): true}
 			}
-			plan := contract.RoutePlan{Target: target, Required: mode == "parent" || mode == "parent-revoked"}
+			plan := contract.RoutePlan{Target: target, Required: mode == "parent" || mode == "parent-cooled" || mode == "parent-revoked"}
 			if mode == "wrong-model" {
 				plan.Target.Model = "unrelated"
 			}
@@ -48,13 +48,13 @@ func TestAffinityRevalidatesFallback(t *testing.T) {
 				return
 			}
 			want := "a-id"
-			if mode == "valid" || mode == "parent" {
+			if mode == "valid" || mode == "parent" || mode == "parent-cooled" {
 				want = "b-id"
 			}
 			if len(got) == 0 || router.DeploymentID(got[0]) != want {
 				t.Fatalf("模式 %s 目标 %v，期望 %s", mode, got, want)
 			}
-			if mode == "parent" && len(got) != 1 {
+			if plan.Required && len(got) != 1 {
 				t.Fatal("父响应出现替代候选")
 			}
 		})

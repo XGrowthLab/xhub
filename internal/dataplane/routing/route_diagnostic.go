@@ -125,7 +125,7 @@ func (d routeDiagnosis) Log(path, callID, alias string, settings router.RouteSet
 
 // Failure 把路由诊断转换为客户端可处理的 HTTP 状态、错误类型和简短说明。
 // 参数 alias 为请求公开模型；返回 status、code、message 和可选的稳定原因，供执行器写协议错误包络。
-// 不存在、停用或能力不兼容通常返回 400；分配不可用、冷却或没有当前可选部署返回 503。
+// 不存在、停用或能力不兼容通常返回 400；分配不可用或没有合规部署返回 503。冷却仅用于候选优先级，不能单独产生错误。
 // 纯映射，不写 HTTP 或日志，不把诊断当作绕过资格检查的降级策略。
 func (d routeDiagnosis) Failure(alias string) (int, string, string, string) {
 	if d.matched == 0 {
@@ -154,10 +154,7 @@ func (d routeDiagnosis) Failure(alias string) (int, string, string, string) {
 	if d.zeroWeight == d.compatible {
 		return 503, "model_unavailable", "model " + alias + " has no allocated traffic; check deployment weights in model defaults or the selected route template", "routing_no_capacity"
 	}
-	if d.cooling == d.compatible {
-		return 503, "model_unavailable", fmt.Sprintf("model %s has all compatible deployments cooling down (%d of %d); this request was not sent upstream. Retry later.", alias, d.cooling, d.compatible), "all_deployments_cooling_down"
-	}
-	return 503, "model_unavailable", "model " + alias + " has no available deployment; check cooldowns and route allocations", "routing_no_capacity"
+	return 503, "model_unavailable", "model " + alias + " has no available deployment; check route settings and allocations", "routing_no_capacity"
 }
 
 // ProtocolProblems 返回启用候选中的公开能力拒绝。pinned 非空时只查看必须续接的部署；

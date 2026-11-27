@@ -57,7 +57,7 @@ func TestNativeResponsesStopsAtTerminal(t *testing.T) {
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
 			})}
 			w := httptest.NewRecorder()
-			result, err := ForwardOfficial(client, httptest.NewRequest("POST", "/", nil), "POST", "http://fixture.invalid", "fake", []byte(`{}`), http.Header{}, providercontract.Transport{Protocol: tc.protocol, Auth: providercontract.AuthConfig{Header: "Authorization"}}, w)
+			result, err := ForwardOfficial(client, httptest.NewRequest("POST", "/", nil), "POST", "http://fixture.invalid", "fake", "fixture-call", []byte(`{}`), http.Header{}, providercontract.Transport{Protocol: tc.protocol, Auth: providercontract.AuthConfig{Header: "Authorization"}}, w)
 			if (err == nil) != tc.valid || body.afterEnd == tc.valid || !body.closed {
 				t.Fatalf("协议结束/回收错误 err=%v afterEnd=%v closed=%v", err, body.afterEnd, body.closed)
 			}
